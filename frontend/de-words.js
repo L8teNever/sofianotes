@@ -32,6 +32,8 @@ farbe rot blau grün gelb schwarz weiß grau orange lila braun
 gut schlecht richtig falsch schön wichtig einfach schwer schnell langsam
 groß klein neu alt jung viel wenig kurz lang hoch tief
 freund freundin familie mutter vater kind kinder
+baby werwolf werwölfe märchen hexe drache prinzessin prinz könig ritter
+zauberer zauberin magie geschichte geschichten
 haus wohnung zimmer tisch stuhl tür fenster
 essen trinken brot wasser milch apfel
 bitte danke hallo tschüss guten morgen abend

@@ -188,6 +188,15 @@ test("near misspellings are flagged", () => {
   assert.ok(!SofiaInk.misspelledSpans("Hallo Schule").length);
 });
 
+test("ocr typos become real words", () => {
+  const a = SofiaInk.correctText("bebi wernoff");
+  assert.match(a.text.toLowerCase(), /baby/);
+  assert.match(a.text.toLowerCase(), /werwolf/);
+  const b = SofiaInk.correctText("Hausaufgabn");
+  assert.ok(["hausaufgabe", "hausaufgaben"].includes(b.text.toLowerCase()));
+  assert.equal(SofiaInk.correctText("Hallo").text, "Hallo");
+});
+
 test("glyphs 2cm apart are separate words", () => {
   const strokes = [line("a", 0, 0, 0, 24, 6), line("b", 200, 0, 200, 24, 6)];
   const groups = SofiaInk.clusterGlyphs(strokes);

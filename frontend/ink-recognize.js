@@ -1339,13 +1339,90 @@
 
   function closeDictHit(word) {
     const w = word.toLowerCase();
-    const maxd = w.length >= 6 ? 2 : 1;
+    if (w.length < 3) return null;
+    const maxd = w.length >= 8 ? 3 : w.length >= 4 ? 2 : 1;
+    const startOk = (a, b) =>
+      a === b || "bhkl|wvunm|dt|fp|cegsz|iy".split("|").some((p) => p.includes(a) && p.includes(b));
+    let best = null;
+    let bestScore = 99;
     for (const d of SPELL_DICT) {
       if (Math.abs(d.length - w.length) > maxd) continue;
-      if (d[0] !== w[0] && d.length > 3) continue;
-      if (levenshtein(w, d) <= maxd) return d;
+      if (w.length < 5 && d[0] !== w[0]) continue;
+      if (w.length >= 5 && !startOk(w[0], d[0])) continue;
+      const dist = levenshtein(w, d);
+      if (!dist || dist > maxd) continue;
+      const score = dist + 1.25 * Math.abs(d.length - w.length);
+      if (score < bestScore) {
+        bestScore = score;
+        best = d;
+      }
     }
-    return null;
+    return best;
+  }
+
+  function matchWordCase(src, dest) {
+    const d = String(dest || "");
+    if (!src) return d;
+    if (src === src.toUpperCase() && src.length > 1) return d.toUpperCase();
+    if (src[0] === src[0].toUpperCase()) return d.charAt(0).toUpperCase() + d.slice(1);
+    return d;
+  }
+
+  function maxEdit(word) {
+    const n = String(word || "").length;
+    if (n >= 8) return 3;
+    if (n >= 4) return 2;
+    return 1;
+  }
+
+  function pickCorrection(word, extras) {
+    const w = String(word || "");
+    const low = w.toLowerCase();
+    if (low.length < 3) return null;
+    if (/[0-9]/.test(w)) return null;
+    if (SPELL_DICT.has(low)) return null;
+    const local = closeDictHit(w);
+    let best = local;
+    let bestScore = local ? levenshtein(low, local) + 1.25 * Math.abs(local.length - low.length) : 99;
+    const extra = extras && extras[low] ? extras[low] : extras && extras[w] ? extras[w] : [];
+    const maxd = maxEdit(low);
+    for (const raw of extra || []) {
+      const cand = String(raw || "").replace(/[^A-Za-zÄÖÜäöüß]/g, "");
+      if (cand.length < 3) continue;
+      const cl = cand.toLowerCase();
+      const dist = levenshtein(low, cl);
+      if (!dist || dist > maxd) continue;
+      const score = dist + 1.25 * Math.abs(cl.length - low.length);
+      if (score < bestScore) {
+        bestScore = score;
+        best = cl;
+      }
+    }
+    if (!best || best === low) return null;
+    if (low.endsWith("n") && SPELL_DICT.has(best + "n")) best = best + "n";
+    return matchWordCase(w, best);
+  }
+
+  function correctText(text, extras) {
+    const src = String(text || "");
+    if (!src) return { text: src, changes: [] };
+    const re = /[A-Za-zÄÖÜäöüß]+/g;
+    let out = "";
+    let last = 0;
+    const changes = [];
+    let m;
+    while ((m = re.exec(src))) {
+      out += src.slice(last, m.index);
+      const word = m[0];
+      const next = pickCorrection(word, extras);
+      if (next && next.toLowerCase() !== word.toLowerCase()) {
+        changes.push({ from: word, to: next });
+        out += next;
+      } else out += word;
+      last = m.index + word.length;
+    }
+    out += src.slice(last);
+    return { text: out, changes };
   }
 
   function misspelledSpans(text, extra) {
@@ -1713,6 +1790,8 @@
     joinReadingOrder,
     stitchBlockGroups,
     misspelledSpans,
+    correctText,
+    pickCorrection,
     applyWordContext,
     loadEmnistModel,
     loadMemory,

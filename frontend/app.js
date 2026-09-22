@@ -2592,6 +2592,8 @@
       if (g) g.misspelled = [];
       return;
     }
+    const local = SofiaInk.correctText(g.text);
+    if (local.changes.length) g.text = local.text;
     g.misspelled = SofiaInk.misspelledSpans(g.text);
     if (!/[A-Za-zÄÖÜäöüß]{3,}/.test(g.text)) return;
     try {
@@ -2603,9 +2605,12 @@
       });
       if (!resp.ok) return;
       const data = await resp.json();
-      if (data && data.misspelled && data.misspelled.length) {
-        g.misspelled = SofiaInk.misspelledSpans(g.text, data.misspelled);
+      if (data && data.suggestions && Object.keys(data.suggestions).length) {
+        const hun = SofiaInk.correctText(g.text, data.suggestions);
+        if (hun.changes.length) g.text = hun.text;
       }
+      const extra = data && data.misspelled ? data.misspelled : [];
+      g.misspelled = SofiaInk.misspelledSpans(g.text, extra);
     } catch (_err) {
       /* hunspell optional */
     }
@@ -2801,14 +2806,15 @@
           const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
           if (ocrCache.has(key)) {
             const hit = ocrCache.get(key);
-            const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
+            const text = SofiaInk.correctText(hit.text).text;
+            const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
             return {
               bbox: block.bbox,
               glyphs: [],
-              text: hit.text,
-              math: !!(solved || SofiaInk.looksLikeMath(hit.text)),
+              text,
+              math: !!(solved || SofiaInk.looksLikeMath(text)),
               result: solved,
-              misspelled: SofiaInk.misspelledSpans(hit.text),
+              misspelled: SofiaInk.misspelledSpans(text),
               strokeIds: strokes.map((s) => s.id),
               source: "cloudflare",
             };
@@ -2840,7 +2846,7 @@
           }
           if (!data || !data.ok || !data.text) return null;
           cloudOcrEnabled = true;
-          const text = SofiaInk.cleanOcrText(data.text);
+          const text = SofiaInk.correctText(SofiaInk.cleanOcrText(data.text)).text;
           if (!text) return null;
           if (SofiaInk.ocrLooksPlausible(text, { strokes: strokes.length })) ocrCache.set(key, { text });
           const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
@@ -2881,6 +2887,8 @@
         groups = SofiaInk.stitchBlockGroups(groups, blocks);
       }
       for (const g of groups) {
+        const fix = SofiaInk.correctText(g.text);
+        if (fix.changes.length) g.text = fix.text;
         if (!g.misspelled) g.misspelled = SofiaInk.misspelledSpans(g.text);
       }
       const plausible = groups.filter((g) =>

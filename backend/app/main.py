@@ -110,7 +110,11 @@ async def spell_ink(request: Request) -> dict:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="json object required")
     text = str(body.get("text") or "")
-    return {"ok": True, "misspelled": spellcheck.misspelled(text)}
+    return {
+        "ok": True,
+        "misspelled": spellcheck.misspelled(text),
+        "suggestions": spellcheck.suggestions(text),
+    }
 
 
 @app.get("/api/export.goodnotes")
