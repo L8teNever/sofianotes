@@ -387,6 +387,7 @@
 
     drawLassoAndSelection();
     positionInkChips();
+    positionScanBoxes();
 
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
@@ -714,6 +715,7 @@
     toolPopover.classList.add("hidden");
     settingsPopover.classList.add("hidden");
     zoomPopover.classList.toggle("hidden");
+    if (!zoomPopover.classList.contains("hidden")) renderPeopleJumpList();
   });
   document.getElementById("btn-zoom-in").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1106,9 +1108,11 @@
       }
       case "presence_join":
         ensurePresence(msg.id, msg.color);
+        renderPeopleJumpList();
         break;
       case "presence_leave":
         removePresence(msg.id);
+        renderPeopleJumpList();
         break;
       case "cursor": {
         const p = ensurePresence(msg.id, msg.color);
@@ -1207,8 +1211,52 @@
       p.el.style.left = s.x + "px";
       p.el.style.top = s.y - 14 + "px";
       p.el.style.background = p.color;
-      p.el.textContent = TOOL_LABELS[p.tool] || p.tool;
+      p.el.textContent = (p.label || TOOL_LABELS[p.tool] || p.tool);
     }
+  }
+
+  function jumpToWorld(x, y) {
+    offsetX = window.innerWidth / 2 - x * scale;
+    offsetY = window.innerHeight / 2 - y * scale;
+    requestRedraw();
+  }
+
+  function liveOtherPeople() {
+    const now = performance.now();
+    return Array.from(presence.entries())
+      .filter(([id, p]) => id !== myClientId && now - p.lastSeen <= PRESENCE_TIMEOUT_MS)
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  }
+
+  function renderPeopleJumpList() {
+    const host = document.getElementById("zoom-people");
+    if (!host) return;
+    const people = liveOtherPeople();
+    host.innerHTML = "";
+    if (!people.length) {
+      const empty = document.createElement("div");
+      empty.className = "zoom-people-empty";
+      empty.textContent = "Niemand sonst auf dem Blatt";
+      host.appendChild(empty);
+      return;
+    }
+    people.forEach(([id, p], i) => {
+      p.label = "Person " + (i + 1);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "zoom-person";
+      btn.title = "Zur Person springen";
+      const dot = document.createElement("span");
+      dot.className = "zoom-person-dot";
+      dot.style.background = p.color || "#888";
+      btn.appendChild(dot);
+      btn.appendChild(document.createTextNode(p.label));
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        jumpToWorld(p.x, p.y);
+      });
+      host.appendChild(btn);
+    });
   }
 
   // ---- network buffering (batch outgoing points / erase ids) -----------
@@ -2401,6 +2449,7 @@
   let recognizeAbort = null;
   const dismissedInk = new Set();
   const ocrCache = new Map();
+  let scanBoxes = [];
   const RECOGNIZE_PAUSE_MS = 2200;
   const PX_PER_CM = 96 / 2.54;
 
@@ -2414,8 +2463,9 @@
   function positionInkChips() {
     if (!inkOverlay) return;
     const chips = inkOverlay.querySelectorAll(".ink-chip");
+    const visible = inkGroups.filter((g) => !scanBoxes.some((b) => boxesOverlapBBox(b.bbox, g.bbox)));
     chips.forEach((el, i) => {
-      const g = inkGroups[i];
+      const g = visible[i];
       if (!g) return;
       const s = worldToScreen(g.bbox.maxX + 8, g.bbox.minY - 6);
       el.style.left = Math.round(s.x) + "px";
@@ -2555,11 +2605,42 @@
     }
   }
 
+  function positionScanBoxes() {
+    if (!inkOverlay) return;
+    const boxes = inkOverlay.querySelectorAll(".ink-scan-box");
+    boxes.forEach((el, i) => {
+      const b = scanBoxes[i];
+      if (!b || !b.bbox) return;
+      const a = worldToScreen(b.bbox.minX, b.bbox.minY);
+      const c = worldToScreen(b.bbox.maxX, b.bbox.maxY);
+      el.style.left = Math.round(Math.min(a.x, c.x) - 8) + "px";
+      el.style.top = Math.round(Math.min(a.y, c.y) - 8) + "px";
+      el.style.width = Math.round(Math.abs(c.x - a.x) + 16) + "px";
+      el.style.height = Math.round(Math.abs(c.y - a.y) + 16) + "px";
+    });
+  }
+
+  function boxesOverlapBBox(a, b) {
+    if (!a || !b) return false;
+    return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
+  }
+
   function renderInkOverlay() {
     if (!inkOverlay) return;
     inkOverlay.innerHTML = "";
     if (!recognizeEnabled) return;
+    scanBoxes.forEach((b) => {
+      const el = document.createElement("div");
+      el.className = "ink-scan-box";
+      const label = document.createElement("div");
+      label.className = "ink-scan-label";
+      label.textContent = "KI liest …";
+      el.appendChild(label);
+      inkOverlay.appendChild(el);
+    });
+    positionScanBoxes();
     inkGroups.forEach((g) => {
+      if (scanBoxes.some((b) => boxesOverlapBBox(b.bbox, g.bbox))) return;
       const el = document.createElement("div");
       el.className = "ink-chip" + (g.result && mathSolveEnabled ? " ink-chip-math" : "");
       const textBtn = document.createElement("button");
@@ -2689,38 +2770,12 @@
         const focus = all.find((s) => s.id === lastRecognizeFocus);
         if (focus) burst = [focus];
       }
-      groups = burst.length
-        ? await SofiaInk.recognizeStrokes(burst, {
-            recentOnly: false,
-            preferDigits: mathSolveEnabled,
-            wordGap,
-          })
-        : [];
       const blocks = burst.length ? SofiaInk.clusterBlocks(burst, wordGap) : [];
-      groups = SofiaInk.stitchBlockGroups(groups, blocks);
-      groups = groups.map((g) => {
-        const hit = ocrCache.get(inkGroupKey(g));
-        if (!hit) return g;
-        const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
-        return { ...g, text: hit.text, math: !!(solved || SofiaInk.looksLikeMath(hit.text)), result: solved, source: "cloudflare" };
-      });
-      for (const g of groups) g.misspelled = SofiaInk.misspelledSpans(g.text);
-      inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
-      const live = new Set(groups.map(inkGroupKey));
-      for (const key of Array.from(dismissedInk)) {
-        if (!live.has(key)) dismissedInk.delete(key);
-      }
+      scanBoxes = blocks.map((b) => ({ bbox: b.bbox }));
       renderInkOverlay();
-    } catch (err) {
-      if (!(err && err.name === "AbortError")) {
-        /* Modelle optional — Board bleibt nutzbar */
-      }
-    }
 
-    if (burst.length && cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
-      try {
-        const blocks = SofiaInk.clusterBlocks(burst, wordGap);
-        const cloudGroups = [];
+      const cloudGroups = [];
+      if (burst.length && cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
         const toSend = blocks.slice(0, 2);
         for (const block of toSend) {
           if (ac.signal.aborted) break;
@@ -2731,7 +2786,7 @@
             const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
             cloudGroups.push({
               bbox: block.bbox,
-              glyphs: groups.filter((g) => (g.strokeIds || []).some((id) => strokes.some((s) => s.id === id))).flatMap((g) => g.glyphs || []),
+              glyphs: [],
               text: hit.text,
               math: !!(solved || SofiaInk.looksLikeMath(hit.text)),
               result: solved,
@@ -2741,8 +2796,6 @@
             });
             continue;
           }
-          const hasMath = groups.some((g) => g.math || g.mathish);
-          const hasLetters = groups.some((g) => /[A-Za-zÄÖÜäöüß]/.test(g.text || ""));
           const crop = renderInkCrop(strokes);
           const resp = await fetch("/api/recognize", {
             method: "POST",
@@ -2750,7 +2803,7 @@
             signal: ac.signal,
             body: JSON.stringify({
               image: crop.dataUrl,
-              preferDigits: hasMath && !hasLetters,
+              preferDigits: mathSolveEnabled,
             }),
           });
           if (!resp.ok) continue;
@@ -2767,7 +2820,7 @@
           const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
           cloudGroups.push({
             bbox: block.bbox,
-            glyphs: groups.flatMap((g) => g.glyphs || []),
+            glyphs: [],
             text,
             math: !!(solved || SofiaInk.looksLikeMath(text)),
             result: solved,
@@ -2776,21 +2829,36 @@
             source: "cloudflare",
           });
         }
-        if (recognizeAbort === ac && !ac.signal.aborted && cloudGroups.length) {
-          const merged = mergeInkGroups(groups, cloudGroups);
-          inkGroups = merged.filter((g) => !dismissedInk.has(inkGroupKey(g)));
-          const liveCloud = new Set(merged.map(inkGroupKey));
-          for (const key of Array.from(dismissedInk)) {
-            if (!liveCloud.has(key)) dismissedInk.delete(key);
-          }
-          renderInkOverlay();
-        }
-      } catch (err) {
-        if (!(err && err.name === "AbortError")) {
-          /* Cloudflare optional */
-        }
+      }
+
+      if (cloudGroups.length) {
+        groups = cloudGroups;
+      } else if (burst.length) {
+        groups = await SofiaInk.recognizeStrokes(burst, {
+          recentOnly: false,
+          preferDigits: mathSolveEnabled,
+          wordGap,
+        });
+        groups = SofiaInk.stitchBlockGroups(groups, blocks);
+      }
+      for (const g of groups) {
+        if (!g.misspelled) g.misspelled = SofiaInk.misspelledSpans(g.text);
+      }
+      inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
+      const live = new Set(groups.map(inkGroupKey));
+      for (const key of Array.from(dismissedInk)) {
+        if (!live.has(key)) dismissedInk.delete(key);
+      }
+      scanBoxes = [];
+      renderInkOverlay();
+    } catch (err) {
+      scanBoxes = [];
+      renderInkOverlay();
+      if (!(err && err.name === "AbortError")) {
+        /* Modelle optional — Board bleibt nutzbar */
       }
     }
+
     if (recognizeAbort === ac && !ac.signal.aborted && inkGroups.length) {
       await Promise.all(inkGroups.map((g) => attachSpelling(g, ac)));
       if (recognizeAbort === ac && !ac.signal.aborted) renderInkOverlay();
