@@ -674,6 +674,41 @@
     return burst;
   }
 
+  function ocrLooksPlausible(text) {
+    const s = String(text || "").trim();
+    if (!s) return false;
+    const compact = s.replace(/\s+/g, "");
+    if (/^[+\-*/=√π%().]+$/.test(compact)) return false;
+    if (/[+\-*/]$/.test(compact) && !solveFromBurst(s)) return false;
+    if (looksLikeMath(s) || solveFromBurst(s)) return true;
+    const words = s.split(/\s+/).filter(Boolean);
+    const letterWords = words.filter((w) => /[A-Za-zÄÖÜäöüß]/.test(w));
+    if (!letterWords.length) return /\d/.test(s);
+    let ok = 0;
+    let bad = 0;
+    for (const w of letterWords) {
+      const letters = w.replace(/[^A-Za-zÄÖÜäöüß]/g, "");
+      if (!letters) continue;
+      const low = letters.toLowerCase();
+      if (letters.length >= 3 && !/[aeiouäöüy]/i.test(letters)) {
+        bad++;
+        continue;
+      }
+      if (SPELL_DICT.has(low) || closeDictHit(low)) {
+        ok++;
+        continue;
+      }
+      if (letters.length <= 3) {
+        ok++;
+        continue;
+      }
+      bad++;
+    }
+    if (ok === 0 && bad > 0) return false;
+    if (bad > ok) return false;
+    return true;
+  }
+
   function boxGapXY(a, b) {
     const dx = Math.max(0, Math.max(a.minX, b.minX) - Math.min(a.maxX, b.maxX));
     const dy = Math.max(0, Math.max(a.minY, b.minY) - Math.min(a.maxY, b.maxY));
@@ -1634,6 +1669,7 @@
     detectOperator,
     clusterGlyphs,
     writingBurst,
+    ocrLooksPlausible,
     clusterBlocks,
     DEFAULT_WORD_GAP,
     parseMath,

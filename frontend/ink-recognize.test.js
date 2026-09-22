@@ -101,7 +101,7 @@ test("plus is a cross", () => {
   assert.equal(op.char, "+");
 });
 
-test("writing burst stops at a 2s pause", () => {
+test("writing burst stops at a pause", () => {
   const a = line("a", 0, 0, 0, 20);
   const b = line("b", 12, 0, 12, 20);
   const c = line("c", 24, 0, 24, 20);
@@ -112,6 +112,15 @@ test("writing burst stops at a 2s pause", () => {
   assert.equal(burst.map((s) => s.id).join(","), "c");
   const mid = SofiaInk.writingBurst([a, b, c], { pauseMs: 2200, now: 1600 });
   assert.equal(mid.map((s) => s.id).join(","), "a,b");
+});
+
+test("ocrLooksPlausible rejects gibberish and keeps real notes", () => {
+  assert.equal(SofiaInk.ocrLooksPlausible("Hallo"), true);
+  assert.equal(SofiaInk.ocrLooksPlausible("Hausaufgaben"), true);
+  assert.equal(SofiaInk.ocrLooksPlausible("12+34="), true);
+  assert.equal(SofiaInk.ocrLooksPlausible("MHL"), false);
+  assert.equal(SofiaInk.ocrLooksPlausible("xqz"), false);
+  assert.equal(SofiaInk.ocrLooksPlausible("12+"), false);
 });
 
 test("cluster blocks keep stacked text and math, split far ink", () => {
