@@ -667,6 +667,10 @@ button {
   background: #e8f0fe;
   color: var(--accent);
 }
+.setting-toggle.ki-off {
+  opacity: 0.4;
+  pointer-events: none;
+}
 
 .tool-popover {
   position: fixed;

@@ -670,21 +670,19 @@
 
   const recognizeToggleEl = document.getElementById("recognize-toggle");
   const mathToggleEl = document.getElementById("math-toggle");
-  if (recognizeToggleEl) {
-    recognizeToggleEl.classList.toggle("active", recognizeEnabled);
-    recognizeToggleEl.addEventListener("click", (e) => {
-      e.stopPropagation();
-      recognizeEnabled = !recognizeEnabled;
-      localStorage.setItem("sofianotes-recognize", recognizeEnabled ? "1" : "0");
-      recognizeToggleEl.classList.toggle("active", recognizeEnabled);
-      if (!recognizeEnabled) {
-        inkGroups = [];
-        renderInkOverlay();
-      } else {
-        scheduleRecognize(null, 250);
-      }
-    });
+  const kiToggleBtn = document.getElementById("btn-ki-toggle");
+  function syncKiButtons() {
+    if (kiToggleBtn) kiToggleBtn.classList.toggle("active", recognizeEnabled);
+    if (recognizeToggleEl) recognizeToggleEl.classList.toggle("active", recognizeEnabled);
+    if (mathToggleEl) mathToggleEl.classList.toggle("ki-off", !recognizeEnabled);
   }
+  syncKiButtons();
+  function onKiToggleClick(e) {
+    e.stopPropagation();
+    applyKiEnabled(!recognizeEnabled);
+  }
+  if (recognizeToggleEl) recognizeToggleEl.addEventListener("click", onKiToggleClick);
+  if (kiToggleBtn) kiToggleBtn.addEventListener("click", onKiToggleClick);
   if (mathToggleEl) {
     mathToggleEl.classList.toggle("active", mathSolveEnabled);
     mathToggleEl.addEventListener("click", (e) => {
@@ -2521,6 +2519,28 @@
     })
     .catch(() => {});
 
+  function applyKiEnabled(on) {
+    recognizeEnabled = !!on;
+    localStorage.setItem("sofianotes-recognize", recognizeEnabled ? "1" : "0");
+    syncKiButtons();
+    clearTimeout(recognizeTimer);
+    recognizeTimer = null;
+    recognizeAgain = false;
+    recognizeWide = false;
+    if (recognizeAbort) {
+      recognizeAbort.abort();
+      recognizeAbort = null;
+    }
+    recognizeBusy = false;
+    if (!recognizeEnabled) {
+      inkGroups = [];
+      scanBoxes = [];
+      renderInkOverlay();
+      return;
+    }
+    scheduleRecognize(null, 200);
+  }
+
   function positionInkChips() {
     if (!inkOverlay) return;
     const chips = inkOverlay.querySelectorAll(".ink-chip");
@@ -2986,6 +3006,7 @@
       if (recognizeAbort === ac && !ac.signal.aborted) renderInkOverlay();
     }
     recognizeBusy = false;
+    if (!recognizeEnabled) return;
     if (recognizeAgain) scheduleRecognize(lastRecognizeFocus, RECOGNIZE_PAUSE_MS);
     else if (recognizeWide) scheduleRecognize(lastRecognizeFocus, CONTEXT_WAIT_MS);
   }

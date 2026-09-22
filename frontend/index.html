@@ -14,10 +14,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,arrow_back,arrow_downward,arrow_forward,arrow_upward,brush,calculate,crop_landscape,crop_square,delete_sweep,description,download,drag_indicator,edit,gesture,grain,grid_4x4,group,hexagon,highlight,palette,person,redo,remove,reorder,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,crop_landscape,crop_square,delete_sweep,description,download,drag_indicator,edit,gesture,grain,grid_4x4,group,hexagon,highlight,palette,person,redo,remove,reorder,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
 <link rel="preload" href="models/emnist/model.json" as="fetch" crossorigin />
 <link rel="preload" href="models/emnist/group1-shard1of1.bin" as="fetch" crossorigin />
-<link rel="stylesheet" href="style.css?v=28" />
+<link rel="stylesheet" href="style.css?v=29" />
 </head>
 <body>
 <canvas id="board"></canvas>
@@ -115,6 +115,11 @@
         <span class="material-symbols-rounded">gesture</span>
       </button>
     </div>
+    <div class="tool-wrapper">
+      <button id="btn-ki-toggle" class="tool-btn" title="KI-Erkennung an/aus">
+        <span class="material-symbols-rounded">auto_awesome</span>
+      </button>
+    </div>
 
     <div id="tool-popover" class="tool-popover hidden">
       <div class="popover-head">
@@ -175,8 +180,8 @@
       <button id="shape-toggle" class="setting-toggle active" title="Formen-Erkennung">
         <span class="material-symbols-rounded">hexagon</span> Formen erkennen
       </button>
-      <button id="recognize-toggle" class="setting-toggle active" title="Buchstaben und Zahlen erkennen">
-        <span class="material-symbols-rounded">abc</span> Buchstaben erkennen
+      <button id="recognize-toggle" class="setting-toggle active" title="KI-Erkennung komplett an oder aus">
+        <span class="material-symbols-rounded">auto_awesome</span> KI-Erkennung
       </button>
       <button id="math-toggle" class="setting-toggle active" title="Rechnungen automatisch lösen">
         <span class="material-symbols-rounded">calculate</span> Rechnungen lösen
@@ -189,9 +194,9 @@
 </nav>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-<script src="de-words.js?v=28"></script>
-<script src="ink-recognize.js?v=28"></script>
-<script src="app.js?v=28"></script>
+<script src="de-words.js?v=29"></script>
+<script src="ink-recognize.js?v=29"></script>
+<script src="app.js?v=29"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
