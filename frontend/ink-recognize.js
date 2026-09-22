@@ -1111,6 +1111,28 @@
     return out;
   }
 
+  function cleanOcrText(raw) {
+    let s = String(raw || "")
+      .trim()
+      .replace(/^["'`]+|["'`]+$/g, "");
+    const lines = s
+      .split(/\n/)
+      .map((ln) => ln.trim())
+      .filter(Boolean);
+    if (lines.length) s = lines[lines.length - 1];
+    s = s.replace(
+      /^(the\s+)?((handwritten|written)\s+)?(text|ink|characters?|transcription|answer)(\s+(is|says|reads|shown))?\s*[:\-–]\s*/i,
+      ""
+    );
+    s = s.replace(/^["'`]+|["'`]+$/g, "");
+    s = s.replace(/[×]/g, "x").replace(/[÷]/g, "/").replace(/[—–]/g, "-");
+    if (/[0-9+\-*/=xX^]/.test(s)) s = s.replace(/\s+/g, "");
+    else s = s.replace(/\s+/g, " ").trim();
+    s = s.replace(/[^0-9A-Za-z+\-*/=xX^()., ]/g, "");
+    if (s.length > 48) s = s.slice(0, 48);
+    return s.trim();
+  }
+
   const api = {
     EMNIST_CHARS,
     SIZE,
@@ -1134,6 +1156,7 @@
     classifyGlyph,
     filterRecentStrokes,
     formatNumber,
+    cleanOcrText,
   };
 
   root.SofiaInk = api;

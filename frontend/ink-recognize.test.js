@@ -176,6 +176,12 @@ test("wobbly minus is still a minus", () => {
   assert.equal(op.char, "-");
 });
 
+test("cloud OCR cleanup keeps math and strips chatter", () => {
+  assert.equal(SofiaInk.cleanOcrText("The handwritten text says: 12 + 34"), "12+34");
+  assert.equal(SofiaInk.cleanOcrText("`7`"), "7");
+  assert.equal(SofiaInk.cleanOcrText("Hallo"), "Hallo");
+});
+
 test("dense sampled digit still counts as handwriting", () => {
   const pts = [];
   for (let i = 0; i <= 200; i++) {

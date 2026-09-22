@@ -54,10 +54,11 @@ das simuliert ein Desktop-Browser nicht).
   Ende kurz ruhig halten (Stift bleibt unten) — die Form wird dann automatisch
   glattgezogen. Ohne Halten oder bei ausgeschaltetem Schalter bleibt jeder
   Strich normale Handschrift, die Erkennung greift nie ungefragt ein.
-- **Buchstaben erkennen** (Schalter `abc`): nach einer kurzen Pause erkennt
-  EMNIST + TensorFlow.js gezeichnete Ziffern und Buchstaben. Ein Chip zeigt
-  das Ergebnis; Tippen korrigiert es, und die Korrektur bleibt lokal gespeichert
-  (IndexedDB, k-NN), damit die Erkennung deine Schrift lernt.
+- **Buchstaben erkennen** (Schalter `abc`): nach einer kurzen Pause liest
+  zuerst EMNIST lokal, danach das schnelle Cloudflare-Modell Moondream die
+  krumme Handschrift (ein Chip pro Zeile). Tippen korrigiert; Korrekturen
+  bleiben lokal gespeichert (IndexedDB, k-NN). Ohne Cloudflare-Token bleibt
+  nur EMNIST.
 - **Rechnungen lösen** (Schalter `calculate`): Tinte wird wie bei ink-on zu
   einem Ausdruck zusammengesetzt (`12+34`, Brüche, `2x3`). Wenn er sich rechnen
   laesst, erscheint `= 46` — ein Tap setzt das Ergebnis aufs Blatt.
@@ -124,7 +125,9 @@ cp .env.example .env   # BIND_HOST/BIND_PORT fuer die eigene Umgebung anpassen
 produktiven Betrieb hinter einem eigenen Reverse Proxy oder Tunnel `BIND_HOST`
 und `BIND_PORT` in der eigenen, nicht eingecheckten `.env` entsprechend
 setzen — Details zur konkreten Domain/Tunnel-Konfiguration sind bewusst nicht
-Teil dieses oeffentlichen Repos.
+Teil dieses oeffentlichen Repos. Fuer die Cloudflare-Handschrifterkennung
+zusaetzlich `CLOUDFLARE_ACCOUNT_ID` und `CLOUDFLARE_API_TOKEN` eintragen
+(Workers AI Edit). Ohne Token bleibt nur EMNIST.
 
 **Cache-Busting bei Aenderungen an `app.js`/`style.css`**: Sitzt ein CDN/Proxy
 davor, das statische Dateien nach Endung cacht (unabhaengig vom

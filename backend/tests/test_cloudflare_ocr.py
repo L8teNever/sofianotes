@@ -1,0 +1,23 @@
+import unittest
+
+from app.cloudflare_ocr import clean_text, extract_answer
+
+
+class CloudflareOcrTests(unittest.TestCase):
+    def test_extract_nested_moondream_answer(self):
+        payload = {
+            "success": True,
+            "result": {
+                "result": {"answer": "12+34", "caption": None},
+                "usage": {},
+            },
+        }
+        self.assertEqual(extract_answer(payload), "12+34")
+
+    def test_clean_strips_sentence_and_spaces_for_math(self):
+        self.assertEqual(clean_text("The handwritten text says: 12 + 34"), "12+34")
+        self.assertEqual(clean_text("`7`"), "7")
+        self.assertEqual(clean_text("Hallo"), "Hallo")
+
+    def test_clean_empty(self):
+        self.assertEqual(clean_text("   "), "")

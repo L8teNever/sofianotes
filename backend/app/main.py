@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import db, goodnotes_export
+from . import cloudflare_ocr, db, goodnotes_export
 from .ws_manager import ConnectionManager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
@@ -38,6 +38,32 @@ async def on_startup() -> None:
 @app.get("/api/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.get("/api/recognize")
+async def recognize_status() -> dict:
+    return {
+        "enabled": cloudflare_ocr.configured(),
+        "model": cloudflare_ocr.model_name() if cloudflare_ocr.configured() else None,
+    }
+
+
+@app.post("/api/recognize")
+async def recognize_ink(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="json required") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="json object required")
+    image = body.get("image") or ""
+    prefer = body.get("preferDigits", True)
+    result = await cloudflare_ocr.transcribe(image, prefer_digits=bool(prefer))
+    if result.get("error") == "bad_image":
+        raise HTTPException(status_code=400, detail="image data URI required")
+    if result.get("error") == "too_large":
+        raise HTTPException(status_code=413, detail="image too large")
+    return result
 
 
 @app.get("/api/export.goodnotes")

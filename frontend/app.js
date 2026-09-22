@@ -2265,14 +2265,23 @@
     if (sel && sel.rangeCount) sel.removeAllRanges();
   });
 
-  // ---- EMNIST / ink-on recognition overlay --------------------------------
+  // ---- EMNIST / Cloudflare ink-on recognition overlay ----------------------
   const inkOverlay = document.getElementById("ink-overlay");
   let inkGroups = [];
   let recognizeTimer = null;
   let recognizeBusy = false;
   let recognizeAgain = false;
   let lastRecognizeFocus = null;
+  let cloudOcrEnabled = null;
+  let recognizeAbort = null;
   const dismissedInk = new Set();
+
+  fetch("/api/recognize")
+    .then((r) => r.json())
+    .then((d) => {
+      cloudOcrEnabled = !!(d && d.enabled);
+    })
+    .catch(() => {});
 
   function positionInkChips() {
     if (!inkOverlay) return;
@@ -2288,6 +2297,58 @@
 
   function inkGroupKey(g) {
     return (g.strokeIds || []).slice().sort().join(",");
+  }
+
+  function renderInkCrop(strokes) {
+    const boxes = strokes.map((s) => s.bbox || SofiaInk.bboxOfPoints(s.points || []));
+    const b = unionBBox(boxes);
+    const pad = 18;
+    const w = Math.max(12, b.maxX - b.minX);
+    const h = Math.max(12, b.maxY - b.minY);
+    const scale = Math.min(4, 512 / Math.max(w, h));
+    const cw = Math.max(32, Math.ceil((w + pad * 2) * scale));
+    const ch = Math.max(32, Math.ceil((h + pad * 2) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const c = canvas.getContext("2d");
+    c.fillStyle = "#ffffff";
+    c.fillRect(0, 0, cw, ch);
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.strokeStyle = "#111111";
+    const toX = (x) => (x - b.minX + pad) * scale;
+    const toY = (y) => (y - b.minY + pad) * scale;
+    for (const s of strokes) {
+      const pts = s.points || [];
+      if (!pts.length) continue;
+      c.lineWidth = Math.max(3.2, (s.size || 6) * scale * 0.55);
+      const x0 = toX(pts[0].x);
+      const y0 = toY(pts[0].y);
+      if (pts.length === 1) {
+        c.beginPath();
+        c.fillStyle = "#111111";
+        c.arc(x0, y0, c.lineWidth / 2, 0, Math.PI * 2);
+        c.fill();
+        continue;
+      }
+      c.beginPath();
+      c.moveTo(x0, y0);
+      for (let i = 1; i < pts.length; i++) c.lineTo(toX(pts[i].x), toY(pts[i].y));
+      c.stroke();
+    }
+    return { dataUrl: canvas.toDataURL("image/png"), bbox: b };
+  }
+
+  function mergeInkGroups(local, cloud) {
+    if (!cloud.length) return local;
+    const cloudIds = new Set(cloud.flatMap((g) => g.strokeIds || []));
+    const out = cloud.slice();
+    for (const l of local) {
+      const overlap = (l.strokeIds || []).some((id) => cloudIds.has(id));
+      if (!overlap) out.push(l);
+    }
+    return out;
   }
 
   function insertTextStroke(text, x, y, color, size) {
@@ -2418,8 +2479,14 @@
     }
     recognizeBusy = true;
     recognizeAgain = false;
+    if (recognizeAbort) recognizeAbort.abort();
+    const ac = new AbortController();
+    recognizeAbort = ac;
+    let all = [];
+    let groups = [];
     try {
-      const groups = await SofiaInk.recognizeStrokes(Array.from(boardStrokes.values()), {
+      all = Array.from(boardStrokes.values());
+      groups = await SofiaInk.recognizeStrokes(all, {
         focusId: lastRecognizeFocus,
         windowMs: 15000,
         preferDigits: mathSolveEnabled,
@@ -2430,11 +2497,74 @@
         if (!live.has(key)) dismissedInk.delete(key);
       }
       renderInkOverlay();
-    } catch (_err) {
-      /* Modell optional — Board bleibt nutzbar */
+    } catch (err) {
+      if (!(err && err.name === "AbortError")) {
+        /* Modelle optional — Board bleibt nutzbar */
+      }
     }
     recognizeBusy = false;
     if (recognizeAgain) scheduleRecognize(lastRecognizeFocus);
+
+    if (cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
+      try {
+        const recent = SofiaInk.filterRecentStrokes(all, {
+          focusId: lastRecognizeFocus,
+          windowMs: 15000,
+        });
+        const clustered = SofiaInk.clusterGlyphs(recent);
+        const cloudGroups = [];
+        await Promise.all(
+          clustered.slice(0, 4).map(async (cluster) => {
+            const strokes = cluster.glyphs.flatMap((g) => g.strokes);
+            if (!strokes.length) return;
+            const crop = renderInkCrop(strokes);
+            const resp = await fetch("/api/recognize", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              signal: ac.signal,
+              body: JSON.stringify({
+                image: crop.dataUrl,
+                preferDigits: mathSolveEnabled,
+              }),
+            });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data && data.error === "not_configured") {
+              cloudOcrEnabled = false;
+              return;
+            }
+            if (!data || !data.ok || !data.text) return;
+            cloudOcrEnabled = true;
+            const text = SofiaInk.cleanOcrText(data.text);
+            if (!text) return;
+            const localMatch = groups.find((g) => inkGroupKey(g) === inkGroupKey({ strokeIds: strokes.map((s) => s.id) }));
+            const solved = mathSolveEnabled ? SofiaInk.solveMath(text) : null;
+            cloudGroups.push({
+              bbox: cluster.bbox,
+              glyphs: localMatch ? localMatch.glyphs : [],
+              text,
+              math: !!(solved || SofiaInk.looksLikeMath(text)),
+              result: solved,
+              strokeIds: strokes.map((s) => s.id),
+              source: "cloudflare",
+            });
+          })
+        );
+        if (recognizeAbort === ac && !ac.signal.aborted && cloudGroups.length) {
+          const merged = mergeInkGroups(groups, cloudGroups);
+          inkGroups = merged.filter((g) => !dismissedInk.has(inkGroupKey(g)));
+          const liveCloud = new Set(merged.map(inkGroupKey));
+          for (const key of Array.from(dismissedInk)) {
+            if (!liveCloud.has(key)) dismissedInk.delete(key);
+          }
+          renderInkOverlay();
+        }
+      } catch (err) {
+        if (!(err && err.name === "AbortError")) {
+          /* Cloudflare optional */
+        }
+      }
+    }
   }
 
   if (recognizeEnabled && window.SofiaInk) {
