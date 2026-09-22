@@ -1785,9 +1785,122 @@
     return list;
   }
 
+  function strokePathLength(pts) {
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return len;
+  }
+
+  function countDirectionReversals(pts) {
+    const dirs = [];
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x;
+      const dy = pts[i].y - pts[i - 1].y;
+      const len = Math.hypot(dx, dy);
+      if (len < 5) continue;
+      dirs.push({ dx: dx / len, dy: dy / len });
+    }
+    let n = 0;
+    for (let i = 1; i < dirs.length; i++) {
+      if (dirs[i].dx * dirs[i - 1].dx + dirs[i].dy * dirs[i - 1].dy < -0.12) n++;
+    }
+    return n;
+  }
+
+  function looksLikeStrikeGesture(pts) {
+    if (pts.length < 4) return false;
+    const pathLength = strokePathLength(pts);
+    if (pathLength < 36) return false;
+    const start = pts[0];
+    const end = pts[pts.length - 1];
+    const chord = Math.hypot(end.x - start.x, end.y - start.y);
+    let maxDev = 0;
+    for (const p of pts) {
+      const d = perpDist(p, start, end);
+      if (d > maxDev) maxDev = d;
+    }
+    const straight = chord > 28 && pathLength > 0 && chord / pathLength > 0.7 && maxDev / pathLength < 0.18;
+    const scribble = countDirectionReversals(pts) >= 2 && pathLength > 48;
+    return straight || scribble;
+  }
+
+  function strikeCrossesStroke(poly, stroke) {
+    const b = stroke.bbox;
+    if (!b) return false;
+    const hitR = Math.max(10, stroke.size * 0.65 + 6);
+    const bw = b.maxX - b.minX;
+    const bh = b.maxY - b.minY;
+    const diag = Math.hypot(bw, bh);
+    const innerPadX = bw * 0.2;
+    const innerPadY = bh * 0.2;
+    let hits = 0;
+    let interiorHits = 0;
+    let firstI = -1;
+    let lastI = -1;
+    for (let i = 0; i < poly.length; i++) {
+      const q = poly[i];
+      if (q.x < b.minX - hitR || q.x > b.maxX + hitR || q.y < b.minY - hitR || q.y > b.maxY + hitR) continue;
+      let near = false;
+      for (const p of stroke.points) {
+        const dx = p.x - q.x;
+        const dy = p.y - q.y;
+        if (dx * dx + dy * dy <= hitR * hitR) {
+          near = true;
+          break;
+        }
+      }
+      if (!near && stroke.points.length >= 2) {
+        for (let j = 1; j < stroke.points.length; j++) {
+          if (perpDist(q, stroke.points[j - 1], stroke.points[j]) <= hitR) {
+            near = true;
+            break;
+          }
+        }
+      }
+      if (!near) continue;
+      hits++;
+      if (firstI < 0) firstI = i;
+      lastI = i;
+      if (q.x >= b.minX + innerPadX && q.x <= b.maxX - innerPadX && q.y >= b.minY + innerPadY && q.y <= b.maxY - innerPadY) {
+        interiorHits++;
+      }
+    }
+    if (hits === 0) return false;
+    if (diag < 18) return hits >= 1;
+    if (interiorHits === 0) return false;
+    return lastI > firstI || hits >= 2;
+  }
+
+  function findStruckStrokes(pts) {
+    if (!looksLikeStrikeGesture(pts)) return [];
+    const hit = [];
+    for (const stroke of boardStrokes.values()) {
+      if (strikeCrossesStroke(pts, stroke)) hit.push(stroke);
+    }
+    return hit;
+  }
+
   function endStroke() {
     if (!currentStroke) return;
     clearHoldTimer();
+    if (currentStroke.tool === "pen" && !currentStroke.locked) {
+      const struck = findStruckStrokes(currentStroke.points);
+      if (struck.length > 0) {
+        wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
+        const clones = struck.map((s) => cloneStroke(s));
+        const ids = struck.map((s) => s.id);
+        for (const id of ids) {
+          boardStrokes.delete(id);
+          pendingErase.add(id);
+        }
+        wsSend({ type: "erase", strokeIds: ids });
+        pendingErase.clear();
+        pushUndo({ type: "erase", strokes: clones });
+        currentStroke = null;
+        requestRedraw();
+        return;
+      }
+    }
     if (currentStroke.unsent.length > 0) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
