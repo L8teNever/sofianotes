@@ -740,7 +740,7 @@
       scores[i] = turnAbs(a, b, c);
     }
 
-    const minAngle = (28 * Math.PI) / 180;
+    const minAngle = (40 * Math.PI) / 180;
     const minSep = Math.max(4, Math.round((diagonal * 0.12) / spacing));
     const peaks = [];
     for (let i = 0; i < n; i++) {
@@ -769,6 +769,10 @@
     chosen.sort((a, b) => a.i - b.i);
 
     if (chosen.length >= 3 && chosen.length <= 6) return chosen.map((c) => ({ x: c.p.x, y: c.p.y }));
+
+    // Glatte Pfade (Kreise) nicht per RDP zu einem Polygon zusammenquetschen.
+    const maxScore = scores.reduce((m, s) => (s > m ? s : m), 0);
+    if (closed && maxScore < (40 * Math.PI) / 180) return [];
 
     // Fallback: RDP mit etwas groesserem Epsilon, damit zitternde Rechtecke
     // auf vier Ecken zusammenfallen statt in viele Mini-Knicke.
@@ -865,7 +869,7 @@
   function bboxEdgeFraction(points, bbox) {
     const w = bbox.maxX - bbox.minX;
     const h = bbox.maxY - bbox.minY;
-    const tol = Math.max(5, Math.min(w, h) * 0.14);
+    const tol = Math.max(4, Math.min(w, h) * 0.055);
     let near = 0;
     for (const p of points) {
       const de = Math.min(
@@ -927,18 +931,20 @@
     const periFit = meanR > 0 ? Math.abs(pathLength - 2 * Math.PI * meanR) / (2 * Math.PI * meanR) : 1;
     const aspectDiff = Math.max(w, h) > 0 ? Math.abs(w - h) / Math.max(w, h) : 1;
     const boxy = bboxEdgeFraction(rawPoints, bbox);
-    const circular = circleFit < 0.28 && periFit < 0.32 && boxy < 0.55;
+    const rectPeri = 2 * (w + h);
+    const rectFit = rectPeri > 0 ? Math.abs(pathLength - rectPeri) / rectPeri : 1;
+    const circular = circleFit < 0.26 && periFit < 0.30 && rectFit > 0.10 && boxy < 0.72;
 
     const corners = findDominantCorners(rawPoints, diagonal, true);
     const quad = collapseToQuad(corners, diagonal);
-    const preferCircleOverQuad = circular && boxy < 0.42 && circleFit < 0.16;
+    const hasSharpQuad = !!(quad && quad.length === 4 && corners.length >= 3 && corners.length <= 6);
 
-    // Rechteck/Quadrat hat Vorrang vor Kreis, sobald vier Ecken da sind
-    // (auch wenn die Winkel nicht sauber 90° sind).
-    if (quad && quad.length === 4 && !preferCircleOverQuad) {
+    // Rechteck/Quadrat hat Vorrang, sobald vier echte Ecken da sind
+    // (auch wenn die Winkel nicht sauber 90° sind) — aber nicht bei runden Pfaden.
+    if (hasSharpQuad) {
       return { type: "rectangle", points: fitOrientedRect(quad, avgPressure) };
     }
-    if (boxy >= 0.62 && !circular) {
+    if (boxy >= 0.72 && rectFit < 0.16 && !circular) {
       const aabb = [
         { x: bbox.minX, y: bbox.minY, p: avgPressure },
         { x: bbox.maxX, y: bbox.minY, p: avgPressure },
@@ -955,11 +961,14 @@
       };
     }
 
-    if (circular || (circleFit < 0.22 && periFit < 0.28)) {
+    if (circular || (circleFit < 0.20 && periFit < 0.26 && rectFit > 0.08)) {
       const useCircle = aspectDiff < 0.18;
       const rx = useCircle ? meanR : w / 2;
       const ry = useCircle ? meanR : h / 2;
       return { type: "circle", points: makeEllipsePoints(cx, cy, rx, ry, avgPressure, 96) };
+    }
+    if (quad && quad.length === 4) {
+      return { type: "rectangle", points: fitOrientedRect(quad, avgPressure) };
     }
     return null;
   }
