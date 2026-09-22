@@ -92,9 +92,9 @@
     return u;
   }
 
-  function widthAt(size, pressure) {
-    const p = pressure && pressure > 0 ? pressure : 0.5;
-    return Math.max(1, size * (0.3 + 0.7 * p));
+  function widthAt(size, _pressure) {
+    // Stift und Marker haben eine feste Staerke — kein Druck vom Pencil.
+    return Math.max(1, size);
   }
 
   function lerpPt(a, b, t) {
@@ -250,21 +250,17 @@
       c.globalAlpha = alpha;
       c.beginPath();
       c.fillStyle = stroke.color;
-      c.arc(p.x, p.y, (isMarker ? stroke.size : widthAt(stroke.size, p.p)) / 2, 0, Math.PI * 2);
+      c.arc(p.x, p.y, stroke.size / 2, 0, Math.PI * 2);
       c.fill();
       c.restore();
       return;
     }
     if (looksLikePolygon(pts)) {
-      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, isMarker, false);
+      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false);
       return;
     }
-    if (isMarker) {
-      // eine glatte Kurve, volle Deckkraft auf dem Marker-Layer — Alpha kommt erst beim Blit
-      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
-      return;
-    }
-    drawRibbon(c, densifyStroke(pts), stroke.size, stroke.color, alpha, false);
+    // feste Breite, glatte Kurve — Druckstaerke aendert die Dicke nicht
+    drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
   }
 
   const markerLayer = document.createElement("canvas");

@@ -172,7 +172,7 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
             continue
         is_marker = stroke.get("tool") == "marker"
         alpha = 0.38 if is_marker else 1.0
-        width = float(stroke.get("size") or 18) if is_marker else _avg_width(stroke)
+        width = float(stroke.get("size") or (18 if is_marker else 4))
         c.setStrokeColor(_hex_color(str(stroke.get("color") or "#1c1c1e"), alpha))
         c.setFillColor(_hex_color(str(stroke.get("color") or "#1c1c1e"), alpha))
         c.setLineWidth(max(0.6, width * scale))
