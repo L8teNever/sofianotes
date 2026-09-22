@@ -2776,15 +2776,13 @@
 
       const cloudGroups = [];
       if (burst.length && cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
-        const toSend = blocks.slice(0, 2);
-        for (const block of toSend) {
-          if (ac.signal.aborted) break;
+        const ocrBlock = async (block) => {
           const strokes = block.strokes;
           const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
           if (ocrCache.has(key)) {
             const hit = ocrCache.get(key);
             const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
-            cloudGroups.push({
+            return {
               bbox: block.bbox,
               glyphs: [],
               text: hit.text,
@@ -2793,8 +2791,7 @@
               misspelled: SofiaInk.misspelledSpans(hit.text),
               strokeIds: strokes.map((s) => s.id),
               source: "cloudflare",
-            });
-            continue;
+            };
           }
           const crop = renderInkCrop(strokes);
           const resp = await fetch("/api/recognize", {
@@ -2806,19 +2803,19 @@
               preferDigits: mathSolveEnabled,
             }),
           });
-          if (!resp.ok) continue;
+          if (!resp.ok) return null;
           const data = await resp.json();
           if (data && data.error === "not_configured") {
             cloudOcrEnabled = false;
-            break;
+            return null;
           }
-          if (!data || !data.ok || !data.text) continue;
+          if (!data || !data.ok || !data.text) return null;
           cloudOcrEnabled = true;
           const text = SofiaInk.cleanOcrText(data.text);
-          if (!text) continue;
+          if (!text) return null;
           ocrCache.set(key, { text });
           const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
-          cloudGroups.push({
+          return {
             bbox: block.bbox,
             glyphs: [],
             text,
@@ -2827,12 +2824,25 @@
             misspelled: SofiaInk.misspelledSpans(text),
             strokeIds: strokes.map((s) => s.id),
             source: "cloudflare",
-          });
-        }
+          };
+        };
+        const parts = await Promise.all(blocks.map((block) => ocrBlock(block).catch(() => null)));
+        for (const g of parts) if (g) cloudGroups.push(g);
       }
 
       if (cloudGroups.length) {
-        groups = cloudGroups;
+        groups = mergeInkGroups([], cloudGroups);
+        const cloudIds = new Set(cloudGroups.flatMap((g) => g.strokeIds || []));
+        const leftover = burst.filter((s) => !cloudIds.has(s.id));
+        if (leftover.length) {
+          let local = await SofiaInk.recognizeStrokes(leftover, {
+            recentOnly: false,
+            preferDigits: mathSolveEnabled,
+            wordGap,
+          });
+          local = SofiaInk.stitchBlockGroups(local, blocks);
+          groups = mergeInkGroups(local, cloudGroups);
+        }
       } else if (burst.length) {
         groups = await SofiaInk.recognizeStrokes(burst, {
           recentOnly: false,
