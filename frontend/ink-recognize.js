@@ -674,10 +674,12 @@
     return burst;
   }
 
-  function ocrLooksPlausible(text) {
+  function ocrLooksPlausible(text, opts) {
     const s = String(text || "").trim();
     if (!s) return false;
     const compact = s.replace(/\s+/g, "");
+    const strokes = (opts && opts.strokes) || 0;
+    if (strokes >= 4 && compact.length <= 2 && !/\d{2,}|[+\-*/=√]/.test(compact)) return false;
     if (/^[+\-*/=√π%().]+$/.test(compact)) return false;
     if (/[+\-*/]$/.test(compact) && !solveFromBurst(s)) return false;
     if (looksLikeMath(s) || solveFromBurst(s)) return true;

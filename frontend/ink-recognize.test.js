@@ -121,6 +121,8 @@ test("ocrLooksPlausible rejects gibberish and keeps real notes", () => {
   assert.equal(SofiaInk.ocrLooksPlausible("MHL"), false);
   assert.equal(SofiaInk.ocrLooksPlausible("xqz"), false);
   assert.equal(SofiaInk.ocrLooksPlausible("12+"), false);
+  assert.equal(SofiaInk.ocrLooksPlausible("f", { strokes: 8 }), false);
+  assert.equal(SofiaInk.ocrLooksPlausible("4", { strokes: 1 }), true);
 });
 
 test("cluster blocks keep stacked text and math, split far ink", () => {

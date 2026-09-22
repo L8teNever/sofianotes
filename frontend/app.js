@@ -2825,7 +2825,7 @@
           cloudOcrEnabled = true;
           const text = SofiaInk.cleanOcrText(data.text);
           if (!text) return null;
-          if (SofiaInk.ocrLooksPlausible(text)) ocrCache.set(key, { text });
+          if (SofiaInk.ocrLooksPlausible(text, { strokes: strokes.length })) ocrCache.set(key, { text });
           const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
           return {
             bbox: block.bbox,
@@ -2866,8 +2866,12 @@
       for (const g of groups) {
         if (!g.misspelled) g.misspelled = SofiaInk.misspelledSpans(g.text);
       }
-      const plausible = groups.filter((g) => SofiaInk.ocrLooksPlausible(g.text));
-      const dubious = groups.filter((g) => !SofiaInk.ocrLooksPlausible(g.text));
+      const plausible = groups.filter((g) =>
+        SofiaInk.ocrLooksPlausible(g.text, { strokes: (g.strokeIds || []).length })
+      );
+      const dubious = groups.filter(
+        (g) => !SofiaInk.ocrLooksPlausible(g.text, { strokes: (g.strokeIds || []).length })
+      );
       const emptyRead = burst.length && !groups.length;
       const shown = recognizeWide || !dubious.length ? groups : plausible;
       inkGroups = shown.filter((g) => !dismissedInk.has(inkGroupKey(g)));
