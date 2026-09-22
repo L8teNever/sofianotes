@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>sofianotes</title>
+<meta name="theme-color" content="#ece9e3" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="icon" href="icons/favicon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="sofianotes" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<canvas id="board"></canvas>
+<div id="eraser-cursor"></div>
+
+<div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
+<div id="zoom-indicator">100%</div>
+
+<div id="toolbar">
+  <button class="tool-btn active" data-tool="pen" title="Stift">✏️</button>
+  <button class="tool-btn" data-tool="eraser" title="Radiergummi">🧹</button>
+  <div class="divider"></div>
+  <button class="swatch active" style="background:#1c1c1e" data-color="#1c1c1e"></button>
+  <button class="swatch" style="background:#e63946" data-color="#e63946"></button>
+  <button class="swatch" style="background:#2a6f97" data-color="#2a6f97"></button>
+  <button class="swatch" style="background:#2a9d59" data-color="#2a9d59"></button>
+  <button class="swatch" style="background:#f4a300" data-color="#f4a300"></button>
+  <div class="divider"></div>
+  <input type="range" id="size-slider" min="1" max="40" value="4" />
+</div>
+
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>

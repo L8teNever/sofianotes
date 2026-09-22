@@ -1,0 +1,9 @@
+services:
+  sofianotes:
+    build: .
+    container_name: sofianotes
+    restart: unless-stopped
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${BIND_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
