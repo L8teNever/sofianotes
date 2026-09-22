@@ -106,6 +106,16 @@ und `BIND_PORT` in der eigenen, nicht eingecheckten `.env` entsprechend
 setzen — Details zur konkreten Domain/Tunnel-Konfiguration sind bewusst nicht
 Teil dieses oeffentlichen Repos.
 
+**Cache-Busting bei Aenderungen an `app.js`/`style.css`**: Sitzt ein CDN/Proxy
+davor, das statische Dateien nach Endung cacht (unabhaengig vom
+`Cache-Control`-Header des Origin-Servers), reicht ein `docker compose
+up -d --build` allein nicht — Clients koennten eine alte, gecachte Version
+weiter ausgeliefert bekommen. Bei jeder inhaltlichen Aenderung an `app.js`
+oder `style.css`: den `?v=N`-Query-Parameter in `frontend/index.html` (und
+die passenden Pfade + `CACHE_NAME` in `frontend/service-worker.js`) um eins
+erhoehen. Das erzeugt eine neue URL, die zwangslaeufig frisch vom Origin
+geholt wird, ganz ohne dass ein Cache irgendwo explizit geleert werden muss.
+
 ## Was bewusst fehlt
 
 Mehrere Boards, Undo/Redo, Nutzer-Accounts/Login, Formen-Werkzeuge — laut

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import db
 from .ws_manager import ConnectionManager
@@ -10,6 +11,21 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 
 app = FastAPI(title="sofianotes")
 manager = ConnectionManager()
+
+
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    """Erzwingt Revalidierung bei jedem Laden, damit ein neuer Deploy nicht
+    durch den Cloudflare-Edge-Cache oder den Browser-Cache verdeckt wird
+    (App-Code aendert sich bei jedem Push, ein alter Stand waere ein Bug)."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+app.add_middleware(NoCacheStaticMiddleware)
 
 
 @app.on_event("startup")
