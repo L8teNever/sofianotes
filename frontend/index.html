@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="sofianotes" />
-<link rel="stylesheet" href="style.css?v=3" />
+<link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
 <canvas id="board"></canvas>
@@ -23,6 +23,7 @@
 <div id="toolbar">
   <button id="undo-btn" class="tool-btn" title="Rückgängig (Strg/Cmd+Z)">↩️</button>
   <button id="redo-btn" class="tool-btn" title="Wiederholen (Strg/Cmd+Shift+Z)">↪️</button>
+  <button id="export-btn" class="tool-btn" title="GoodNotes-Datei herunterladen (liegt auch auf dem Server unter data/sofianotes.goodnotes)">📓</button>
   <div class="divider"></div>
   <button class="tool-btn active" data-tool="pen" title="Stift">✏️</button>
   <button class="tool-btn" data-tool="marker" title="Textmarker">🖍️</button>
@@ -41,7 +42,7 @@
   <input type="range" id="size-slider" min="1" max="40" value="4" />
 </div>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

@@ -632,6 +632,10 @@
   }
   undoBtn.addEventListener("click", undo);
   redoBtn.addEventListener("click", redo);
+  const exportBtn = document.getElementById("export-btn");
+  exportBtn.addEventListener("click", () => {
+    window.location.href = "/api/export.goodnotes";
+  });
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
     if (!meta || e.key.toLowerCase() !== "z") return;
