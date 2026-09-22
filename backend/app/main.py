@@ -104,6 +104,31 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     exclude=websocket,
                 )
 
+            elif msg_type == "stroke_replace":
+                stroke_id = msg.get("strokeId")
+                entry = client.in_progress.get(stroke_id)
+                new_points = msg.get("points", [])
+                if entry is not None:
+                    entry["points"] = new_points
+                await manager.broadcast(
+                    {
+                        "type": "stroke_replace",
+                        "id": client.id,
+                        "strokeId": stroke_id,
+                        "points": new_points,
+                    },
+                    exclude=websocket,
+                )
+
+            elif msg_type == "stroke_move":
+                stroke = msg.get("stroke")
+                if stroke and stroke.get("id"):
+                    await db.insert_stroke(stroke)
+                    await manager.broadcast(
+                        {"type": "stroke_move", "id": client.id, "stroke": stroke},
+                        exclude=websocket,
+                    )
+
             elif msg_type == "stroke_abort":
                 stroke_id = msg.get("strokeId")
                 client.in_progress.pop(stroke_id, None)

@@ -9,6 +9,7 @@
   const zoomIndicatorEl = document.getElementById("zoom-indicator");
   const toolbarEl = document.getElementById("toolbar");
   const sizeSlider = document.getElementById("size-slider");
+  const shapeToggleEl = document.getElementById("shape-toggle");
 
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 4;
@@ -16,6 +17,8 @@
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
+  const HOLD_MS = 450; // wie lange der Stift ruhig gehalten werden muss, damit eine Form erkannt wird
+  const MIN_MOVE_WORLD = 1.2; // Punkte unterhalb dieser Bewegung gelten als "Zittern", nicht als echte Bewegung
 
   const uuid = () =>
     (crypto.randomUUID && crypto.randomUUID()) ||
@@ -70,11 +73,16 @@
     }
     return { minX, minY, maxX, maxY };
   }
-  function extendBBox(bbox, p) {
-    if (p.x < bbox.minX) bbox.minX = p.x;
-    if (p.y < bbox.minY) bbox.minY = p.y;
-    if (p.x > bbox.maxX) bbox.maxX = p.x;
-    if (p.y > bbox.maxY) bbox.maxY = p.y;
+  function unionBBox(boxes) {
+    if (boxes.length === 0) return null;
+    const u = { ...boxes[0] };
+    for (const b of boxes.slice(1)) {
+      if (b.minX < u.minX) u.minX = b.minX;
+      if (b.minY < u.minY) u.minY = b.minY;
+      if (b.maxX > u.maxX) u.maxX = b.maxX;
+      if (b.maxY > u.maxY) u.maxY = b.maxY;
+    }
+    return u;
   }
 
   function widthAt(size, pressure) {
@@ -85,12 +93,15 @@
   function drawStroke(stroke) {
     const pts = stroke.points;
     if (pts.length === 0) return;
+    const isMarker = stroke.tool === "marker";
+    ctx.globalAlpha = isMarker ? 0.35 : 1;
     if (pts.length === 1) {
       const p = pts[0];
       ctx.beginPath();
       ctx.fillStyle = stroke.color;
       ctx.arc(p.x, p.y, widthAt(stroke.size, p.p) / 2, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 1;
       return;
     }
     ctx.strokeStyle = stroke.color;
@@ -105,6 +116,7 @@
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
   }
 
   function drawGrid() {
@@ -132,6 +144,33 @@
     }
   }
 
+  function drawLassoAndSelection() {
+    if (lassoPoints && lassoPoints.length > 1) {
+      ctx.save();
+      ctx.setLineDash([6 / scale, 5 / scale]);
+      ctx.strokeStyle = "#3b6fe0";
+      ctx.lineWidth = 1.5 / scale;
+      ctx.beginPath();
+      ctx.moveTo(lassoPoints[0].x, lassoPoints[0].y);
+      for (let i = 1; i < lassoPoints.length; i++) ctx.lineTo(lassoPoints[i].x, lassoPoints[i].y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (selection.ids.size > 0 && selection.bbox) {
+      const b = selection.bbox;
+      const pad = 10 / scale;
+      ctx.save();
+      ctx.setLineDash([6 / scale, 5 / scale]);
+      ctx.strokeStyle = "#3b6fe0";
+      ctx.lineWidth = 1.5 / scale;
+      ctx.fillStyle = "rgba(59,111,224,0.08)";
+      const x = b.minX - pad, y = b.minY - pad, w = b.maxX - b.minX + pad * 2, h = b.maxY - b.minY + pad * 2;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    }
+  }
+
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#ece9e3";
@@ -139,9 +178,17 @@
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     drawGrid();
-    for (const stroke of boardStrokes.values()) drawStroke(stroke);
-    for (const stroke of remoteInProgress.values()) drawStroke(stroke);
-    if (currentStroke) drawStroke(currentStroke);
+
+    // Marker/Textmarker zuerst (liegt optisch unter der normalen Tinte).
+    for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke);
+    for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke);
+    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke);
+
+    for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker") drawStroke(stroke);
+    for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker") drawStroke(stroke);
+    if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
+
+    drawLassoAndSelection();
 
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
@@ -157,22 +204,31 @@
   }
 
   // ---- toolbar ------------------------------------------------------
-  let currentTool = "pen";
+  let currentTool = "pen"; // pen | marker | eraser | select
   let currentColor = "#1c1c1e";
   let penSize = 4;
+  let markerSize = 18;
   let eraserSize = 24;
+  let shapeRecognitionEnabled = true;
 
   function activeSize() {
-    return currentTool === "eraser" ? eraserSize : penSize;
+    if (currentTool === "eraser") return eraserSize;
+    if (currentTool === "marker") return markerSize;
+    return penSize;
   }
 
-  toolbarEl.querySelectorAll(".tool-btn").forEach((btn) => {
+  function isInkTool(tool) {
+    return tool === "pen" || tool === "marker";
+  }
+
+  toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      toolbarEl.querySelectorAll(".tool-btn").forEach((b) => b.classList.remove("active"));
+      toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       currentTool = btn.dataset.tool;
       sizeSlider.value = String(activeSize());
       updateEraserCursorVisibility();
+      if (currentTool !== "select") clearSelection();
     });
   });
   toolbarEl.querySelectorAll(".swatch").forEach((btn) => {
@@ -185,10 +241,16 @@
   sizeSlider.addEventListener("input", () => {
     const v = Number(sizeSlider.value);
     if (currentTool === "eraser") eraserSize = v * 2;
+    else if (currentTool === "marker") markerSize = v * 1.5;
     else penSize = v;
     updateEraserCursorVisibility();
   });
   sizeSlider.value = String(penSize);
+
+  shapeToggleEl.addEventListener("click", () => {
+    shapeRecognitionEnabled = !shapeRecognitionEnabled;
+    shapeToggleEl.classList.toggle("active", shapeRecognitionEnabled);
+  });
 
   function updateEraserCursorVisibility() {
     if (currentTool !== "eraser") {
@@ -285,6 +347,12 @@
         requestRedraw();
         break;
       }
+      case "stroke_replace": {
+        const s = remoteInProgress.get(msg.strokeId);
+        if (s) s.points = msg.points;
+        requestRedraw();
+        break;
+      }
       case "stroke_end":
         finalizeIncomingStroke(msg.strokeId);
         requestRedraw();
@@ -293,6 +361,15 @@
         remoteInProgress.delete(msg.strokeId);
         requestRedraw();
         break;
+      case "stroke_move": {
+        const s = msg.stroke;
+        if (s && s.id) {
+          s.bbox = makeBBox(s.points);
+          boardStrokes.set(s.id, s);
+          requestRedraw();
+        }
+        break;
+      }
       case "erase":
         for (const id of msg.strokeIds) {
           boardStrokes.delete(id);
@@ -306,6 +383,7 @@
   // ---- presence (other users' live cursor + active tool) ---------------
   const presence = new Map(); // clientId -> {el,color,x,y,tool,size,lastSeen}
   const PRESENCE_TIMEOUT_MS = 4000;
+  const TOOL_LABELS = { pen: "✏️ Stift", marker: "🖍️ Marker", eraser: "🧹 Radierer", select: "👆 Auswahl" };
 
   function ensurePresence(id, color) {
     let p = presence.get(id);
@@ -337,7 +415,7 @@
       p.el.style.left = s.x + "px";
       p.el.style.top = s.y - 14 + "px";
       p.el.style.background = p.color;
-      p.el.textContent = p.tool === "eraser" ? "🧹 Radierer" : "✏️ Stift";
+      p.el.textContent = TOOL_LABELS[p.tool] || p.tool;
     }
   }
 
@@ -350,7 +428,7 @@
 
   function flushNetworkBuffers() {
     const now = performance.now();
-    if (currentStroke && currentStroke.unsent.length > 0 && now - lastPointsFlush > POINTS_FLUSH_MS) {
+    if (currentStroke && currentStroke.unsent && currentStroke.unsent.length > 0 && now - lastPointsFlush > POINTS_FLUSH_MS) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
       lastPointsFlush = now;
@@ -369,12 +447,251 @@
     wsSend({ type: "cursor", x, y, tool, size });
   }
 
+  // ---- Formen-Erkennung (Linie/Rechteck/Dreieck/Kreis beim Halten) ------
+  let holdTimer = null;
+
+  function clearHoldTimer() {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  }
+  function armHoldTimer() {
+    clearHoldTimer();
+    if (!shapeRecognitionEnabled) return;
+    if (!currentStroke || currentStroke.tool !== "pen" || currentStroke.locked) return;
+    holdTimer = setTimeout(tryShapeSnap, HOLD_MS);
+  }
+
+  function perpDist(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }
+  function rdpSimplify(points, epsilon) {
+    function section(pts) {
+      if (pts.length < 3) return pts;
+      let maxDist = 0, index = 0;
+      const a = pts[0], b = pts[pts.length - 1];
+      for (let i = 1; i < pts.length - 1; i++) {
+        const d = perpDist(pts[i], a, b);
+        if (d > maxDist) {
+          maxDist = d;
+          index = i;
+        }
+      }
+      if (maxDist > epsilon) {
+        const left = section(pts.slice(0, index + 1));
+        const right = section(pts.slice(index));
+        return left.slice(0, -1).concat(right);
+      }
+      return [a, b];
+    }
+    return section(points);
+  }
+
+  function detectShape(rawPoints) {
+    if (rawPoints.length < 6) return null;
+    const bbox = makeBBox(rawPoints);
+    const w = bbox.maxX - bbox.minX, h = bbox.maxY - bbox.minY;
+    const diagonal = Math.hypot(w, h);
+    if (diagonal < 20) return null;
+
+    const avgPressure = rawPoints.reduce((s, p) => s + (p.p || 0.5), 0) / rawPoints.length;
+    const start = rawPoints[0], end = rawPoints[rawPoints.length - 1];
+    const startEndDist = Math.hypot(end.x - start.x, end.y - start.y);
+
+    let pathLength = 0;
+    for (let i = 1; i < rawPoints.length; i++) pathLength += Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
+
+    const closed = startEndDist < diagonal * 0.3;
+
+    if (!closed) {
+      let maxDev = 0;
+      for (const p of rawPoints) {
+        const d = perpDist(p, start, end);
+        if (d > maxDev) maxDev = d;
+      }
+      if (pathLength > 0 && maxDev / pathLength < 0.09) {
+        return { type: "line", points: [{ x: start.x, y: start.y, p: avgPressure }, { x: end.x, y: end.y, p: avgPressure }] };
+      }
+      return null;
+    }
+
+    // geschlossene Form: Kreis/Ellipse oder Ecken-basiert (Dreieck/Rechteck)
+    const cx = (bbox.minX + bbox.maxX) / 2, cy = (bbox.minY + bbox.maxY) / 2;
+    const centroid = rawPoints.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+    centroid.x /= rawPoints.length;
+    centroid.y /= rawPoints.length;
+    const radii = rawPoints.map((p) => Math.hypot(p.x - centroid.x, p.y - centroid.y));
+    const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
+    const variance = radii.reduce((a, r) => a + (r - meanR) * (r - meanR), 0) / radii.length;
+    const circleFit = meanR > 0 ? Math.sqrt(variance) / meanR : 1;
+
+    if (circleFit < 0.2) {
+      const rx = w / 2, ry = h / 2;
+      const aspectDiff = Math.abs(rx - ry) / Math.max(rx, ry);
+      const useCircle = aspectDiff < 0.15;
+      const N = 64;
+      const pts = [];
+      for (let i = 0; i <= N; i++) {
+        const t = (i / N) * Math.PI * 2;
+        pts.push({
+          x: cx + (useCircle ? meanR : rx) * Math.cos(t),
+          y: cy + (useCircle ? meanR : ry) * Math.sin(t),
+          p: avgPressure,
+        });
+      }
+      return { type: "circle", points: pts };
+    }
+
+    const simplified = rdpSimplify(rawPoints, diagonal * 0.06);
+    const corners = simplified.slice(0, simplified.length - 1); // letzter Punkt ~ erster (geschlossen)
+    if (corners.length === 3) {
+      return {
+        type: "triangle",
+        points: [...corners, corners[0]].map((p) => ({ x: p.x, y: p.y, p: avgPressure })),
+      };
+    }
+    if (corners.length === 4) {
+      const nearBBox = corners.every((p) => {
+        const dCorner = Math.min(
+          Math.hypot(p.x - bbox.minX, p.y - bbox.minY),
+          Math.hypot(p.x - bbox.maxX, p.y - bbox.minY),
+          Math.hypot(p.x - bbox.maxX, p.y - bbox.maxY),
+          Math.hypot(p.x - bbox.minX, p.y - bbox.maxY)
+        );
+        return dCorner < diagonal * 0.12;
+      });
+      const quad = nearBBox
+        ? [
+            { x: bbox.minX, y: bbox.minY },
+            { x: bbox.maxX, y: bbox.minY },
+            { x: bbox.maxX, y: bbox.maxY },
+            { x: bbox.minX, y: bbox.maxY },
+          ]
+        : corners;
+      return { type: "rectangle", points: [...quad, quad[0]].map((p) => ({ x: p.x, y: p.y, p: avgPressure })) };
+    }
+    return null;
+  }
+
+  function tryShapeSnap() {
+    holdTimer = null;
+    if (!currentStroke || currentStroke.tool !== "pen" || currentStroke.locked) return;
+    const detected = detectShape(currentStroke.points);
+    if (!detected) return;
+    currentStroke.points = detected.points;
+    currentStroke.unsent = [];
+    currentStroke.locked = true;
+    wsSend({ type: "stroke_replace", strokeId: currentStroke.id, points: detected.points });
+    requestRedraw();
+  }
+
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}
   const touchPointers = new Map(); // pointerId -> {x,y}
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
   let spacePressed = false;
+
+  // ---- Auswahl-Werkzeug (Lasso markieren + verschieben) -----------------
+  let lassoPoints = null;
+  let lassoPointerId = null;
+  let selection = { ids: new Set(), bbox: null };
+  let dragState = null; // {pointerId, startWorld, snapshot: Map(id -> points[])}
+
+  function clearSelection() {
+    selection = { ids: new Set(), bbox: null };
+    lassoPoints = null;
+    lassoPointerId = null;
+    dragState = null;
+    requestRedraw();
+  }
+
+  function pointInPolygon(pt, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      const intersect = yi > pt.y !== yj > pt.y && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi;
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+  function pointInBBox(pt, b, pad) {
+    return pt.x >= b.minX - pad && pt.x <= b.maxX + pad && pt.y >= b.minY - pad && pt.y <= b.maxY + pad;
+  }
+
+  function finalizeLasso() {
+    if (!lassoPoints || lassoPoints.length < 3) {
+      clearSelection();
+      lassoPoints = null;
+      return;
+    }
+    const poly = lassoPoints;
+    const ids = new Set();
+    for (const stroke of boardStrokes.values()) {
+      for (const p of stroke.points) {
+        if (pointInPolygon(p, poly)) {
+          ids.add(stroke.id);
+          break;
+        }
+      }
+    }
+    lassoPoints = null;
+    if (ids.size === 0) {
+      clearSelection();
+      return;
+    }
+    selection = { ids, bbox: unionBBox(Array.from(ids).map((id) => boardStrokes.get(id).bbox)) };
+    requestRedraw();
+  }
+
+  function startSelectionDrag(pointerId, world) {
+    const snapshot = new Map();
+    for (const id of selection.ids) {
+      const s = boardStrokes.get(id);
+      if (s) snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p })));
+    }
+    dragState = { pointerId, startWorld: world, snapshot };
+  }
+
+  function updateSelectionDrag(world) {
+    const dx = world.x - dragState.startWorld.x;
+    const dy = world.y - dragState.startWorld.y;
+    const boxes = [];
+    for (const [id, pts] of dragState.snapshot) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p }));
+      s.bbox = makeBBox(s.points);
+      boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
+  }
+
+  function finalizeSelectionDrag() {
+    for (const id of dragState.snapshot.keys()) {
+      const s = boardStrokes.get(id);
+      if (s) wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+    }
+    dragState = null;
+  }
+  function cancelSelectionDrag() {
+    for (const [id, pts] of dragState.snapshot) {
+      const s = boardStrokes.get(id);
+      if (s) {
+        s.points = pts;
+        s.bbox = makeBBox(pts);
+      }
+    }
+    dragState = null;
+    requestRedraw();
+  }
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") spacePressed = true;
@@ -391,37 +708,39 @@
 
   function startStroke(pointerId, pointerType, wx, wy, pressure) {
     const id = uuid();
+    const tool = currentTool === "marker" ? "marker" : "pen";
+    const size = activeSize();
     currentStroke = {
       id,
-      tool: "pen",
+      tool,
       color: currentColor,
-      size: penSize,
+      size,
       points: [{ x: wx, y: wy, p: pressure }],
       unsent: [],
       pointerId,
       pointerType,
+      locked: false,
     };
-    wsSend({
-      type: "stroke_start",
-      strokeId: id,
-      tool: "pen",
-      color: currentColor,
-      size: penSize,
-      points: currentStroke.points,
-    });
+    wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points });
+    if (tool === "pen") armHoldTimer();
     requestRedraw();
   }
 
   function extendStroke(wx, wy, pressure) {
-    if (!currentStroke) return;
+    if (!currentStroke || currentStroke.locked) return;
+    const last = currentStroke.points[currentStroke.points.length - 1];
+    const moved = !last || Math.hypot(wx - last.x, wy - last.y) >= MIN_MOVE_WORLD;
+    if (!moved) return; // Zittern ignorieren, Halte-Timer NICHT zuruecksetzen
     const point = { x: wx, y: wy, p: pressure };
     currentStroke.points.push(point);
     currentStroke.unsent.push(point);
+    if (currentStroke.tool === "pen") armHoldTimer();
     requestRedraw();
   }
 
   function endStroke() {
     if (!currentStroke) return;
+    clearHoldTimer();
     if (currentStroke.unsent.length > 0) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
@@ -435,6 +754,7 @@
 
   function abortStroke() {
     if (!currentStroke) return;
+    clearHoldTimer();
     wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
     currentStroke = null;
     requestRedraw();
@@ -495,6 +815,8 @@
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touchPointers.size === 2) {
         if (currentStroke) abortStroke();
+        if (dragState) cancelSelectionDrag();
+        lassoPoints = null;
         erasedThisGesture.clear();
         panState = null;
         const pts = Array.from(touchPointers.values());
@@ -517,7 +839,16 @@
     if (e.pointerType === "mouse" && e.button !== 0) return;
 
     const world = screenToWorld(e.clientX, e.clientY);
-    if (currentTool === "eraser") {
+
+    if (currentTool === "select") {
+      if (selection.bbox && pointInBBox(world, selection.bbox, 10 / scale)) {
+        startSelectionDrag(e.pointerId, world);
+      } else {
+        clearSelection();
+        lassoPointerId = e.pointerId;
+        lassoPoints = [world];
+      }
+    } else if (currentTool === "eraser") {
       erasedThisGesture.clear();
       currentStroke = { pointerId: e.pointerId, eraser: true, lastX: world.x, lastY: world.y };
       eraseSegment(world.x, world.y, world.x, world.y);
@@ -567,7 +898,21 @@
       updateEraserCursor(e.clientX, e.clientY);
     }
 
-    if (currentStroke && currentStroke.pointerId === e.pointerId) {
+    if (dragState && dragState.pointerId === e.pointerId) {
+      if (touchPointers.size >= 2) {
+        cancelSelectionDrag();
+        return;
+      }
+      updateSelectionDrag(world);
+    } else if (lassoPointerId === e.pointerId && lassoPoints) {
+      if (touchPointers.size >= 2) {
+        lassoPoints = null;
+        lassoPointerId = null;
+        return;
+      }
+      lassoPoints.push(world);
+      requestRedraw();
+    } else if (currentStroke && currentStroke.pointerId === e.pointerId) {
       if (touchPointers.size >= 2) {
         if (currentStroke.eraser) currentStroke = null;
         else abortStroke();
@@ -597,6 +942,16 @@
 
     if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       panState = null;
+      return;
+    }
+
+    if (dragState && dragState.pointerId === e.pointerId) {
+      finalizeSelectionDrag();
+      return;
+    }
+    if (lassoPointerId === e.pointerId) {
+      lassoPointerId = null;
+      finalizeLasso();
       return;
     }
 

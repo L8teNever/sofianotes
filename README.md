@@ -41,10 +41,22 @@ das simuliert ein Desktop-Browser nicht).
 
 - **Stift**: zeichnet mit Apple Pencil (druckempfindlich), Maus oder — sofern
   kein Pencil erkannt wird — auch mit dem Finger als Fallback fuer den Test.
+- **Textmarker**: wie der Stift, aber breiter und halbtransparent, liegt beim
+  Rendern immer unter der normalen Tinte (klassischer Highlighter-Effekt).
+- **Formen-Erkennung** (Schalter 🔷 in der Toolbar, per Klick an/aus): mit dem
+  Stift eine Linie, ein Dreieck, ein Rechteck oder einen Kreis zeichnen und am
+  Ende kurz ruhig halten (Stift bleibt unten) — die Form wird dann automatisch
+  glattgezogen. Ohne Halten oder bei ausgeschaltetem Schalter bleibt jeder
+  Strich normale Handschrift, die Erkennung greift nie ungefragt ein.
+- **Auswahl (👆 Lasso)**: mit dem Stift/der Maus eine Schlinge um Striche
+  ziehen, um sie auszuwaehlen (gestrichelter Rahmen), danach von innerhalb des
+  Rahmens ziehen, um die ausgewaehlten Striche zu verschieben. Ein Tap
+  ausserhalb hebt die Auswahl wieder auf.
 - **Radiergummi**: entfernt beruehrte Striche komplett, Kreis-Cursor zeigt die
   aktuelle Groesse.
-- **Zwei Finger**: Pinch-to-Zoom (0.25x–4x) und Pan. Ein laufender Strich wird
-  sofort verworfen, sobald ein zweiter Finger aufsetzt.
+- **Zwei Finger**: Pinch-to-Zoom (0.25x–4x) und Pan. Ein laufender Strich,
+  eine laufende Verschiebung oder eine laufende Lasso-Auswahl wird sofort
+  verworfen, sobald ein zweiter Finger aufsetzt.
 - **Space + Maus-Drag** bzw. **mittlere Maustaste**: Pan am Desktop.
 - **Mausrad**: Zoom am Desktop.
 
