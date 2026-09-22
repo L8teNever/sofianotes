@@ -59,6 +59,74 @@ html, body {
   -webkit-touch-callout: none;
 }
 
+#ink-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  pointer-events: none;
+}
+
+.ink-chip {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+  transform: translate(0, -100%);
+  padding: 3px 4px 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(11, 87, 208, 0.22);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  font-size: 13px;
+  font-weight: 650;
+  color: #0842a0;
+  white-space: nowrap;
+  max-width: min(70vw, 320px);
+}
+
+.ink-chip-math {
+  border-color: rgba(11, 87, 208, 0.45);
+  background: #eef4ff;
+}
+
+.ink-chip-text,
+.ink-chip-eq,
+.ink-chip-hide {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.ink-chip-eq {
+  background: #0b57d0;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.ink-chip-hide {
+  color: #80868b;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 7px;
+}
+
+.ink-chip-edit {
+  width: 92px;
+  border: 0;
+  background: #fff;
+  border-radius: 8px;
+  padding: 2px 6px;
+  font: inherit;
+  color: #1e1f22;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 #eraser-cursor {
   position: fixed;
   pointer-events: none;

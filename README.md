@@ -54,6 +54,15 @@ das simuliert ein Desktop-Browser nicht).
   Ende kurz ruhig halten (Stift bleibt unten) — die Form wird dann automatisch
   glattgezogen. Ohne Halten oder bei ausgeschaltetem Schalter bleibt jeder
   Strich normale Handschrift, die Erkennung greift nie ungefragt ein.
+- **Buchstaben erkennen** (Schalter `abc`): nach einer kurzen Pause erkennt
+  EMNIST + TensorFlow.js gezeichnete Ziffern und Buchstaben. Ein Chip zeigt
+  das Ergebnis; Tippen korrigiert es, und die Korrektur bleibt lokal gespeichert
+  (IndexedDB, k-NN), damit die Erkennung deine Schrift lernt.
+- **Rechnungen lösen** (Schalter `calculate`): Tinte wird wie bei ink-on zu
+  einem Ausdruck zusammengesetzt (`12+34`, Brüche, `2x3`). Wenn er sich rechnen
+  laesst, erscheint `= 46` — ein Tap setzt das Ergebnis aufs Blatt.
+- **Durchstreichen**: ein Strich oder Gekritzel durch vorhandene Tinte radiert
+  sie. Am Desktop reicht ein kurzer schraeger Strich.
 - **Auswahl (👆 Lasso)**: mit dem Stift/der Maus eine Schlinge um Striche
   ziehen, um sie auszuwaehlen (gestrichelter Rahmen), danach von innerhalb des
   Rahmens ziehen, um die ausgewaehlten Striche zu verschieben. Ein Tap

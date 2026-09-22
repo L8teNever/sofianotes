@@ -242,6 +242,19 @@
     const c = target || ctx;
     const pts = stroke.points;
     if (pts.length === 0) return;
+    if (stroke.tool === "text") {
+      const label = (pts[0] && pts[0].text) || "";
+      if (!label) return;
+      c.save();
+      c.globalAlpha = 1;
+      c.fillStyle = stroke.color || "#0b57d0";
+      c.font = `600 ${Math.max(14, stroke.size || 22)}px Inter, sans-serif`;
+      c.textBaseline = "alphabetic";
+      c.textAlign = "left";
+      c.fillText(label, pts[0].x, pts[0].y);
+      c.restore();
+      return;
+    }
     const isMarker = stroke.tool === "marker";
     const alpha = opts && opts.alpha != null ? opts.alpha : isMarker ? 0.38 : 1;
     if (pts.length === 1) {
@@ -373,6 +386,7 @@
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
     drawLassoAndSelection();
+    positionInkChips();
 
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
@@ -395,6 +409,8 @@
   let eraserSize = 28;
   let shapeRecognitionEnabled = true;
   let fingerDrawEnabled = false;
+  let recognizeEnabled = localStorage.getItem("sofianotes-recognize") !== "0";
+  let mathSolveEnabled = localStorage.getItem("sofianotes-math") !== "0";
 
   const toolConfigs = {
     pen: { label: "Stift", min: 1, max: 45, presets: [3, 8, 20] },
@@ -620,6 +636,35 @@
     fingerDrawEnabled = !fingerDrawEnabled;
     fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
   });
+
+  const recognizeToggleEl = document.getElementById("recognize-toggle");
+  const mathToggleEl = document.getElementById("math-toggle");
+  if (recognizeToggleEl) {
+    recognizeToggleEl.classList.toggle("active", recognizeEnabled);
+    recognizeToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      recognizeEnabled = !recognizeEnabled;
+      localStorage.setItem("sofianotes-recognize", recognizeEnabled ? "1" : "0");
+      recognizeToggleEl.classList.toggle("active", recognizeEnabled);
+      if (!recognizeEnabled) {
+        inkGroups = [];
+        renderInkOverlay();
+      } else {
+        scheduleRecognize();
+      }
+    });
+  }
+  if (mathToggleEl) {
+    mathToggleEl.classList.toggle("active", mathSolveEnabled);
+    mathToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      mathSolveEnabled = !mathSolveEnabled;
+      localStorage.setItem("sofianotes-math", mathSolveEnabled ? "1" : "0");
+      mathToggleEl.classList.toggle("active", mathSolveEnabled);
+      if (recognizeEnabled) scheduleRecognize();
+      else renderInkOverlay();
+    });
+  }
 
   settingsToggleBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1030,6 +1075,7 @@
       s.bbox = makeBBox(s.points);
       boardStrokes.set(s.id, s);
     }
+    scheduleRecognize();
   }
 
   function handleMessage(msg) {
@@ -1043,6 +1089,7 @@
           boardStrokes.set(s.id, s);
         }
         requestRedraw();
+        scheduleRecognize();
         break;
       }
       case "presence_join":
@@ -1108,6 +1155,7 @@
           remoteInProgress.delete(id);
         }
         requestRedraw();
+        scheduleRecognize();
         break;
     }
   }
@@ -1227,6 +1275,7 @@
       }
     }
     requestRedraw();
+    scheduleRecognize();
   }
   function undo() {
     if (undoStack.length === 0) return;
@@ -1808,31 +1857,28 @@
   }
 
   function looksLikeStrikeGesture(pts) {
-    if (pts.length < 4) return false;
-    const pathLength = strokePathLength(pts);
-    if (pathLength < 36) return false;
-    const start = pts[0];
-    const end = pts[pts.length - 1];
-    const chord = Math.hypot(end.x - start.x, end.y - start.y);
-    let maxDev = 0;
-    for (const p of pts) {
-      const d = perpDist(p, start, end);
-      if (d > maxDev) maxDev = d;
-    }
-    const straight = chord > 28 && pathLength > 0 && chord / pathLength > 0.7 && maxDev / pathLength < 0.18;
-    const scribble = countDirectionReversals(pts) >= 2 && pathLength > 48;
-    return straight || scribble;
+    const pointerType = (currentStroke && currentStroke.pointerType) || "pen";
+    return window.SofiaInk && SofiaInk.looksLikeStrikeGesture
+      ? SofiaInk.looksLikeStrikeGesture(pts, pointerType)
+      : false;
   }
 
   function strikeCrossesStroke(poly, stroke) {
     const b = stroke.bbox;
     if (!b) return false;
-    const hitR = Math.max(10, stroke.size * 0.65 + 6);
+    const mouse = currentStroke && currentStroke.pointerType === "mouse";
+    if (stroke.tool === "text") {
+      for (const q of poly) {
+        if (q.x >= b.minX && q.x <= b.maxX && q.y >= b.minY && q.y <= b.maxY) return true;
+      }
+      return false;
+    }
+    const hitR = Math.max(mouse ? 8 : 10, stroke.size * 0.65 + (mouse ? 4 : 6));
     const bw = b.maxX - b.minX;
     const bh = b.maxY - b.minY;
     const diag = Math.hypot(bw, bh);
-    const innerPadX = bw * 0.2;
-    const innerPadY = bh * 0.2;
+    const innerPadX = bw * (mouse ? 0.08 : 0.2);
+    const innerPadY = bh * (mouse ? 0.08 : 0.2);
     let hits = 0;
     let interiorHits = 0;
     let firstI = -1;
@@ -1867,6 +1913,7 @@
     }
     if (hits === 0) return false;
     if (diag < 18) return hits >= 1;
+    if (mouse && hits >= 2) return true;
     if (interiorHits === 0) return false;
     return lastI > firstI || hits >= 2;
   }
@@ -1898,6 +1945,7 @@
         pushUndo({ type: "erase", strokes: clones });
         currentStroke = null;
         requestRedraw();
+        scheduleRecognize();
         return;
       }
     }
@@ -1911,6 +1959,7 @@
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
     currentStroke = null;
     requestRedraw();
+    scheduleRecognize();
   }
 
   function abortStroke() {
@@ -1933,6 +1982,13 @@
         if (erasedThisGesture.has(stroke.id)) continue;
         const b = stroke.bbox;
         if (sx < b.minX - r || sx > b.maxX + r || sy < b.minY - r || sy > b.maxY + r) continue;
+        if (stroke.tool === "text") {
+          if (sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY) {
+            erasedThisGesture.add(stroke.id);
+            erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
+          }
+          continue;
+        }
         const hitR = r + stroke.size / 2;
         for (const p of stroke.points) {
           const dx = p.x - sx, dy = p.y - sy;
@@ -2207,6 +2263,170 @@
     const sel = window.getSelection && window.getSelection();
     if (sel && sel.rangeCount) sel.removeAllRanges();
   });
+
+  // ---- EMNIST / ink-on recognition overlay --------------------------------
+  const inkOverlay = document.getElementById("ink-overlay");
+  let inkGroups = [];
+  let recognizeTimer = null;
+  let recognizeBusy = false;
+  const dismissedInk = new Set();
+
+  function positionInkChips() {
+    if (!inkOverlay) return;
+    const chips = inkOverlay.querySelectorAll(".ink-chip");
+    chips.forEach((el, i) => {
+      const g = inkGroups[i];
+      if (!g) return;
+      const s = worldToScreen(g.bbox.maxX + 8, g.bbox.minY - 6);
+      el.style.left = Math.round(s.x) + "px";
+      el.style.top = Math.round(s.y) + "px";
+    });
+  }
+
+  function inkGroupKey(g) {
+    return (g.strokeIds || []).slice().sort().join(",");
+  }
+
+  function insertTextStroke(text, x, y, color, size) {
+    const id = uuid();
+    const fontSize = size || 22;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+    const w = ctx.measureText(text).width;
+    ctx.restore();
+    const stroke = {
+      id,
+      tool: "text",
+      color: color || "#0b57d0",
+      size: fontSize,
+      points: [
+        { x, y, p: 1, text },
+        { x: x + w / Math.max(scale, 0.25), y: y - fontSize, p: 1 },
+      ],
+    };
+    stroke.bbox = makeBBox(stroke.points);
+    boardStrokes.set(id, stroke);
+    wsSend({
+      type: "stroke_move",
+      stroke: { id, tool: "text", color: stroke.color, size: stroke.size, points: stroke.points },
+    });
+    pushUndo({ type: "add", stroke: cloneStroke(stroke) });
+    requestRedraw();
+  }
+
+  function renderInkOverlay() {
+    if (!inkOverlay) return;
+    inkOverlay.innerHTML = "";
+    if (!recognizeEnabled) return;
+    inkGroups.forEach((g) => {
+      const el = document.createElement("div");
+      el.className = "ink-chip" + (g.result && mathSolveEnabled ? " ink-chip-math" : "");
+      const textBtn = document.createElement("button");
+      textBtn.type = "button";
+      textBtn.className = "ink-chip-text";
+      textBtn.textContent = g.text || "?";
+      textBtn.title = "Tippen zum Korrigieren — merkt sich deine Schrift";
+      textBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+      textBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const input = document.createElement("input");
+        input.className = "ink-chip-edit";
+        input.value = g.text || "";
+        input.maxLength = 48;
+        el.replaceChild(input, textBtn);
+        input.focus();
+        input.select();
+        const commit = async () => {
+          const next = input.value.trim();
+          if (next && next !== g.text) {
+            if (next.length === g.glyphs.length) {
+              for (let i = 0; i < g.glyphs.length; i++) {
+                const gly = g.glyphs[i];
+                if (gly.pixels) await SofiaInk.rememberGlyph(gly.pixels, next[i]);
+              }
+            }
+            g.text = next;
+            g.result = mathSolveEnabled ? SofiaInk.solveMath(next) : null;
+          }
+          renderInkOverlay();
+        };
+        input.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            commit();
+          }
+          if (ev.key === "Escape") renderInkOverlay();
+        });
+        input.addEventListener("blur", commit);
+      });
+      el.appendChild(textBtn);
+      if (g.result && mathSolveEnabled) {
+        const eq = document.createElement("button");
+        eq.type = "button";
+        eq.className = "ink-chip-eq";
+        eq.textContent = "= " + g.result.text;
+        eq.title = "Ergebnis aufs Blatt setzen";
+        eq.addEventListener("pointerdown", (e) => e.stopPropagation());
+        eq.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          insertTextStroke(g.result.text, g.bbox.maxX + 16, g.bbox.maxY, "#0b57d0", Math.max(18, (g.bbox.maxY - g.bbox.minY) * 0.85));
+          dismissedInk.add(inkGroupKey(g));
+          renderInkOverlay();
+        });
+        el.appendChild(eq);
+      }
+      const hide = document.createElement("button");
+      hide.type = "button";
+      hide.className = "ink-chip-hide";
+      hide.textContent = "×";
+      hide.title = "Ausblenden";
+      hide.addEventListener("pointerdown", (e) => e.stopPropagation());
+      hide.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissedInk.add(inkGroupKey(g));
+        renderInkOverlay();
+      });
+      el.appendChild(hide);
+      inkOverlay.appendChild(el);
+    });
+    positionInkChips();
+  }
+
+  function scheduleRecognize() {
+    if (typeof SofiaInk === "undefined") return;
+    clearTimeout(recognizeTimer);
+    recognizeTimer = setTimeout(runRecognize, 560);
+  }
+
+  async function runRecognize() {
+    if (!recognizeEnabled || currentStroke || recognizeBusy) return;
+    if (typeof SofiaInk === "undefined") return;
+    recognizeBusy = true;
+    try {
+      await SofiaInk.loadEmnistModel("/models/emnist/model.json");
+      const groups = await SofiaInk.recognizeStrokes(Array.from(boardStrokes.values()));
+      inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
+      const live = new Set(groups.map(inkGroupKey));
+      for (const key of Array.from(dismissedInk)) {
+        if (!live.has(key)) dismissedInk.delete(key);
+      }
+      renderInkOverlay();
+    } catch (_err) {
+      /* Modell optional — Board bleibt nutzbar */
+    }
+    recognizeBusy = false;
+  }
+
+  setTimeout(() => {
+    if (recognizeEnabled && window.SofiaInk) {
+      SofiaInk.loadEmnistModel("/models/emnist/model.json");
+      SofiaInk.loadMemory();
+    }
+  }, 700);
 
   // ---- boot ------------------------------------------------------
   resizeCanvas();

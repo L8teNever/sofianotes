@@ -182,6 +182,13 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
             r = max(0.4, (width * scale) / 2)
             c.circle(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), r, stroke=0, fill=1)
             continue
+        if stroke.get("tool") == "text":
+            label = str(pts[0].get("text") or "")
+            if label:
+                c.setFillColor(_hex_color(str(stroke.get("color") or "#0b57d0"), 1.0))
+                c.setFont("Helvetica-Bold", max(8.0, width * scale))
+                c.drawString(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), label)
+            continue
         path = c.beginPath()
         if _looks_like_polygon(pts):
             path.moveTo(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])))
