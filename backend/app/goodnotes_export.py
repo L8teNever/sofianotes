@@ -74,6 +74,45 @@ def _bbox(strokes: list[dict[str, Any]]) -> tuple[float, float, float, float]:
     return min_x, min_y, max_x, max_y
 
 
+def _looks_like_polygon(pts: list[dict[str, Any]]) -> bool:
+    if len(pts) == 2:
+        return True
+    if len(pts) < 3 or len(pts) > 6:
+        return False
+    a, b = pts[0], pts[-1]
+    dx = float(a["x"]) - float(b["x"])
+    dy = float(a["y"]) - float(b["y"])
+    return dx * dx + dy * dy < 36.0
+
+
+def _xy(p: dict[str, Any]) -> tuple[float, float]:
+    return float(p["x"]), float(p["y"])
+
+
+def _mid(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+    return (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
+
+
+def _trace_smooth_pdf(path: Any, pts: list[dict[str, Any]], tx, ty) -> None:
+    """Mittelpunkt-Quadrate als kubische Bezier, analog zur Canvas-Tinte."""
+    mapped = [(tx(x), ty(y)) for x, y in (_xy(p) for p in pts)]
+    path.moveTo(mapped[0][0], mapped[0][1])
+    if len(mapped) == 2:
+        path.lineTo(mapped[1][0], mapped[1][1])
+        return
+    first_mid = _mid(mapped[0], mapped[1])
+    path.lineTo(first_mid[0], first_mid[1])
+    for i in range(1, len(mapped) - 1):
+        p0 = _mid(mapped[i - 1], mapped[i])
+        p1 = mapped[i]
+        p2 = _mid(mapped[i], mapped[i + 1])
+        c1 = (p0[0] + 2.0 / 3.0 * (p1[0] - p0[0]), p0[1] + 2.0 / 3.0 * (p1[1] - p0[1]))
+        c2 = (p2[0] + 2.0 / 3.0 * (p1[0] - p2[0]), p2[1] + 2.0 / 3.0 * (p1[1] - p2[1]))
+        path.curveTo(c1[0], c1[1], c2[0], c2[1], p2[0], p2[1])
+    last = mapped[-1]
+    path.lineTo(last[0], last[1])
+
+
 def _avg_width(stroke: dict[str, Any]) -> float:
     size = float(stroke.get("size") or 4)
     pts = stroke.get("points") or []
@@ -144,9 +183,12 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
             c.circle(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), r, stroke=0, fill=1)
             continue
         path = c.beginPath()
-        path.moveTo(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])))
-        for p in pts[1:]:
-            path.lineTo(tx(float(p["x"])), ty(float(p["y"])))
+        if _looks_like_polygon(pts):
+            path.moveTo(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])))
+            for p in pts[1:]:
+                path.lineTo(tx(float(p["x"])), ty(float(p["y"])))
+        else:
+            _trace_smooth_pdf(path, pts, tx, ty)
         c.drawPath(path, stroke=1, fill=0)
 
     c.showPage()

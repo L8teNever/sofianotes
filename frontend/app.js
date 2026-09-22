@@ -21,7 +21,8 @@
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
   const HOLD_MS = 450; // wie lange der Stift ruhig gehalten werden muss, damit eine Form erkannt wird
-  const MIN_MOVE_WORLD = 1.2; // Punkte unterhalb dieser Bewegung gelten als "Zittern", nicht als echte Bewegung
+  const MIN_MOVE_WORLD = 0.35; // kleine Stiftbewegungen zaehlen mit, sonst wirken Kurven eckig
+  const GAP_FILL_WORLD = 3.5; // grosse Luecken zwischen Samples mit Zwischenpunkten fuellen
 
   const uuid = () =>
     (crypto.randomUUID && crypto.randomUUID()) ||
@@ -55,7 +56,10 @@
     canvas.style.height = window.innerHeight + "px";
     requestRedraw();
   }
-  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+    positionToolPopover();
+  });
 
   // ---- board state ------------------------------------------------------
   const boardStrokes = new Map(); // id -> stroke
@@ -93,29 +97,40 @@
     return Math.max(1, size * (0.3 + 0.7 * p));
   }
 
-  function catmullRomPoint(p0, p1, p2, p3, t) {
-    const t2 = t * t;
-    const t3 = t2 * t;
+  function lerpPt(a, b, t) {
     return {
-      x: 0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-      y: 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
-      p: (p1.p || 0.5) * (1 - t) + (p2.p || 0.5) * t,
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t,
+      p: (a.p || 0.5) * (1 - t) + (b.p || 0.5) * t,
     };
   }
 
+  function quadPoint(p0, p1, p2, t) {
+    const u = 1 - t;
+    return {
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y,
+      p: u * u * (p0.p || 0.5) + 2 * u * t * (p1.p || 0.5) + t * t * (p2.p || 0.5),
+    };
+  }
+
+  // Quadratische Mittelpunkt-Kurve statt Catmull-Rom: folgt den Punkten
+  // ohne UeberSchwinger, die als dunkle Marker-Perlen oder eckige Tinte wirken.
   function densifyStroke(pts) {
     if (pts.length < 3) return pts;
-    const out = [];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i === 0 ? 0 : i - 1];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] || p2;
-      const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-      const steps = Math.max(1, Math.min(10, Math.ceil(segLen / 3.5)));
-      for (let s = 0; s < steps; s++) {
-        out.push(catmullRomPoint(p0, p1, p2, p3, s / steps));
-      }
+    const out = [pts[0]];
+    const firstMid = lerpPt(pts[0], pts[1], 0.5);
+    const firstLen = Math.hypot(firstMid.x - pts[0].x, firstMid.y - pts[0].y);
+    const firstSteps = Math.max(1, Math.min(6, Math.ceil(firstLen / 2.2)));
+    for (let s = 1; s <= firstSteps; s++) out.push(lerpPt(pts[0], firstMid, s / firstSteps));
+    for (let i = 1; i < pts.length - 1; i++) {
+      const start = lerpPt(pts[i - 1], pts[i], 0.5);
+      const ctrl = pts[i];
+      const end = lerpPt(pts[i], pts[i + 1], 0.5);
+      const segLen =
+        Math.hypot(ctrl.x - start.x, ctrl.y - start.y) + Math.hypot(end.x - ctrl.x, end.y - ctrl.y);
+      const steps = Math.max(1, Math.min(10, Math.ceil(segLen / 2.2)));
+      for (let s = 1; s <= steps; s++) out.push(quadPoint(start, ctrl, end, s / steps));
     }
     out.push(pts[pts.length - 1]);
     return out;
@@ -129,7 +144,7 @@
     return Math.hypot(a.x - b.x, a.y - b.y) < 6;
   }
 
-  function drawRibbon(pts, size, color, alpha, constantWidth) {
+  function drawRibbon(c, pts, size, color, alpha, constantWidth) {
     const radii = new Array(pts.length);
     for (let i = 0; i < pts.length; i++) {
       radii[i] = constantWidth ? size / 2 : widthAt(size, pts[i].p) / 2;
@@ -164,73 +179,105 @@
       right[i] = { x: pts[i].x - nx * r, y: pts[i].y - ny * r };
     }
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    for (let i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
-    for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(pts[0].x, pts[0].y, radii[0], 0, Math.PI * 2);
-    ctx.arc(pts[pts.length - 1].x, pts[pts.length - 1].y, radii[radii.length - 1], 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    c.save();
+    c.globalAlpha = alpha;
+    c.fillStyle = color;
+    c.beginPath();
+    c.moveTo(left[0].x, left[0].y);
+    for (let i = 1; i < left.length; i++) c.lineTo(left[i].x, left[i].y);
+    for (let i = right.length - 1; i >= 0; i--) c.lineTo(right[i].x, right[i].y);
+    c.closePath();
+    c.fill();
+    c.beginPath();
+    c.arc(pts[0].x, pts[0].y, radii[0], 0, Math.PI * 2);
+    c.arc(pts[pts.length - 1].x, pts[pts.length - 1].y, radii[radii.length - 1], 0, Math.PI * 2);
+    c.fill();
+    c.restore();
   }
 
-  function drawPolylineStroke(pts, size, color, alpha, constantWidth) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    if (constantWidth) {
-      ctx.lineWidth = size;
-      ctx.stroke();
-    } else {
-      // wenige Punkte (erkannte Formen): trotzdem eine durchgehende Linie,
-      // Breite aus mittlerem Druck, keine Perlen durch Einzel-Segmente
-      let pSum = 0;
-      for (const p of pts) pSum += p.p || 0.5;
-      ctx.lineWidth = widthAt(size, pSum / pts.length);
-      ctx.stroke();
+  function avgPressureWidth(pts, size) {
+    let pSum = 0;
+    for (const p of pts) pSum += p.p || 0.5;
+    return widthAt(size, pSum / pts.length);
+  }
+
+  function traceStraightPath(c, pts) {
+    c.beginPath();
+    c.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+  }
+
+  function traceMidpointPath(c, pts) {
+    c.beginPath();
+    c.moveTo(pts[0].x, pts[0].y);
+    if (pts.length === 2) {
+      c.lineTo(pts[1].x, pts[1].y);
+      return;
     }
-    ctx.restore();
+    c.lineTo((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i].x + pts[i + 1].x) / 2;
+      const my = (pts[i].y + pts[i + 1].y) / 2;
+      c.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    }
+    const last = pts[pts.length - 1];
+    c.lineTo(last.x, last.y);
   }
 
-  function drawStroke(stroke) {
+  function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth) {
+    c.save();
+    c.globalAlpha = alpha;
+    c.strokeStyle = color;
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.miterLimit = 2;
+    if (smooth && !looksLikePolygon(pts)) traceMidpointPath(c, pts);
+    else traceStraightPath(c, pts);
+    c.lineWidth = constantWidth ? size : avgPressureWidth(pts, size);
+    c.stroke();
+    c.restore();
+  }
+
+  function drawStroke(stroke, target, opts) {
+    const c = target || ctx;
     const pts = stroke.points;
     if (pts.length === 0) return;
     const isMarker = stroke.tool === "marker";
-    const alpha = isMarker ? 0.38 : 1;
+    const alpha = opts && opts.alpha != null ? opts.alpha : isMarker ? 0.38 : 1;
     if (pts.length === 1) {
       const p = pts[0];
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      ctx.fillStyle = stroke.color;
-      ctx.arc(p.x, p.y, (isMarker ? stroke.size : widthAt(stroke.size, p.p)) / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      c.save();
+      c.globalAlpha = alpha;
+      c.beginPath();
+      c.fillStyle = stroke.color;
+      c.arc(p.x, p.y, (isMarker ? stroke.size : widthAt(stroke.size, p.p)) / 2, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
       return;
     }
     if (looksLikePolygon(pts)) {
-      drawPolylineStroke(pts, stroke.size, stroke.color, alpha, isMarker);
+      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, isMarker, false);
       return;
     }
-    const dense = densifyStroke(pts);
     if (isMarker) {
-      // eine durchgehende Linie: keine dunklen Perlen durch ueberlappende Alpha-Caps
-      drawPolylineStroke(dense, stroke.size, stroke.color, alpha, true);
+      // eine glatte Kurve, volle Deckkraft auf dem Marker-Layer — Alpha kommt erst beim Blit
+      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
       return;
     }
-    drawRibbon(dense, stroke.size, stroke.color, alpha, false);
+    drawRibbon(c, densifyStroke(pts), stroke.size, stroke.color, alpha, false);
+  }
+
+  const markerLayer = document.createElement("canvas");
+  const markerCtx = markerLayer.getContext("2d", { alpha: true });
+
+  function syncMarkerLayer() {
+    if (markerLayer.width !== canvas.width || markerLayer.height !== canvas.height) {
+      markerLayer.width = canvas.width;
+      markerLayer.height = canvas.height;
+    } else {
+      markerCtx.setTransform(1, 0, 0, 1, 0, 0);
+      markerCtx.clearRect(0, 0, markerLayer.width, markerLayer.height);
+    }
   }
 
   let gridStyle = "graph";
@@ -311,10 +358,19 @@
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     drawGrid();
 
-    // Marker/Textmarker zuerst (liegt optisch unter der normalen Tinte).
-    for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke);
-    for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke);
-    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke);
+    // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
+    // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
+    syncMarkerLayer();
+    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
+    for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+    for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 0.38;
+    ctx.drawImage(markerLayer, 0, 0, window.innerWidth, window.innerHeight);
+    ctx.restore();
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
     for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker") drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker") drawStroke(stroke);
@@ -381,6 +437,50 @@
     return tool === "pen" || tool === "marker";
   }
 
+  function currentDock() {
+    if (toolbarEl.classList.contains("dock-top")) return "top";
+    if (toolbarEl.classList.contains("dock-left")) return "left";
+    if (toolbarEl.classList.contains("dock-right")) return "right";
+    return "bottom";
+  }
+
+  function positionToolPopover() {
+    if (!toolPopover || toolPopover.classList.contains("hidden")) return;
+    if (toolPopover.parentElement !== document.body) document.body.appendChild(toolPopover);
+    const dock = currentDock();
+    const active = toolbarEl.querySelector(".tool-btn.active");
+    const tools = toolbarEl.querySelector(".tools-container");
+    const r = (active || tools).getBoundingClientRect();
+    const gap = 12;
+    const pad = 8;
+    toolPopover.style.position = "fixed";
+    toolPopover.style.zIndex = "90";
+    toolPopover.style.right = "auto";
+    toolPopover.style.bottom = "auto";
+    toolPopover.style.transform = "none";
+    const pw = toolPopover.offsetWidth || 240;
+    const ph = toolPopover.offsetHeight || 180;
+    let left;
+    let top;
+    if (dock === "bottom") {
+      left = r.left + r.width / 2 - pw / 2;
+      top = r.top - gap - ph;
+    } else if (dock === "top") {
+      left = r.left + r.width / 2 - pw / 2;
+      top = r.bottom + gap;
+    } else if (dock === "left") {
+      left = r.right + gap;
+      top = r.top + r.height / 2 - ph / 2;
+    } else {
+      left = r.left - gap - pw;
+      top = r.top + r.height / 2 - ph / 2;
+    }
+    left = Math.max(pad, Math.min(window.innerWidth - pw - pad, left));
+    top = Math.max(pad, Math.min(window.innerHeight - ph - pad, top));
+    toolPopover.style.left = left + "px";
+    toolPopover.style.top = top + "px";
+  }
+
   function hidePopovers() {
     toolPopover.classList.add("hidden");
     settingsPopover.classList.add("hidden");
@@ -443,6 +543,7 @@
       popoverPreview.style.background = currentColor;
       popoverPreview.style.border = "none";
     }
+    if (!toolPopover.classList.contains("hidden")) positionToolPopover();
   }
 
   function setTool(tool, { openPopover } = {}) {
@@ -453,24 +554,37 @@
     });
     updateEraserCursorVisibility();
     if (tool !== "select") clearSelection();
+    settingsPopover.classList.add("hidden");
+    zoomPopover.classList.add("hidden");
     if (tool === "select") {
       toolPopover.classList.add("hidden");
       return;
     }
     renderToolPopover();
-    if (openPopover || already) {
-      if (already && !toolPopover.classList.contains("hidden")) toolPopover.classList.add("hidden");
-      else toolPopover.classList.remove("hidden");
-    } else {
-      toolPopover.classList.remove("hidden");
+    if (!openPopover) return;
+    if (already && !toolPopover.classList.contains("hidden")) {
+      toolPopover.classList.add("hidden");
+      return;
     }
-    settingsPopover.classList.add("hidden");
-    zoomPopover.classList.add("hidden");
+    toolPopover.classList.remove("hidden");
+    positionToolPopover();
   }
 
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
+    let ignoreClick = false;
+    btn.addEventListener("pointerup", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const r = btn.getBoundingClientRect();
+      if (e.clientX < r.left - 2 || e.clientX > r.right + 2 || e.clientY < r.top - 2 || e.clientY > r.bottom + 2) return;
+      ignoreClick = true;
+      setTool(btn.dataset.tool, { openPopover: true });
+    });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (ignoreClick) {
+        ignoreClick = false;
+        return;
+      }
       setTool(btn.dataset.tool, { openPopover: true });
     });
   });
@@ -567,6 +681,7 @@
     toolbarEl.classList.add("dock-" + pos);
     topBar.classList.toggle("pushed", pos === "top");
     localStorage.setItem("sofianotes-dock", pos);
+    positionToolPopover();
   }
   function setUndoCorner(corner) {
     undoDock.className = "corner-" + corner;
@@ -644,7 +759,14 @@
   });
 
   document.addEventListener("pointerdown", (e) => {
-    if (e.target.closest("#toolbar") || e.target.closest("#undo-redo-dock") || e.target.closest("#top-filename-bar")) return;
+    if (
+      e.target.closest("#toolbar") ||
+      e.target.closest("#tool-popover") ||
+      e.target.closest("#undo-redo-dock") ||
+      e.target.closest("#top-filename-bar")
+    ) {
+      return;
+    }
     hidePopovers();
   });
 
@@ -934,7 +1056,8 @@
   redoBtn.addEventListener("click", redo);
   const exportBtn = document.getElementById("export-btn");
   exportBtn.addEventListener("click", () => {
-    window.location.href = "/api/export.goodnotes";
+    // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
+    window.location.href = "/api/export.pdf";
   });
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
@@ -1437,13 +1560,39 @@
   function extendStroke(wx, wy, pressure) {
     if (!currentStroke || currentStroke.locked) return;
     const last = currentStroke.points[currentStroke.points.length - 1];
-    const moved = !last || Math.hypot(wx - last.x, wy - last.y) >= MIN_MOVE_WORLD;
-    if (!moved) return; // Zittern ignorieren, Halte-Timer NICHT zuruecksetzen
+    const dist = last ? Math.hypot(wx - last.x, wy - last.y) : 0;
+    if (last && dist < MIN_MOVE_WORLD) return;
+    if (last && dist > GAP_FILL_WORLD) {
+      const steps = Math.min(12, Math.ceil(dist / GAP_FILL_WORLD));
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const pt = {
+          x: last.x + (wx - last.x) * t,
+          y: last.y + (wy - last.y) * t,
+          p: (last.p || 0.5) * (1 - t) + pressure * t,
+        };
+        currentStroke.points.push(pt);
+        currentStroke.unsent.push(pt);
+      }
+    }
     const point = { x: wx, y: wy, p: pressure };
     currentStroke.points.push(point);
     currentStroke.unsent.push(point);
     if (currentStroke.tool === "pen") armHoldTimer();
     requestRedraw();
+  }
+
+  function coalescedEvents(e) {
+    let list = [];
+    if (typeof e.getCoalescedEvents === "function") {
+      try {
+        list = e.getCoalescedEvents();
+      } catch (err) {
+        list = [];
+      }
+    }
+    if (!list || list.length === 0) return [e];
+    return list;
   }
 
   function endStroke() {
@@ -1651,11 +1800,17 @@
         return;
       }
       if (currentStroke.eraser) {
-        eraseSegment(currentStroke.lastX, currentStroke.lastY, world.x, world.y);
-        currentStroke.lastX = world.x;
-        currentStroke.lastY = world.y;
+        for (const ev of coalescedEvents(e)) {
+          const w = screenToWorld(ev.clientX, ev.clientY);
+          eraseSegment(currentStroke.lastX, currentStroke.lastY, w.x, w.y);
+          currentStroke.lastX = w.x;
+          currentStroke.lastY = w.y;
+        }
       } else {
-        extendStroke(world.x, world.y, pointerPressure(e));
+        for (const ev of coalescedEvents(e)) {
+          const w = screenToWorld(ev.clientX, ev.clientY);
+          extendStroke(w.x, w.y, pointerPressure(ev));
+        }
       }
     }
 
