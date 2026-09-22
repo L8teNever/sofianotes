@@ -407,6 +407,7 @@
   let penSize = 6;
   let markerSize = 24;
   let eraserSize = 28;
+  let selection = { ids: new Set(), bbox: null };
   let shapeRecognitionEnabled = true;
   let fingerDrawEnabled = false;
   let recognizeEnabled = localStorage.getItem("sofianotes-recognize") !== "0";
@@ -509,9 +510,13 @@
   }
 
   function renderToolPopover() {
-    const cfg = toolConfigs[currentTool] || toolConfigs.pen;
-    const size = activeSize();
-    popoverTitle.textContent = cfg.label + " Stärke";
+    const selected = typeof selectionInkStrokes === "function" ? selectionInkStrokes() : [];
+    const usingSel = selected.length > 0;
+    const cfg = usingSel
+      ? toolConfigs[selected[0].tool] || toolConfigs.pen
+      : toolConfigs[currentTool] || toolConfigs.pen;
+    const size = usingSel ? selected[0].size : activeSize();
+    popoverTitle.textContent = usingSel ? "Auswahl Stärke" : cfg.label + " Stärke";
     popoverSizeText.textContent = Math.round(size) + " px";
     sizeSlider.min = String(cfg.min);
     sizeSlider.max = String(cfg.max);
@@ -527,7 +532,7 @@
       const px = 6 + i * 5;
       dot.style.width = px + "px";
       dot.style.height = px + "px";
-      if (currentTool === "marker") dot.style.background = hexToRgba(currentColor, 0.55);
+      if (currentTool === "marker" && !usingSel) dot.style.background = hexToRgba(currentColor, 0.55);
       else if (currentTool === "eraser") dot.style.background = "#94a3b8";
       else dot.style.background = currentColor;
       btn.appendChild(dot);
@@ -537,6 +542,7 @@
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         setActiveSize(preset);
+        restyleSelection({ size: preset });
         renderToolPopover();
         updateEraserCursorVisibility();
       });
@@ -545,10 +551,11 @@
     const previewPx = Math.min(22, Math.max(4, size / 2));
     popoverPreview.style.width = previewPx + "px";
     popoverPreview.style.height = previewPx + "px";
-    if (currentTool === "eraser") {
+    const previewTool = usingSel ? selected[0].tool : currentTool;
+    if (previewTool === "eraser") {
       popoverPreview.style.background = "#e2e8f0";
       popoverPreview.style.border = "1px solid #94a3b8";
-    } else if (currentTool === "marker") {
+    } else if (previewTool === "marker") {
       popoverPreview.style.background = hexToRgba(currentColor, 0.55);
       popoverPreview.style.border = "none";
     } else {
@@ -565,17 +572,20 @@
       b.classList.toggle("active", b.dataset.tool === tool);
     });
     updateEraserCursorVisibility();
-    if (tool !== "select") clearSelection();
+    if (tool === "eraser") clearSelection();
     settingsPopover.classList.add("hidden");
     zoomPopover.classList.add("hidden");
-    if (tool === "select") {
+    if (tool === "select" && selection.ids.size === 0) {
       toolPopover.classList.add("hidden");
       return;
     }
     renderToolPopover();
     if (!openPopover) return;
-    // Erst das Werkzeug wechseln, Menue nur beim zweiten Klick auf dasselbe.
-    if (!already) {
+    if (!already && tool !== "select") {
+      toolPopover.classList.add("hidden");
+      return;
+    }
+    if (tool === "select" && !already) {
       toolPopover.classList.add("hidden");
       return;
     }
@@ -610,6 +620,7 @@
       toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       currentColor = btn.dataset.color;
+      restyleSelection({ color: currentColor });
       renderToolPopover();
     });
   });
@@ -617,10 +628,12 @@
   customColorInput.addEventListener("input", (e) => {
     currentColor = e.target.value;
     toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
+    restyleSelection({ color: currentColor }, "color");
     renderToolPopover();
   });
   sizeSlider.addEventListener("input", () => {
     setActiveSize(sizeSlider.value);
+    restyleSelection({ size: Number(sizeSlider.value) }, "size");
     renderToolPopover();
     updateEraserCursorVisibility();
   });
@@ -1272,6 +1285,16 @@
           wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
         }
       }
+    } else if (action.type === "style") {
+      for (const c of action.changes) {
+        const s = boardStrokes.get(c.id);
+        const st = direction === 1 ? c.after : c.before;
+        if (s && st) {
+          s.color = st.color;
+          s.size = st.size;
+          wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+        }
+      }
     }
     requestRedraw();
     scheduleRecognize();
@@ -1665,14 +1688,113 @@
   // ---- Auswahl-Werkzeug (Lasso markieren + verschieben) -----------------
   let lassoPoints = null;
   let lassoPointerId = null;
-  let selection = { ids: new Set(), bbox: null };
   let dragState = null; // {pointerId, startWorld, snapshot: Map(id -> points[])}
+
+  function distPointToSeg(p, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1e-8) return Math.hypot(p.x - a.x, p.y - a.y);
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }
+
+  function selectionInkStrokes() {
+    return Array.from(selection.ids)
+      .map((id) => boardStrokes.get(id))
+      .filter((s) => s && (s.tool === "pen" || s.tool === "marker" || s.tool === "text"));
+  }
+
+  function selectStrokeIds(ids) {
+    const present = ids.filter((id) => boardStrokes.get(id));
+    if (!present.length) {
+      clearSelection();
+      return;
+    }
+    selection = {
+      ids: new Set(present),
+      bbox: unionBBox(present.map((id) => boardStrokes.get(id).bbox)),
+    };
+    renderToolPopover();
+    requestRedraw();
+  }
+
+  function restyleSelection(patch, mergeKey) {
+    const strokes = selectionInkStrokes();
+    if (!strokes.length) return;
+    const changes = [];
+    for (const s of strokes) {
+      const before = { color: s.color, size: s.size };
+      if (patch.color) s.color = patch.color;
+      if (patch.size != null && Number.isFinite(patch.size)) {
+        const cfg = toolConfigs[s.tool === "text" ? "pen" : s.tool] || toolConfigs.pen;
+        s.size = Math.max(cfg.min, Math.min(cfg.max, patch.size));
+      }
+      if (before.color === s.color && before.size === s.size) continue;
+      changes.push({ id: s.id, before, after: { color: s.color, size: s.size } });
+      wsSend({
+        type: "stroke_move",
+        stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points },
+      });
+    }
+    if (!changes.length) return;
+    const last = undoStack[undoStack.length - 1];
+    const sameIds =
+      last &&
+      last.type === "style" &&
+      last.mergeKey &&
+      last.mergeKey === mergeKey &&
+      last.changes.length === changes.length &&
+      last.changes.every((c, i) => c.id === changes[i].id);
+    if (mergeKey && sameIds) {
+      last.changes.forEach((c, i) => {
+        c.after = changes[i].after;
+      });
+      redoStack.length = 0;
+    } else {
+      pushUndo({ type: "style", changes, mergeKey: mergeKey || null });
+    }
+    requestRedraw();
+  }
+
+  function strokeHitsPoint(stroke, pt, pad) {
+    const r = (stroke.size || 6) / 2 + pad;
+    const b = stroke.bbox || makeBBox(stroke.points || []);
+    if (!pointInBBox(pt, b, r)) return false;
+    if (stroke.tool === "text") return true;
+    const pts = stroke.points || [];
+    if (pts.length === 1) return Math.hypot(pts[0].x - pt.x, pts[0].y - pt.y) <= r;
+    for (let i = 1; i < pts.length; i++) {
+      if (distPointToSeg(pt, pts[i - 1], pts[i]) <= r) return true;
+    }
+    return false;
+  }
+
+  function pickStrokeAt(world) {
+    const pad = 12 / Math.max(scale, 0.25);
+    let best = null;
+    let bestD = Infinity;
+    for (const s of boardStrokes.values()) {
+      if (!strokeHitsPoint(s, world, pad)) continue;
+      const b = s.bbox || makeBBox(s.points || []);
+      const cx = (b.minX + b.maxX) / 2;
+      const cy = (b.minY + b.maxY) / 2;
+      const d = Math.hypot(world.x - cx, world.y - cy);
+      if (d < bestD) {
+        best = s;
+        bestD = d;
+      }
+    }
+    return best;
+  }
 
   function clearSelection() {
     selection = { ids: new Set(), bbox: null };
     lassoPoints = null;
     lassoPointerId = null;
     dragState = null;
+    if (toolPopover && !toolPopover.classList.contains("hidden")) renderToolPopover();
     requestRedraw();
   }
 
@@ -1690,28 +1812,29 @@
   }
 
   function finalizeLasso() {
-    if (!lassoPoints || lassoPoints.length < 3) {
-      clearSelection();
-      lassoPoints = null;
+    const pts = lassoPoints;
+    lassoPoints = null;
+    const tap = !pts || pts.length < 3 || strokePathLength(pts) < 16 / Math.max(scale, 0.25);
+    if (tap) {
+      const hit = pts && pts[0] ? pickStrokeAt(pts[0]) : null;
+      if (hit) selectStrokeIds([hit.id]);
+      else clearSelection();
       return;
     }
-    const poly = lassoPoints;
     const ids = new Set();
     for (const stroke of boardStrokes.values()) {
       for (const p of stroke.points) {
-        if (pointInPolygon(p, poly)) {
+        if (pointInPolygon(p, pts)) {
           ids.add(stroke.id);
           break;
         }
       }
     }
-    lassoPoints = null;
     if (ids.size === 0) {
       clearSelection();
       return;
     }
-    selection = { ids, bbox: unionBBox(Array.from(ids).map((id) => boardStrokes.get(id).bbox)) };
-    requestRedraw();
+    selectStrokeIds(Array.from(ids));
   }
 
   function startSelectionDrag(pointerId, world) {
@@ -1776,6 +1899,7 @@
   }
 
   function startStroke(pointerId, pointerType, wx, wy, pressure) {
+    clearSelection();
     const id = uuid();
     const tool = currentTool === "marker" ? "marker" : "pen";
     const size = activeSize();
@@ -1959,6 +2083,7 @@
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
     const finishedId = currentStroke.id;
     currentStroke = null;
+    selectStrokeIds([finishedId]);
     requestRedraw();
     scheduleRecognize(finishedId);
   }

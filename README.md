@@ -66,8 +66,10 @@ das simuliert ein Desktop-Browser nicht).
   sie. Am Desktop reicht ein kurzer schraeger Strich.
 - **Auswahl (👆 Lasso)**: mit dem Stift/der Maus eine Schlinge um Striche
   ziehen, um sie auszuwaehlen (gestrichelter Rahmen), danach von innerhalb des
-  Rahmens ziehen, um die ausgewaehlten Striche zu verschieben. Ein Tap
-  ausserhalb hebt die Auswahl wieder auf.
+  Rahmens ziehen, um die ausgewaehlten Striche zu verschieben. Ein Tap auf
+  einen Strich waehlt ihn. Farbe und Staerke in der Leiste aendern danach
+  die Auswahl — auch direkt nach dem Malen, solange der Strich noch markiert
+  ist. Ein Tap ausserhalb hebt die Auswahl wieder auf.
 - **Radiergummi**: entfernt beruehrte Striche komplett, Kreis-Cursor zeigt die
   aktuelle Groesse.
 - **Rueckgaengig/Wiederholen** (↩️/↪️ oder Strg/Cmd+Z, mit Shift fuer
