@@ -100,6 +100,29 @@ test("plus is a cross", () => {
   assert.equal(op.char, "+");
 });
 
+test("adjacent 7 minus 1 stay three glyphs", () => {
+  const strokes = [line("7", 0, 0, 0, 36, 6), line("-", 16, 18, 30, 18, 4), line("1", 46, 0, 46, 36, 6)];
+  const groups = SofiaInk.clusterGlyphs(strokes);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].glyphs.length, 3);
+});
+
+test("tall thin stroke is a one", () => {
+  const g = { strokes: [line("a", 8, 0, 8, 40)] };
+  const op = SofiaInk.detectOperator(g);
+  assert.ok(op);
+  assert.equal(op.char, "1");
+});
+
+test("recent filter ignores old strokes without endedAt", () => {
+  const old = line("old", 0, 0, 0, 20);
+  const neu = line("new", 80, 0, 80, 20);
+  neu.endedAt = 5000;
+  const scoped = SofiaInk.filterRecentStrokes([old, neu], { now: 5200, windowMs: 12000 });
+  assert.ok(scoped.some((s) => s.id === "new"));
+  assert.ok(!scoped.some((s) => s.id === "old"));
+});
+
 test("cluster groups nearby strokes on one line", () => {
   const strokes = [
     line("1", 0, 0, 0, 24, 6),

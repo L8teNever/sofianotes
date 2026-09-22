@@ -1073,9 +1073,9 @@
     remoteInProgress.delete(id);
     if (s.points.length > 0) {
       s.bbox = makeBBox(s.points);
+      s.endedAt = performance.now();
       boardStrokes.set(s.id, s);
     }
-    scheduleRecognize();
   }
 
   function handleMessage(msg) {
@@ -1089,7 +1089,6 @@
           boardStrokes.set(s.id, s);
         }
         requestRedraw();
-        scheduleRecognize();
         break;
       }
       case "presence_join":
@@ -1247,7 +1246,7 @@
     updateUndoRedoButtons();
   }
   function putStroke(stroke) {
-    const withBBox = { ...stroke, bbox: makeBBox(stroke.points) };
+    const withBBox = { ...stroke, bbox: makeBBox(stroke.points), endedAt: performance.now() };
     boardStrokes.set(withBBox.id, withBBox);
     wsSend({ type: "stroke_move", stroke: { id: stroke.id, tool: stroke.tool, color: stroke.color, size: stroke.size, points: stroke.points } });
   }
@@ -1955,11 +1954,13 @@
     }
     wsSend({ type: "stroke_end", strokeId: currentStroke.id });
     currentStroke.bbox = makeBBox(currentStroke.points);
+    currentStroke.endedAt = performance.now();
     boardStrokes.set(currentStroke.id, currentStroke);
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
+    const finishedId = currentStroke.id;
     currentStroke = null;
     requestRedraw();
-    scheduleRecognize();
+    scheduleRecognize(finishedId);
   }
 
   function abortStroke() {
@@ -2269,6 +2270,8 @@
   let inkGroups = [];
   let recognizeTimer = null;
   let recognizeBusy = false;
+  let recognizeAgain = false;
+  let lastRecognizeFocus = null;
   const dismissedInk = new Set();
 
   function positionInkChips() {
@@ -2396,19 +2399,30 @@
     positionInkChips();
   }
 
-  function scheduleRecognize() {
+  function scheduleRecognize(focusId) {
     if (typeof SofiaInk === "undefined") return;
+    if (focusId) lastRecognizeFocus = focusId;
     clearTimeout(recognizeTimer);
-    recognizeTimer = setTimeout(runRecognize, 560);
+    recognizeTimer = setTimeout(runRecognize, 90);
   }
 
   async function runRecognize() {
-    if (!recognizeEnabled || currentStroke || recognizeBusy) return;
+    if (!recognizeEnabled || currentStroke) {
+      if (recognizeEnabled) recognizeAgain = true;
+      return;
+    }
     if (typeof SofiaInk === "undefined") return;
+    if (recognizeBusy) {
+      recognizeAgain = true;
+      return;
+    }
     recognizeBusy = true;
+    recognizeAgain = false;
     try {
-      await SofiaInk.loadEmnistModel("/models/emnist/model.json");
-      const groups = await SofiaInk.recognizeStrokes(Array.from(boardStrokes.values()));
+      const groups = await SofiaInk.recognizeStrokes(Array.from(boardStrokes.values()), {
+        focusId: lastRecognizeFocus,
+        windowMs: 15000,
+      });
       inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
       const live = new Set(groups.map(inkGroupKey));
       for (const key of Array.from(dismissedInk)) {
@@ -2419,14 +2433,13 @@
       /* Modell optional — Board bleibt nutzbar */
     }
     recognizeBusy = false;
+    if (recognizeAgain) scheduleRecognize(lastRecognizeFocus);
   }
 
-  setTimeout(() => {
-    if (recognizeEnabled && window.SofiaInk) {
-      SofiaInk.loadEmnistModel("/models/emnist/model.json");
-      SofiaInk.loadMemory();
-    }
-  }, 700);
+  if (recognizeEnabled && window.SofiaInk) {
+    SofiaInk.loadEmnistModel("/models/emnist/model.json");
+    SofiaInk.loadMemory();
+  }
 
   // ---- boot ------------------------------------------------------
   resizeCanvas();

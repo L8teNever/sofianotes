@@ -139,9 +139,7 @@
     const cy = (b.minY + b.maxY) / 2;
     const toX = (x) => SIZE / 2 + (x - cx) * scale;
     const toY = (y) => SIZE / 2 + (y - cy) * scale;
-    const meanSize =
-      strokes.reduce((acc, s) => acc + (s.size || 6), 0) / Math.max(1, strokes.length);
-    const r = Math.max(1.05, Math.min(2.35, meanSize * scale * 0.55));
+    const r = 1.85;
     const buf = new Float32Array(SIZE * SIZE);
     for (const s of strokes) {
       const pts = s.points || [];
@@ -308,8 +306,8 @@
       if (chord > 16 && path > 0 && chord / path > 0.72 && slope > 0.35 && slope < 2.8 && aspect > 0.35 && aspect < 2.4) {
         return { char: "/", confidence: 0.8, source: "geom" };
       }
-      if (nearlyVertical(st) && w < 12) {
-        return { char: "1", confidence: 0.55, source: "geom" };
+      if (nearlyVertical(st) && st.h > 16 && aspect < 0.42) {
+        return { char: "1", confidence: 0.8, source: "geom" };
       }
     }
     return null;
@@ -372,17 +370,20 @@
         while (changed) {
           changed = false;
           const box = unionBBox(member.map((m) => m.bbox));
-          const pad = Math.max(4, medianH * 0.18);
+          const pad = Math.max(3, medianH * 0.1);
           for (let j = 0; j < items.length; j++) {
             if (used.has(j)) continue;
             const b = items[j].bbox;
-            const closeX = xOverlapRatio(box, b) > 0.28 || boxesOverlap(box, b, pad);
+            const xo = xOverlapRatio(box, b);
+            const gapX = Math.max(0, Math.max(box.minX, b.minX) - Math.min(box.maxX, b.maxX));
+            const sameColumn = xo > 0.38;
+            const stackedDot = xo > 0.18 && gapX < medianH * 0.06;
             const closeY = boxesOverlap(
               { minX: box.minX, maxX: box.maxX, minY: box.minY - pad, maxY: box.maxY + pad },
               b,
               0
             );
-            if (closeX && closeY) {
+            if ((sameColumn || stackedDot) && closeY) {
               member.push(items[j]);
               used.add(j);
               changed = true;
@@ -431,7 +432,8 @@
     if (MATH_CONFUSIONS[char]) return MATH_CONFUSIONS[char];
     if (alts) {
       for (const a of alts) {
-        if (/[0-9+\-*/=.]/.test(a.char)) return a.char;
+        if (a.confidence >= 0.18 && /[0-9]/.test(a.char)) return a.char;
+        if (/[+\-*/=.]/.test(a.char)) return a.char;
       }
     }
     return char;
@@ -721,6 +723,19 @@
 
   let tfModel = null;
   let tfLoad = null;
+  let warmed = false;
+
+  async function ensureTfBackend() {
+    const tf = root.tf;
+    if (!tf) return null;
+    try {
+      if (typeof tf.enableProdMode === "function") tf.enableProdMode();
+      await tf.ready();
+    } catch (_err) {
+      /* cpu/webgl fallback happens inside tf */
+    }
+    return tf;
+  }
 
   function loadEmnistModel(url) {
     if (tfModel) return Promise.resolve(tfModel);
@@ -729,10 +744,20 @@
     if (!tf || typeof tf.loadLayersModel !== "function") {
       return Promise.resolve(null);
     }
-    tfLoad = tf
-      .loadLayersModel(url || "/models/emnist/model.json")
-      .then((m) => {
+    tfLoad = ensureTfBackend()
+      .then(() => tf.loadLayersModel(url || "/models/emnist/model.json"))
+      .then(async (m) => {
         tfModel = m;
+        try {
+          const z = tf.zeros([1, SIZE, SIZE, 1]);
+          const p = m.predict(z);
+          await p.data();
+          z.dispose();
+          p.dispose();
+          warmed = true;
+        } catch (_err) {
+          warmed = true;
+        }
         return m;
       })
       .catch(() => {
@@ -742,39 +767,34 @@
     return tfLoad;
   }
 
-  async function cnnPredict(pixels) {
+  async function cnnPredictBatch(pixelsList) {
     const model = tfModel || (await loadEmnistModel());
     const tf = root.tf;
-    if (!model || !tf) return null;
-    const t = tf.tensor4d(pixels, [1, SIZE, SIZE, 1]);
+    if (!model || !tf || !pixelsList.length) return pixelsList.map(() => null);
+    const n = pixelsList.length;
+    const flat = new Float32Array(n * SIZE * SIZE);
+    for (let i = 0; i < n; i++) flat.set(pixelsList[i], i * SIZE * SIZE);
+    const t = tf.tensor4d(flat, [n, SIZE, SIZE, 1]);
     const pred = model.predict(t);
-    const data = pred.dataSync();
+    const data = pred.dataSync ? pred.dataSync() : await pred.data();
     t.dispose();
     pred.dispose();
-    const top = topFromProbs(data, 4);
-    return top[0] ? { ...top[0], alts: top } : null;
+    const out = [];
+    const stride = EMNIST_CHARS.length;
+    for (let i = 0; i < n; i++) {
+      const slice = Array.from(data.slice(i * stride, (i + 1) * stride));
+      const top = topFromProbs(slice, 4);
+      out.push(top[0] ? { ...top[0], alts: top } : null);
+    }
+    return out;
   }
 
-  async function classifyGlyph(glyph, mathish) {
-    const geom = detectOperator(glyph);
-    glyph.op = geom;
-    if (geom && geom.confidence >= 0.78) {
-      glyph.char = geom.char;
-      glyph.confidence = geom.confidence;
-      glyph.source = geom.source;
-      glyph.alts = [];
-      glyph.pixels = rasterizeGlyph(glyph.strokes);
-      return glyph;
-    }
-    const pixels = rasterizeGlyph(glyph.strokes);
-    glyph.pixels = pixels;
-    const examples = memoryCache.map((ex) => ({
-      label: ex.label,
-      pixels: ex.pixels instanceof Float32Array ? ex.pixels : Float32Array.from(ex.pixels),
-    }));
-    const mem = knnPredict(pixels, examples);
-    const cnn = await cnnPredict(pixels);
-    let pick = mem && (!cnn || mem.confidence >= 0.55) ? mem : cnn;
+  async function cnnPredict(pixels) {
+    const [one] = await cnnPredictBatch([pixels]);
+    return one;
+  }
+
+  function applyPick(glyph, pick, geom, mathish) {
     if (!pick && geom) pick = geom;
     if (!pick) {
       glyph.char = "?";
@@ -783,7 +803,7 @@
       glyph.alts = [];
       return glyph;
     }
-    const alts = (cnn && cnn.alts) || [];
+    const alts = (pick.alts || []).slice();
     glyph.char = biasMathChar(pick.char, alts, mathish);
     glyph.confidence = pick.confidence;
     glyph.source = pick.source;
@@ -792,23 +812,86 @@
     return glyph;
   }
 
-  async function recognizeStrokes(strokes) {
+  function memoryExamples() {
+    return memoryCache.map((ex) => ({
+      label: ex.label,
+      pixels: ex.pixels instanceof Float32Array ? ex.pixels : Float32Array.from(ex.pixels),
+    }));
+  }
+
+  async function classifyGlyph(glyph, mathish) {
+    const geom = detectOperator(glyph);
+    glyph.op = geom;
+    glyph.pixels = rasterizeGlyph(glyph.strokes);
+    if (geom && geom.confidence >= 0.8) {
+      glyph.char = geom.char;
+      glyph.confidence = geom.confidence;
+      glyph.source = geom.source;
+      glyph.alts = [];
+      return glyph;
+    }
+    const mem = knnPredict(glyph.pixels, memoryExamples());
+    if (mem && mem.confidence >= 0.7) return applyPick(glyph, mem, geom, mathish);
+    const cnn = await cnnPredict(glyph.pixels);
+    return applyPick(glyph, mem && mem.confidence >= 0.55 && (!cnn || mem.confidence >= cnn.confidence) ? mem : cnn, geom, mathish);
+  }
+
+  function filterRecentStrokes(strokes, opts) {
+    const list = Array.isArray(strokes) ? strokes : [];
+    const now = (opts && opts.now) || (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const windowMs = (opts && opts.windowMs) || 15000;
+    const focusId = opts && opts.focusId;
+    return list.filter((s) => {
+      if (!isLikelyHandwriting(s)) return false;
+      if (focusId && s.id === focusId) return true;
+      return !!(s.endedAt && now - s.endedAt <= windowMs);
+    });
+  }
+
+  async function recognizeStrokes(strokes, opts) {
     await loadMemory();
-    const groups = clusterGlyphs(strokes);
-    const out = [];
+    const scoped = opts && opts.recentOnly === false ? strokes.filter(isLikelyHandwriting) : filterRecentStrokes(strokes, opts);
+    const groups = clusterGlyphs(scoped);
+    const pending = [];
     for (const group of groups) {
       const probe = group.glyphs.map((g) => detectOperator(g)).filter(Boolean);
       const mathish = probe.some((p) => "+-×/=—".includes(p.char));
+      group.mathish = mathish;
       for (const g of group.glyphs) {
-        await classifyGlyph(g, mathish);
+        const geom = detectOperator(g);
+        g.op = geom;
+        g.pixels = rasterizeGlyph(g.strokes);
+        if (geom && geom.confidence >= 0.8) {
+          g.char = geom.char;
+          g.confidence = geom.confidence;
+          g.source = geom.source;
+          g.alts = [];
+          continue;
+        }
+        const mem = knnPredict(g.pixels, memoryExamples());
+        if (mem && mem.confidence >= 0.7) {
+          applyPick(g, mem, geom, mathish);
+          continue;
+        }
+        pending.push({ g, geom, mem, mathish });
       }
+    }
+    const batch = await cnnPredictBatch(pending.map((p) => p.g.pixels));
+    pending.forEach((p, i) => {
+      const cnn = batch[i];
+      const pick =
+        p.mem && p.mem.confidence >= 0.55 && (!cnn || p.mem.confidence >= cnn.confidence) ? p.mem : cnn;
+      applyPick(p.g, pick, p.geom, p.mathish);
+    });
+    const out = [];
+    for (const group of groups) {
       const layout = layoutInkOn(group.glyphs);
       const solved = layout.math ? solveMath(layout.text) : null;
       const avg =
         group.glyphs.reduce((s, g) => s + (g.confidence || 0), 0) / Math.max(1, group.glyphs.length);
       const hasSymbol = /[0-9A-Za-z]/.test(layout.text.replace(/\?/g, ""));
       if (!hasSymbol && !solved) continue;
-      if (avg < 0.28 && !solved) continue;
+      if (avg < 0.38 && !solved) continue;
       out.push({
         bbox: group.bbox,
         glyphs: group.glyphs,
@@ -842,6 +925,7 @@
     rememberGlyph,
     recognizeStrokes,
     classifyGlyph,
+    filterRecentStrokes,
     formatNumber,
   };
 
