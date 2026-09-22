@@ -46,15 +46,14 @@ test("tiny mouse tick is not a strike", () => {
   assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "mouse"), false);
 });
 
-test("mouse scribble with one reversal erases", () => {
-  const pts = [
-    pt(0, 0),
-    pt(20, 4),
-    pt(40, 0),
-    pt(20, -4),
-    pt(0, 0),
-  ];
+test("mouse scribble with two reversals erases", () => {
+  const pts = [pt(0, 0), pt(24, 6), pt(48, 0), pt(24, -6), pt(0, 2), pt(20, 8)];
   assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "mouse"), true);
+});
+
+test("handwritten 7 is not a desktop strike", () => {
+  const pts = [pt(0, 0), pt(22, 0), pt(20, 2), pt(4, 32)];
+  assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "mouse"), false);
 });
 
 test("solve plain arithmetic", () => {

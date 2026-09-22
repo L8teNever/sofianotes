@@ -4,6 +4,6 @@ Converted from the MIT-licensed training script in
 https://github.com/4ltrem/emnist-web-app (model.json + group1-shard1of1.bin).
 
 Dataset: EMNIST ByClass (NIST Special Database 19 / Cohen et al.).
-Input: 28x28 grayscale, ink=1 on black=0, matching extract_training_samples('byclass')
-which stores characters transposed relative to a normal screen glyph — sofianotes
-transposes the raster before inference.
+Input: 28x28 grayscale, ink=1 on black=0. This checkpoint matches upright
+canvas drawings (same as 4ltrem's web demo) — sofianotes does not transpose
+the raster before inference.

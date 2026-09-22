@@ -96,8 +96,7 @@
       pathLength > 0 &&
       chord / pathLength > straightRatio &&
       maxDev / pathLength < maxDevRatio;
-    const scribble =
-      countDirectionReversals(pts) >= (mouse ? 1 : 2) && pathLength > (mouse ? 22 : 48);
+    const scribble = countDirectionReversals(pts) >= 2 && pathLength > (mouse ? 22 : 48);
     return straight || scribble;
   }
 
@@ -126,7 +125,7 @@
   }
 
   function rasterizeGlyph(strokes, opts) {
-    const transpose = !opts || opts.transpose !== false;
+    const transpose = !!(opts && opts.transpose);
     const all = [];
     for (const s of strokes) {
       for (const p of s.points || []) all.push(p);
@@ -205,7 +204,7 @@
     if (!stroke || stroke.tool !== "pen") return false;
     const pts = stroke.points || [];
     if (pts.length === 0) return false;
-    if (pts.length >= 48) return false;
+    if (pts.length >= 80) return false;
     const b = stroke.bbox || bboxOfPoints(pts);
     const w = b.maxX - b.minX;
     const h = b.maxY - b.minY;
