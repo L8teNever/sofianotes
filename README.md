@@ -68,10 +68,13 @@ das simuliert ein Desktop-Browser nicht).
   eine laufende Verschiebung oder eine laufende Lasso-Auswahl wird sofort
   verworfen, sobald ein zweiter Finger aufsetzt.
 - **Space + Maus-Drag** bzw. **mittlere Maustaste**: Pan am Desktop.
-- **GoodNotes-Export** (📓): laedt `sofianotes.goodnotes` herunter. Dieselbe
+- **GoodNotes-Export** (Download in der Kopfleiste): laedt `sofianotes.goodnotes` herunter. Dieselbe
   Datei liegt dauerhaft auf dem Server in `data/` und wird bei jedem
   gespeicherten Strich aktualisiert. Die enthaltene PDF in GoodNotes
   importieren.
+- **Verschiebbare Leisten**: die Werkzeugleiste per Griff an oben, unten,
+  links oder rechts andocken; Undo/Redo/Zoom in eine der vier Ecken ziehen.
+  Raster (kariert, Punkte, liniert, blanko) sitzt unter dem Zahnrad.
 
 ## Architektur / Sync-Protokoll
 
