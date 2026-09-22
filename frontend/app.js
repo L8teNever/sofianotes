@@ -499,6 +499,7 @@
     toolPopover.classList.add("hidden");
     settingsPopover.classList.add("hidden");
     zoomPopover.classList.add("hidden");
+    hideEraseAllMenu();
   }
 
   function hexToRgba(hex, alpha) {
@@ -563,6 +564,8 @@
       popoverPreview.style.background = currentColor;
       popoverPreview.style.border = "none";
     }
+    const clearRow = document.getElementById("eraser-clear-row");
+    if (clearRow) clearRow.classList.toggle("hidden", currentTool !== "eraser" || usingSel);
     if (!toolPopover.classList.contains("hidden")) positionToolPopover();
   }
 
@@ -638,6 +641,20 @@
     renderToolPopover();
     updateEraserCursorVisibility();
   });
+  const btnEraseAll = document.getElementById("btn-erase-all");
+  const btnEraseAllHere = document.getElementById("btn-erase-all-here");
+  if (btnEraseAll) {
+    btnEraseAll.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearAllInk();
+    });
+  }
+  if (btnEraseAllHere) {
+    btnEraseAllHere.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearAllInk();
+    });
+  }
 
   shapeToggleEl.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1012,6 +1029,7 @@
     if (
       e.target.closest("#toolbar") ||
       e.target.closest("#tool-popover") ||
+      e.target.closest("#erase-all-menu") ||
       e.target.closest("#undo-redo-dock") ||
       e.target.closest("#top-filename-bar")
     ) {
@@ -1305,6 +1323,38 @@
     if (undoStack.length > MAX_UNDO) undoStack.shift();
     redoStack.length = 0;
     updateUndoRedoButtons();
+  }
+  const eraseAllMenu = document.getElementById("erase-all-menu");
+  function hideEraseAllMenu() {
+    if (eraseAllMenu) eraseAllMenu.classList.add("hidden");
+  }
+  function showEraseAllMenu(clientX, clientY) {
+    if (!eraseAllMenu || !boardStrokes.size) return;
+    eraseAllMenu.classList.remove("hidden");
+    const w = 188;
+    const h = 52;
+    let left = clientX + 10;
+    let top = clientY + 10;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, clientX - w - 10);
+    if (top + h > window.innerHeight - 8) top = Math.max(8, clientY - h - 10);
+    eraseAllMenu.style.left = left + "px";
+    eraseAllMenu.style.top = top + "px";
+  }
+  function clearAllInk() {
+    const clones = Array.from(boardStrokes.values()).map(cloneStroke);
+    hideEraseAllMenu();
+    if (!clones.length) return;
+    const ids = clones.map((s) => s.id);
+    for (const id of ids) boardStrokes.delete(id);
+    wsSend({ type: "erase", strokeIds: ids });
+    pushUndo({ type: "erase", strokes: clones });
+    inkGroups = [];
+    scanBoxes = [];
+    dismissedInk.clear();
+    ocrCache.clear();
+    renderInkOverlay();
+    toolPopover.classList.add("hidden");
+    requestRedraw();
   }
   function putStroke(stroke) {
     const withBBox = { ...stroke, bbox: makeBBox(stroke.points), endedAt: performance.now() };
@@ -2213,7 +2263,7 @@
     } else if (currentTool === "eraser") {
       erasedThisGesture.clear();
       erasedStrokesThisGesture.clear();
-      currentStroke = { pointerId: e.pointerId, eraser: true, lastX: world.x, lastY: world.y };
+      currentStroke = { pointerId: e.pointerId, eraser: true, lastX: world.x, lastY: world.y, startX: e.clientX, startY: e.clientY };
       eraseSegment(world.x, world.y, world.x, world.y);
       updateEraserCursor(e.clientX, e.clientY);
     } else {
@@ -2391,6 +2441,11 @@
         if (erasedStrokesThisGesture.size > 0) {
           pushUndo({ type: "erase", strokes: Array.from(erasedStrokesThisGesture.values()) });
           erasedStrokesThisGesture.clear();
+        } else {
+          const tap =
+            currentStroke.startX != null &&
+            Math.hypot(e.clientX - currentStroke.startX, e.clientY - currentStroke.startY) < 18;
+          if (tap && boardStrokes.size) showEraseAllMenu(e.clientX, e.clientY);
         }
         currentStroke = null;
       } else {
