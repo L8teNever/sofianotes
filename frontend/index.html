@@ -21,12 +21,16 @@
 <div id="zoom-indicator">100%</div>
 
 <div id="toolbar">
+  <button id="undo-btn" class="tool-btn" title="Rückgängig (Strg/Cmd+Z)">↩️</button>
+  <button id="redo-btn" class="tool-btn" title="Wiederholen (Strg/Cmd+Shift+Z)">↪️</button>
+  <div class="divider"></div>
   <button class="tool-btn active" data-tool="pen" title="Stift">✏️</button>
   <button class="tool-btn" data-tool="marker" title="Textmarker">🖍️</button>
   <button class="tool-btn" data-tool="eraser" title="Radiergummi">🧹</button>
   <button class="tool-btn" data-tool="select" title="Auswahl (Lasso) — markieren &amp; verschieben">👆</button>
   <div class="divider"></div>
   <button id="shape-toggle" class="tool-btn active" title="Formen-Erkennung (Kreis/Rechteck/Dreieck/Linie beim Halten erkennen)">🔷</button>
+  <button id="finger-draw-toggle" class="tool-btn" title="Mit dem Finger zeichnen erlauben (sonst nur Pencil/Maus, Finger = Navigation)">🖐️</button>
   <div class="divider"></div>
   <button class="swatch active" style="background:#1c1c1e" data-color="#1c1c1e"></button>
   <button class="swatch" style="background:#e63946" data-color="#e63946"></button>

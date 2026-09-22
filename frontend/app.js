@@ -10,6 +10,9 @@
   const toolbarEl = document.getElementById("toolbar");
   const sizeSlider = document.getElementById("size-slider");
   const shapeToggleEl = document.getElementById("shape-toggle");
+  const fingerDrawToggleEl = document.getElementById("finger-draw-toggle");
+  const undoBtn = document.getElementById("undo-btn");
+  const redoBtn = document.getElementById("redo-btn");
 
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 4;
@@ -210,6 +213,7 @@
   let markerSize = 18;
   let eraserSize = 24;
   let shapeRecognitionEnabled = true;
+  let fingerDrawEnabled = false;
 
   function activeSize() {
     if (currentTool === "eraser") return eraserSize;
@@ -250,6 +254,11 @@
   shapeToggleEl.addEventListener("click", () => {
     shapeRecognitionEnabled = !shapeRecognitionEnabled;
     shapeToggleEl.classList.toggle("active", shapeRecognitionEnabled);
+  });
+
+  fingerDrawToggleEl.addEventListener("click", () => {
+    fingerDrawEnabled = !fingerDrawEnabled;
+    fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
   });
 
   function updateEraserCursorVisibility() {
@@ -425,6 +434,7 @@
   let lastCursorSend = 0;
   const pendingErase = new Set();
   let erasedThisGesture = new Set();
+  let erasedStrokesThisGesture = new Map(); // id -> vollstaendiger Strich (fuer Undo)
 
   function flushNetworkBuffers() {
     const now = performance.now();
@@ -446,6 +456,79 @@
     lastCursorSend = now;
     wsSend({ type: "cursor", x, y, tool, size });
   }
+
+  // ---- Undo/Redo (persoenlicher Verlauf der eigenen Aktionen) -----------
+  const undoStack = [];
+  const redoStack = [];
+  const MAX_UNDO = 100;
+
+  function cloneStroke(s) {
+    return { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points.map((p) => ({ ...p })) };
+  }
+  function updateUndoRedoButtons() {
+    undoBtn.disabled = undoStack.length === 0;
+    redoBtn.disabled = redoStack.length === 0;
+  }
+  function pushUndo(action) {
+    undoStack.push(action);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack.length = 0;
+    updateUndoRedoButtons();
+  }
+  function putStroke(stroke) {
+    const withBBox = { ...stroke, bbox: makeBBox(stroke.points) };
+    boardStrokes.set(withBBox.id, withBBox);
+    wsSend({ type: "stroke_move", stroke: { id: stroke.id, tool: stroke.tool, color: stroke.color, size: stroke.size, points: stroke.points } });
+  }
+  function removeStrokes(ids) {
+    for (const id of ids) boardStrokes.delete(id);
+    wsSend({ type: "erase", strokeIds: ids });
+  }
+  function applyAction(action, direction) {
+    // direction: 1 = vorwaerts (redo/erste Ausfuehrung), -1 = rueckgaengig (undo)
+    if (action.type === "add") {
+      if (direction === 1) putStroke(action.stroke);
+      else removeStrokes([action.stroke.id]);
+    } else if (action.type === "erase") {
+      if (direction === 1) removeStrokes(action.strokes.map((s) => s.id));
+      else for (const s of action.strokes) putStroke(s);
+    } else if (action.type === "move") {
+      for (const m of action.moves) {
+        const s = boardStrokes.get(m.id);
+        const points = direction === 1 ? m.after : m.before;
+        if (s) {
+          s.points = points.map((p) => ({ ...p }));
+          s.bbox = makeBBox(s.points);
+          wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+        }
+      }
+    }
+    requestRedraw();
+  }
+  function undo() {
+    if (undoStack.length === 0) return;
+    const action = undoStack.pop();
+    applyAction(action, -1);
+    redoStack.push(action);
+    updateUndoRedoButtons();
+  }
+  function redo() {
+    if (redoStack.length === 0) return;
+    const action = redoStack.pop();
+    applyAction(action, 1);
+    undoStack.push(action);
+    updateUndoRedoButtons();
+  }
+  undoBtn.addEventListener("click", undo);
+  redoBtn.addEventListener("click", redo);
+  window.addEventListener("keydown", (e) => {
+    const meta = e.ctrlKey || e.metaKey;
+    if (!meta || e.key.toLowerCase() !== "z") return;
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+  });
+  updateUndoRedoButtons();
 
   // ---- Formen-Erkennung (Linie/Rechteck/Dreieck/Kreis beim Halten) ------
   let holdTimer = null;
@@ -675,10 +758,15 @@
   }
 
   function finalizeSelectionDrag() {
-    for (const id of dragState.snapshot.keys()) {
+    const moves = [];
+    for (const [id, beforePts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
-      if (s) wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+      if (s) {
+        wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+        moves.push({ id, before: beforePts, after: s.points.map((p) => ({ ...p })) });
+      }
     }
+    if (moves.length > 0) pushUndo({ type: "move", moves });
     dragState = null;
   }
   function cancelSelectionDrag() {
@@ -748,6 +836,7 @@
     wsSend({ type: "stroke_end", strokeId: currentStroke.id });
     currentStroke.bbox = makeBBox(currentStroke.points);
     boardStrokes.set(currentStroke.id, currentStroke);
+    pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
     currentStroke = null;
     requestRedraw();
   }
@@ -777,6 +866,7 @@
           const dx = p.x - sx, dy = p.y - sy;
           if (dx * dx + dy * dy <= hitR * hitR) {
             erasedThisGesture.add(stroke.id);
+            erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
             break;
           }
         }
@@ -807,39 +897,8 @@
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   }
 
-  canvas.addEventListener("pointerdown", (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
-
-    if (e.pointerType === "touch") {
-      touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (touchPointers.size === 2) {
-        if (currentStroke) abortStroke();
-        if (dragState) cancelSelectionDrag();
-        lassoPoints = null;
-        erasedThisGesture.clear();
-        panState = null;
-        const pts = Array.from(touchPointers.values());
-        const mid = midpoint(pts[0], pts[1]);
-        pinchState = {
-          initialDist: distance(pts[0], pts[1]),
-          initialScale: scale,
-          anchorWorld: screenToWorld(mid.x, mid.y),
-        };
-      } else if (touchPointers.size === 1 && !pinchState) {
-        panState = { lastX: e.clientX, lastY: e.clientY };
-      }
-      return;
-    }
-
-    if (e.pointerType === "mouse" && (spacePressed || e.button === 1)) {
-      panState = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
-      return;
-    }
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-
+  function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
-
     if (currentTool === "select") {
       if (selection.bbox && pointInBBox(world, selection.bbox, 10 / scale)) {
         startSelectionDrag(e.pointerId, world);
@@ -850,6 +909,7 @@
       }
     } else if (currentTool === "eraser") {
       erasedThisGesture.clear();
+      erasedStrokesThisGesture.clear();
       currentStroke = { pointerId: e.pointerId, eraser: true, lastX: world.x, lastY: world.y };
       eraseSegment(world.x, world.y, world.x, world.y);
       updateEraserCursor(e.clientX, e.clientY);
@@ -857,6 +917,51 @@
       startStroke(e.pointerId, e.pointerType, world.x, world.y, pointerPressure(e));
     }
     sendCursor(world.x, world.y, currentTool, activeSize());
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // manche Browser/synthetische Events lehnen Pointer Capture ab - Zeichnen soll trotzdem funktionieren
+    }
+    activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+
+    if (e.pointerType === "touch") {
+      touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touchPointers.size === 2) {
+        if (currentStroke) abortStroke();
+        if (dragState) cancelSelectionDrag();
+        lassoPoints = null;
+        lassoPointerId = null;
+        erasedThisGesture.clear();
+        panState = null;
+        const pts = Array.from(touchPointers.values());
+        const mid = midpoint(pts[0], pts[1]);
+        pinchState = {
+          initialDist: distance(pts[0], pts[1]),
+          initialScale: scale,
+          anchorWorld: screenToWorld(mid.x, mid.y),
+        };
+        return;
+      }
+      if (touchPointers.size === 1) {
+        if (fingerDrawEnabled && !pinchState) {
+          dispatchPrimaryDown(e);
+          return;
+        }
+        if (!pinchState) panState = { lastX: e.clientX, lastY: e.clientY };
+      }
+      return;
+    }
+
+    if (e.pointerType === "mouse" && (spacePressed || e.button === 1)) {
+      panState = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
+      return;
+    }
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+
+    dispatchPrimaryDown(e);
   });
 
   canvas.addEventListener("pointermove", (e) => {
@@ -873,17 +978,24 @@
         offsetX = mid.x - pinchState.anchorWorld.x * scale;
         offsetY = mid.y - pinchState.anchorWorld.y * scale;
         requestRedraw();
-      } else if (panState && touchPointers.size === 1) {
-        offsetX += e.clientX - panState.lastX;
-        offsetY += e.clientY - panState.lastY;
-        panState.lastX = e.clientX;
-        panState.lastY = e.clientY;
-        requestRedraw();
+        return;
       }
-      return;
-    }
-
-    if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
+      const isActiveDrawTouch =
+        (dragState && dragState.pointerId === e.pointerId) ||
+        lassoPointerId === e.pointerId ||
+        (currentStroke && currentStroke.pointerId === e.pointerId);
+      if (!isActiveDrawTouch) {
+        if (panState && touchPointers.size === 1) {
+          offsetX += e.clientX - panState.lastX;
+          offsetY += e.clientY - panState.lastY;
+          panState.lastX = e.clientX;
+          panState.lastY = e.clientY;
+          requestRedraw();
+        }
+        return;
+      }
+      // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Logik unten
+    } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       offsetX += e.clientX - panState.lastX;
       offsetY += e.clientY - panState.lastY;
       panState.lastX = e.clientX;
@@ -937,10 +1049,13 @@
       touchPointers.delete(e.pointerId);
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) panState = null;
-      return;
-    }
-
-    if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
+      const wasActiveDrawTouch =
+        (dragState && dragState.pointerId === e.pointerId) ||
+        lassoPointerId === e.pointerId ||
+        (currentStroke && currentStroke.pointerId === e.pointerId);
+      if (!wasActiveDrawTouch) return;
+      // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Abschluss-Logik unten
+    } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       panState = null;
       return;
     }
@@ -961,19 +1076,23 @@
           wsSend({ type: "erase", strokeIds: Array.from(pendingErase) });
           pendingErase.clear();
         }
+        if (erasedStrokesThisGesture.size > 0) {
+          pushUndo({ type: "erase", strokes: Array.from(erasedStrokesThisGesture.values()) });
+          erasedStrokesThisGesture.clear();
+        }
         currentStroke = null;
       } else {
         endStroke();
       }
     }
-    if (currentTool === "eraser" && e.pointerType !== "touch") {
+    if (currentTool === "eraser") {
       eraserCursorEl.style.display = "none";
     }
   }
   canvas.addEventListener("pointerup", endPointer);
   canvas.addEventListener("pointercancel", endPointer);
   canvas.addEventListener("pointerleave", (e) => {
-    if (e.pointerType !== "touch" && currentTool === "eraser" && !activePointers.has(e.pointerId)) {
+    if (currentTool === "eraser" && !activePointers.has(e.pointerId)) {
       eraserCursorEl.style.display = "none";
     }
   });

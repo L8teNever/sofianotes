@@ -39,8 +39,14 @@ das simuliert ein Desktop-Browser nicht).
 
 ## Bedienung
 
-- **Stift**: zeichnet mit Apple Pencil (druckempfindlich), Maus oder — sofern
-  kein Pencil erkannt wird — auch mit dem Finger als Fallback fuer den Test.
+- **Stift**: zeichnet mit Apple Pencil (druckempfindlich) oder Maus. Finger-
+  Touches sind standardmaessig reine Navigation (Pan/Zoom), niemals Zeichnen —
+  klassische Palm Rejection.
+- **Finger-Zeichnen** (Schalter 🖐️ in der Toolbar): schaltet das um, sodass
+  auch ein einzelner Finger mit dem aktuell gewaehlten Werkzeug zeichnet
+  (fuer Geraete/Tests ohne Stift). Zwei Finger bleiben dabei immer fuer
+  Pinch-to-Zoom reserviert; kommt waehrend des Zeichnens ein zweiter Finger
+  dazu, wird der Strich sofort verworfen.
 - **Textmarker**: wie der Stift, aber breiter und halbtransparent, liegt beim
   Rendern immer unter der normalen Tinte (klassischer Highlighter-Effekt).
 - **Formen-Erkennung** (Schalter 🔷 in der Toolbar, per Klick an/aus): mit dem
@@ -54,6 +60,10 @@ das simuliert ein Desktop-Browser nicht).
   ausserhalb hebt die Auswahl wieder auf.
 - **Radiergummi**: entfernt beruehrte Striche komplett, Kreis-Cursor zeigt die
   aktuelle Groesse.
+- **Rueckgaengig/Wiederholen** (↩️/↪️ oder Strg/Cmd+Z, mit Shift fuer
+  Wiederholen): persoenlicher Verlauf der eigenen Aktionen (Strich
+  hinzugefuegt, radiert, verschoben). Wirkt nur auf die eigenen Aktionen,
+  nicht auf das, was andere Teilnehmer gerade zeichnen.
 - **Zwei Finger**: Pinch-to-Zoom (0.25x–4x) und Pan. Ein laufender Strich,
   eine laufende Verschiebung oder eine laufende Lasso-Auswahl wird sofort
   verworfen, sobald ein zweiter Finger aufsetzt.

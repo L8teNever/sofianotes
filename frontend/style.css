@@ -110,6 +110,11 @@ html, body {
   color: white;
 }
 
+.tool-btn:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
 .swatch {
   width: 26px;
   height: 26px;
