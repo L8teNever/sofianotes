@@ -1,10 +1,11 @@
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import db
+from . import db, goodnotes_export
 from .ws_manager import ConnectionManager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
@@ -31,11 +32,32 @@ app.add_middleware(NoCacheStaticMiddleware)
 @app.on_event("startup")
 async def on_startup() -> None:
     await db.init()
+    await goodnotes_export.schedule_write(db.load_all)
 
 
 @app.get("/api/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.get("/api/export.goodnotes")
+async def download_goodnotes() -> FileResponse:
+    goodnotes_export.write_exports(await db.load_all())
+    return FileResponse(
+        goodnotes_export.GOODNOTES_PATH,
+        media_type="application/octet-stream",
+        filename="sofianotes.goodnotes",
+    )
+
+
+@app.get("/api/export.pdf")
+async def download_pdf() -> FileResponse:
+    goodnotes_export.write_exports(await db.load_all())
+    return FileResponse(
+        goodnotes_export.PDF_PATH,
+        media_type="application/pdf",
+        filename="sofianotes.pdf",
+    )
 
 
 @app.websocket("/ws")
@@ -55,6 +77,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         while True:
             msg = await websocket.receive_json()
             msg_type = msg.get("type")
+            persist_changed = False
 
             if msg_type == "cursor":
                 await manager.broadcast(
@@ -115,6 +138,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 entry = client.in_progress.pop(stroke_id, None)
                 if entry is not None and len(entry["points"]) >= 1:
                     await db.insert_stroke(entry)
+                    persist_changed = True
                 await manager.broadcast(
                     {"type": "stroke_end", "id": client.id, "strokeId": stroke_id},
                     exclude=websocket,
@@ -140,6 +164,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 stroke = msg.get("stroke")
                 if stroke and stroke.get("id"):
                     await db.insert_stroke(stroke)
+                    persist_changed = True
                     await manager.broadcast(
                         {"type": "stroke_move", "id": client.id, "stroke": stroke},
                         exclude=websocket,
@@ -157,10 +182,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 stroke_ids = [s for s in msg.get("strokeIds", []) if s]
                 if stroke_ids:
                     await db.delete_strokes(stroke_ids)
+                    persist_changed = True
                     await manager.broadcast(
                         {"type": "erase", "id": client.id, "strokeIds": stroke_ids},
                         exclude=websocket,
                     )
+
+            if persist_changed:
+                await goodnotes_export.schedule_write(db.load_all)
 
     except WebSocketDisconnect:
         pass

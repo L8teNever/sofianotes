@@ -68,7 +68,10 @@ das simuliert ein Desktop-Browser nicht).
   eine laufende Verschiebung oder eine laufende Lasso-Auswahl wird sofort
   verworfen, sobald ein zweiter Finger aufsetzt.
 - **Space + Maus-Drag** bzw. **mittlere Maustaste**: Pan am Desktop.
-- **Mausrad**: Zoom am Desktop.
+- **GoodNotes-Export** (📓): laedt `sofianotes.goodnotes` herunter. Dieselbe
+  Datei liegt dauerhaft auf dem Server in `data/` und wird bei jedem
+  gespeicherten Strich aktualisiert. Die enthaltene PDF in GoodNotes
+  importieren.
 
 ## Architektur / Sync-Protokoll
 
@@ -81,7 +84,11 @@ als kleine `erase`-Diffs (nur betroffene Strich-IDs) gesendet statt das ganze
 Board neu zu laden. Live-Cursor-Updates (`cursor`) zeigen Position und
 aktuell gewaehltes Werkzeug der anderen Person ueber ihrem Zeichenpunkt an.
 Persistiert wird erst der fertige Strich (SQLite) — das Board uebersteht also
-Server-Neustarts.
+Server-Neustarts. Parallel schreibt der Server nach jeder Aenderung
+`data/sofianotes.goodnotes` (ZIP mit `strokes.json` + Vektor-PDF) und
+`data/sofianotes.pdf`. Das native GoodNotes-App-Format ist geschlossen; die
+PDF in der Datei laesst sich in GoodNotes als Dokument importieren. Download
+in der Toolbar (📓) oder per `/api/export.goodnotes` bzw. `/api/export.pdf`.
 
 ## Deployment (GitHub -> Server, Pull-Mechanismus)
 
