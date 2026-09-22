@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import cloudflare_ocr, db, goodnotes_export
+from . import cloudflare_ocr, db, goodnotes_export, spellcheck
 from .ws_manager import ConnectionManager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
@@ -64,6 +64,18 @@ async def recognize_ink(request: Request) -> dict:
     if result.get("error") == "too_large":
         raise HTTPException(status_code=413, detail="image too large")
     return result
+
+
+@app.post("/api/spell")
+async def spell_ink(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="json required") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="json object required")
+    text = str(body.get("text") or "")
+    return {"ok": True, "misspelled": spellcheck.misspelled(text)}
 
 
 @app.get("/api/export.goodnotes")

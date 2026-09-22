@@ -74,15 +74,15 @@ html, body {
   pointer-events: auto;
   transform: translate(0, -100%);
   padding: 3px 4px 3px 8px;
-  border-radius: 999px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(11, 87, 208, 0.22);
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
   font-size: 13px;
   font-weight: 650;
   color: #0842a0;
-  white-space: nowrap;
-  max-width: min(70vw, 320px);
+  white-space: pre-wrap;
+  max-width: min(80vw, 420px);
 }
 
 .ink-chip-math {
@@ -114,7 +114,12 @@ html, body {
   padding: 2px 7px;
 }
 
-.ink-chip-edit {
+.ink-spell-err {
+  text-decoration: underline wavy #d93025;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+  color: #a50e0e;
+}
   width: 92px;
   border: 0;
   background: #fff;

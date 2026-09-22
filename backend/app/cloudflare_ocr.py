@@ -26,6 +26,7 @@ DIGIT_PROMPT = (
 )
 TEXT_PROMPT = (
     "This is a school notebook whiteboard. "
+    "Read left-to-right, top-to-bottom; each line underneath starts again at the left. "
     "Transcribe ALL handwritten ink in the image in one answer: words, "
     "square roots √, and any math written underneath. "
     "Reply with ONLY that text. "

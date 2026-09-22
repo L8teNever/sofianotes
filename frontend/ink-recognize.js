@@ -1020,6 +1020,71 @@
     return last;
   }
 
+  function splitGlyphLines(glyphs) {
+    if (!glyphs.length) return [];
+    const heights = glyphs.map((g) => Math.max(4, (g.bbox.maxY || 0) - (g.bbox.minY || 0))).sort((a, b) => a - b);
+    const medianH = heights[Math.floor(heights.length / 2)] || 24;
+    const lineGap = Math.max(14, medianH * 0.62);
+    const items = glyphs.slice().sort((a, b) => {
+      const ay = (a.bbox.minY + a.bbox.maxY) / 2;
+      const by = (b.bbox.minY + b.bbox.maxY) / 2;
+      return ay - by;
+    });
+    const lines = [];
+    for (const g of items) {
+      const cy = (g.bbox.minY + g.bbox.maxY) / 2;
+      let hit = null;
+      for (const line of lines) {
+        if (Math.abs(cy - line.cy) <= lineGap) {
+          hit = line;
+          break;
+        }
+      }
+      if (!hit) {
+        hit = { cy, glyphs: [] };
+        lines.push(hit);
+      }
+      hit.glyphs.push(g);
+      hit.cy = hit.cy * 0.65 + cy * 0.35;
+    }
+    lines.sort((a, b) => a.cy - b.cy);
+    for (const line of lines) {
+      line.glyphs.sort((a, b) => a.bbox.minX - b.bbox.minX);
+    }
+    return lines;
+  }
+
+  function pieceTextLTR(list) {
+    if (!list.length) return "";
+    const heights = list.map((g) => Math.max(4, g.bbox.maxY - g.bbox.minY));
+    const medianH = heights.sort((a, b) => a - b)[Math.floor(heights.length / 2)] || 24;
+    let out = "";
+    let prev = null;
+    for (const g of list) {
+      const ch = g.char || "?";
+      if (prev) {
+        const prevH = Math.max(6, prev.bbox.maxY - prev.bbox.minY);
+        const gH = Math.max(4, g.bbox.maxY - g.bbox.minY);
+        const gCy = (g.bbox.minY + g.bbox.maxY) / 2;
+        const pCy = (prev.bbox.minY + prev.bbox.maxY) / 2;
+        const gap = g.bbox.minX - prev.bbox.maxX;
+        if (gCy < pCy - prevH * 0.32 && gH < prevH * 0.78 && gap < prevH * 0.55) {
+          out += "^";
+        } else if (gap > medianH * 0.32) {
+          const mathPair = /^[0-9+\-×*/=√π%().,^]$/.test(prev.char || "") && /^[0-9+\-×*/=√π%().,^]$/.test(ch);
+          if (!mathPair) out += " ";
+        }
+      }
+      out += ch;
+      prev = g;
+    }
+    return out;
+  }
+
+  function lineTextsAreMath(texts) {
+    return texts.every((t) => looksLikeMath(t) || /^[+\-×*/=√π%()0-9.,\s]+$/.test(t));
+  }
+
   function coalesceEqualsGlyphs(glyphs) {
     const sorted = glyphs.slice().sort((a, b) => a.bbox.minX - b.bbox.minX);
     const out = [];
@@ -1067,25 +1132,10 @@
     }
 
     function pieceText(list) {
-      const sorted = list.slice().sort((a, b) => a.bbox.minX - b.bbox.minX);
-      let out = "";
-      let prev = null;
-      for (const g of sorted) {
-        let ch = g.char || "?";
-        if (prev) {
-          const prevH = Math.max(6, prev.bbox.maxY - prev.bbox.minY);
-          const gH = Math.max(4, g.bbox.maxY - g.bbox.minY);
-          const gCy = (g.bbox.minY + g.bbox.maxY) / 2;
-          const pCy = (prev.bbox.minY + prev.bbox.maxY) / 2;
-          const gap = g.bbox.minX - prev.bbox.maxX;
-          if (gCy < pCy - prevH * 0.32 && gH < prevH * 0.78 && gap < prevH * 0.55) {
-            out += "^";
-          }
-        }
-        out += ch;
-        prev = g;
-      }
-      return out;
+      const lines = splitGlyphLines(list);
+      const texts = lines.map((ln) => pieceTextLTR(ln.glyphs));
+      if (lineTextsAreMath(texts)) return texts.join("");
+      return texts.join(" ");
     }
 
     if (bars.length === 1 && rest.length >= 2) {
@@ -1113,6 +1163,142 @@
 
     const text = pieceText(glyphs);
     return { text, math: looksLikeMath(text) };
+  }
+
+  function orderGroupsReading(groups) {
+    return (groups || []).slice().sort((a, b) => {
+      const ay = (a.bbox.minY + a.bbox.maxY) / 2;
+      const by = (b.bbox.minY + b.bbox.maxY) / 2;
+      const ah = Math.max(8, a.bbox.maxY - a.bbox.minY);
+      if (Math.abs(ay - by) > ah * 0.55) return ay - by;
+      return a.bbox.minX - b.bbox.minX;
+    });
+  }
+
+  function joinReadingOrder(groups) {
+    const ordered = orderGroupsReading(groups);
+    if (!ordered.length) return "";
+    const lines = [];
+    for (const g of ordered) {
+      if (!lines.length) {
+        lines.push([g]);
+        continue;
+      }
+      const lastLine = lines[lines.length - 1];
+      const prev = lastLine[lastLine.length - 1];
+      const ay = (g.bbox.minY + g.bbox.maxY) / 2;
+      const py = (prev.bbox.minY + prev.bbox.maxY) / 2;
+      const ph = Math.max(8, prev.bbox.maxY - prev.bbox.minY);
+      if (Math.abs(ay - py) > ph * 0.55) lines.push([g]);
+      else lastLine.push(g);
+    }
+    const lineTexts = lines
+      .map((line) => {
+        line.sort((a, b) => a.bbox.minX - b.bbox.minX);
+        return line
+          .map((g) => g.text || "")
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+      })
+      .filter(Boolean);
+    if (lineTextsAreMath(lineTexts)) return lineTexts.join("");
+    return lineTexts.join(" ");
+  }
+
+  function stitchBlockGroups(groups, blocks) {
+    const list = groups || [];
+    if (!blocks || !blocks.length) {
+      if (!list.length) return [];
+      const text = joinReadingOrder(list);
+      const solved = solveFromBurst(text);
+      return [
+        {
+          bbox: unionBBox(list.map((g) => g.bbox)),
+          glyphs: orderGroupsReading(list).flatMap((g) => g.glyphs || []),
+          text,
+          math: !!(solved || looksLikeMath(text)),
+          mathish: list.some((g) => g.mathish),
+          result: solved,
+          strokeIds: list.flatMap((g) => g.strokeIds || []),
+        },
+      ];
+    }
+    return blocks
+      .map((block) => {
+        const ids = new Set((block.strokes || []).map((s) => s.id));
+        const part = list.filter((g) => (g.strokeIds || []).some((id) => ids.has(id)));
+        if (!part.length && !ids.size) return null;
+        const text = joinReadingOrder(part);
+        if (!text) return null;
+        const solved = solveFromBurst(text);
+        return {
+          bbox: block.bbox,
+          glyphs: orderGroupsReading(part).flatMap((g) => g.glyphs || []),
+          text,
+          math: !!(solved || looksLikeMath(text)),
+          mathish: part.some((g) => g.mathish),
+          result: solved,
+          strokeIds: Array.from(ids),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  const SPELL_DICT = new Set(
+    String(root.SOFIA_DE_WORDS || "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    const row = new Array(b.length + 1);
+    for (let j = 0; j <= b.length; j++) row[j] = j;
+    for (let i = 1; i <= a.length; i++) {
+      let prev = row[0];
+      row[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const cur = row[j];
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + cost);
+        prev = cur;
+      }
+    }
+    return row[b.length];
+  }
+
+  function closeDictHit(word) {
+    const w = word.toLowerCase();
+    const maxd = w.length >= 6 ? 2 : 1;
+    for (const d of SPELL_DICT) {
+      if (Math.abs(d.length - w.length) > maxd) continue;
+      if (d[0] !== w[0] && d.length > 3) continue;
+      if (levenshtein(w, d) <= maxd) return d;
+    }
+    return null;
+  }
+
+  function misspelledSpans(text, extra) {
+    const src = String(text || "");
+    const extraSet = new Set((extra || []).map((w) => String(w).toLowerCase()));
+    const out = [];
+    const re = /[A-Za-zÄÖÜäöüß]+/g;
+    let m;
+    while ((m = re.exec(src))) {
+      const word = m[0];
+      if (word.length < 3) continue;
+      const low = word.toLowerCase();
+      if (SPELL_DICT.has(low)) continue;
+      const close = closeDictHit(word);
+      if (close || extraSet.has(low)) {
+        out.push({ word, start: m.index, end: m.index + word.length });
+      }
+    }
+    return out;
   }
 
   let memoryCache = [];
@@ -1455,6 +1641,10 @@
     solveFromBurst,
     looksLikeMath,
     layoutInkOn,
+    orderGroupsReading,
+    joinReadingOrder,
+    stitchBlockGroups,
+    misspelledSpans,
     applyWordContext,
     loadEmnistModel,
     loadMemory,

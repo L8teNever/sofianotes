@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+require("./de-words.js");
 const SofiaInk = require("./ink-recognize.js");
 
 function pt(x, y) {
@@ -124,6 +125,44 @@ test("cluster blocks keep stacked text and math, split far ink", () => {
 test("solveFromBurst finds math under words", () => {
   assert.equal(SofiaInk.solveFromBurst("Haus √9").text, "3");
   assert.equal(SofiaInk.solveFromBurst("12+34=").text, "46");
+});
+
+test("stacked lines read left-to-right top-to-bottom", () => {
+  const hi = [
+    { char: "H", bbox: { minX: 40, minY: 0, maxX: 52, maxY: 16 } },
+    { char: "i", bbox: { minX: 54, minY: 0, maxX: 60, maxY: 16 } },
+  ];
+  const welt = [
+    { char: "W", bbox: { minX: 2, minY: 36, maxX: 18, maxY: 52 } },
+    { char: "e", bbox: { minX: 20, minY: 36, maxX: 30, maxY: 52 } },
+  ];
+  const layout = SofiaInk.layoutInkOn(hi.concat(welt));
+  assert.equal(layout.text, "Hi We");
+});
+
+test("stacked math lines concatenate left to right", () => {
+  const layout = SofiaInk.layoutInkOn([
+    { char: "1", bbox: { minX: 20, minY: 0, maxX: 28, maxY: 14 } },
+    { char: "2", bbox: { minX: 30, minY: 0, maxX: 38, maxY: 14 } },
+    { char: "+", bbox: { minX: 4, minY: 22, maxX: 14, maxY: 34 } },
+    { char: "3", bbox: { minX: 20, minY: 22, maxX: 28, maxY: 34 } },
+  ]);
+  assert.equal(layout.text, "12+3");
+  assert.equal(SofiaInk.solveMath(layout.text).text, "15");
+});
+
+test("joinReadingOrder is top-to-bottom then left-to-right", () => {
+  const groups = [
+    { text: "Welt", bbox: { minX: 0, minY: 40, maxX: 40, maxY: 56 } },
+    { text: "Hallo", bbox: { minX: 8, minY: 0, maxX: 50, maxY: 16 } },
+  ];
+  assert.equal(SofiaInk.joinReadingOrder(groups), "Hallo Welt");
+});
+
+test("near misspellings are flagged", () => {
+  const hits = SofiaInk.misspelledSpans("Hausaufgabn bitte");
+  assert.ok(hits.some((h) => h.word === "Hausaufgabn"));
+  assert.ok(!SofiaInk.misspelledSpans("Hallo Schule").length);
 });
 
 test("glyphs 2cm apart are separate words", () => {

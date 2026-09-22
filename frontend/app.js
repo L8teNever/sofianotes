@@ -2507,6 +2507,54 @@
     requestRedraw();
   }
 
+  function fillSpelledText(el, text, miss) {
+    el.textContent = "";
+    const spans = miss || [];
+    if (!text) {
+      el.textContent = "?";
+      return;
+    }
+    if (!spans.length) {
+      el.textContent = text;
+      return;
+    }
+    let i = 0;
+    for (const s of spans) {
+      if (s.start > i) el.appendChild(document.createTextNode(text.slice(i, s.start)));
+      const u = document.createElement("span");
+      u.className = "ink-spell-err";
+      u.textContent = text.slice(s.start, s.end);
+      u.title = "Mögliche Rechtschreibung";
+      el.appendChild(u);
+      i = s.end;
+    }
+    if (i < text.length) el.appendChild(document.createTextNode(text.slice(i)));
+  }
+
+  async function attachSpelling(g, ac) {
+    if (!g || !g.text) {
+      if (g) g.misspelled = [];
+      return;
+    }
+    g.misspelled = SofiaInk.misspelledSpans(g.text);
+    if (!/[A-Za-zÄÖÜäöüß]{3,}/.test(g.text)) return;
+    try {
+      const resp = await fetch("/api/spell", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: ac && ac.signal,
+        body: JSON.stringify({ text: g.text }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data && data.misspelled && data.misspelled.length) {
+        g.misspelled = SofiaInk.misspelledSpans(g.text, data.misspelled);
+      }
+    } catch (_err) {
+      /* hunspell optional */
+    }
+  }
+
   function renderInkOverlay() {
     if (!inkOverlay) return;
     inkOverlay.innerHTML = "";
@@ -2517,7 +2565,8 @@
       const textBtn = document.createElement("button");
       textBtn.type = "button";
       textBtn.className = "ink-chip-text";
-      textBtn.textContent = g.text || "?";
+      fillSpelledText(textBtn, g.text || "?", g.misspelled);
+      textBtn.lang = "de";
       textBtn.title = "Tippen zum Korrigieren — merkt sich deine Schrift";
       textBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
       textBtn.addEventListener("click", (e) => {
@@ -2540,7 +2589,9 @@
               }
             }
             g.text = next;
-            g.result = mathSolveEnabled ? SofiaInk.solveMath(next) : null;
+            g.result = mathSolveEnabled ? SofiaInk.solveFromBurst(next) : null;
+            g.misspelled = SofiaInk.misspelledSpans(next);
+            attachSpelling(g).then(() => renderInkOverlay());
           }
           renderInkOverlay();
         };
@@ -2645,12 +2696,15 @@
             wordGap,
           })
         : [];
+      const blocks = burst.length ? SofiaInk.clusterBlocks(burst, wordGap) : [];
+      groups = SofiaInk.stitchBlockGroups(groups, blocks);
       groups = groups.map((g) => {
         const hit = ocrCache.get(inkGroupKey(g));
         if (!hit) return g;
         const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
         return { ...g, text: hit.text, math: !!(solved || SofiaInk.looksLikeMath(hit.text)), result: solved, source: "cloudflare" };
       });
+      for (const g of groups) g.misspelled = SofiaInk.misspelledSpans(g.text);
       inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
       const live = new Set(groups.map(inkGroupKey));
       for (const key of Array.from(dismissedInk)) {
@@ -2681,6 +2735,7 @@
               text: hit.text,
               math: !!(solved || SofiaInk.looksLikeMath(hit.text)),
               result: solved,
+              misspelled: SofiaInk.misspelledSpans(hit.text),
               strokeIds: strokes.map((s) => s.id),
               source: "cloudflare",
             });
@@ -2716,6 +2771,7 @@
             text,
             math: !!(solved || SofiaInk.looksLikeMath(text)),
             result: solved,
+            misspelled: SofiaInk.misspelledSpans(text),
             strokeIds: strokes.map((s) => s.id),
             source: "cloudflare",
           });
@@ -2734,6 +2790,10 @@
           /* Cloudflare optional */
         }
       }
+    }
+    if (recognizeAbort === ac && !ac.signal.aborted && inkGroups.length) {
+      await Promise.all(inkGroups.map((g) => attachSpelling(g, ac)));
+      if (recognizeAbort === ac && !ac.signal.aborted) renderInkOverlay();
     }
     recognizeBusy = false;
     if (recognizeAgain) scheduleRecognize(lastRecognizeFocus, RECOGNIZE_PAUSE_MS);
