@@ -663,7 +663,7 @@
         inkGroups = [];
         renderInkOverlay();
       } else {
-        scheduleRecognize();
+        scheduleRecognize(null, 250);
       }
     });
   }
@@ -2400,6 +2400,10 @@
   let cloudOcrEnabled = null;
   let recognizeAbort = null;
   const dismissedInk = new Set();
+  const ocrCache = new Map();
+  const RECOGNIZE_PAUSE_MS = 1100;
+  const OCR_BURST_MS = 8000;
+  const PX_PER_CM = 96 / 2.54;
 
   fetch("/api/recognize")
     .then((r) => r.json())
@@ -2523,7 +2527,7 @@
         const input = document.createElement("input");
         input.className = "ink-chip-edit";
         input.value = g.text || "";
-        input.maxLength = 48;
+        input.maxLength = 80;
         el.replaceChild(input, textBtn);
         input.focus();
         input.select();
@@ -2585,16 +2589,31 @@
     positionInkChips();
   }
 
-  function scheduleRecognize(focusId) {
+  function recognizeWordGap() {
+    return Math.max(48, (2 * PX_PER_CM) / Math.max(scale, 0.2));
+  }
+
+  function pruneOcrCache(liveIds) {
+    for (const key of Array.from(ocrCache.keys())) {
+      const ids = key.split(",").filter(Boolean);
+      if (ids.some((id) => !liveIds.has(id))) ocrCache.delete(key);
+    }
+    if (ocrCache.size > 48) {
+      const extra = Array.from(ocrCache.keys()).slice(0, ocrCache.size - 48);
+      for (const k of extra) ocrCache.delete(k);
+    }
+  }
+
+  function scheduleRecognize(focusId, delayMs) {
     if (typeof SofiaInk === "undefined") return;
     if (focusId) lastRecognizeFocus = focusId;
     clearTimeout(recognizeTimer);
-    recognizeTimer = setTimeout(runRecognize, 90);
+    recognizeTimer = setTimeout(runRecognize, delayMs == null ? RECOGNIZE_PAUSE_MS : delayMs);
   }
 
   async function runRecognize() {
     if (!recognizeEnabled || currentStroke) {
-      if (recognizeEnabled) recognizeAgain = true;
+      if (recognizeEnabled && currentStroke) recognizeAgain = true;
       return;
     }
     if (typeof SofiaInk === "undefined") return;
@@ -2607,14 +2626,23 @@
     if (recognizeAbort) recognizeAbort.abort();
     const ac = new AbortController();
     recognizeAbort = ac;
+    const wordGap = recognizeWordGap();
     let all = [];
     let groups = [];
     try {
       all = Array.from(boardStrokes.values());
+      pruneOcrCache(new Set(all.map((s) => s.id)));
       groups = await SofiaInk.recognizeStrokes(all, {
         focusId: lastRecognizeFocus,
-        windowMs: 15000,
+        windowMs: 20000,
         preferDigits: mathSolveEnabled,
+        wordGap,
+      });
+      groups = groups.map((g) => {
+        const hit = ocrCache.get(inkGroupKey(g));
+        if (!hit) return g;
+        const solved = mathSolveEnabled ? SofiaInk.solveMath(hit.text) : null;
+        return { ...g, text: hit.text, math: !!(solved || SofiaInk.looksLikeMath(hit.text)), result: solved, source: "cloudflare" };
       });
       inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
       const live = new Set(groups.map(inkGroupKey));
@@ -2627,54 +2655,63 @@
         /* Modelle optional — Board bleibt nutzbar */
       }
     }
-    recognizeBusy = false;
-    if (recognizeAgain) scheduleRecognize(lastRecognizeFocus);
 
     if (cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
       try {
+        const now = performance.now();
         const recent = SofiaInk.filterRecentStrokes(all, {
           focusId: lastRecognizeFocus,
-          windowMs: 15000,
+          windowMs: 20000,
+          now,
         });
-        const clustered = SofiaInk.clusterGlyphs(recent);
+        const clustered = SofiaInk.clusterGlyphs(recent, { wordGap });
         const cloudGroups = [];
-        await Promise.all(
-          clustered.slice(0, 4).map(async (cluster) => {
-            const strokes = cluster.glyphs.flatMap((g) => g.strokes);
-            if (!strokes.length) return;
-            const crop = renderInkCrop(strokes);
-            const resp = await fetch("/api/recognize", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              signal: ac.signal,
-              body: JSON.stringify({
-                image: crop.dataUrl,
-                preferDigits: mathSolveEnabled,
-              }),
-            });
-            if (!resp.ok) return;
-            const data = await resp.json();
-            if (data && data.error === "not_configured") {
-              cloudOcrEnabled = false;
-              return;
-            }
-            if (!data || !data.ok || !data.text) return;
-            cloudOcrEnabled = true;
-            const text = SofiaInk.cleanOcrText(data.text);
-            if (!text) return;
-            const localMatch = groups.find((g) => inkGroupKey(g) === inkGroupKey({ strokeIds: strokes.map((s) => s.id) }));
-            const solved = mathSolveEnabled ? SofiaInk.solveMath(text) : null;
-            cloudGroups.push({
-              bbox: cluster.bbox,
-              glyphs: localMatch ? localMatch.glyphs : [],
-              text,
-              math: !!(solved || SofiaInk.looksLikeMath(text)),
-              result: solved,
-              strokeIds: strokes.map((s) => s.id),
-              source: "cloudflare",
-            });
-          })
-        );
+        const pending = clustered.filter((cluster) => {
+          const strokes = cluster.glyphs.flatMap((g) => g.strokes);
+          if (!strokes.length) return false;
+          const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
+          if (ocrCache.has(key)) return false;
+          return strokes.some((s) => s.id === lastRecognizeFocus || (s.endedAt && now - s.endedAt <= OCR_BURST_MS));
+        });
+        const focused = pending.filter((c) => c.glyphs.some((g) => g.strokes.some((s) => s.id === lastRecognizeFocus)));
+        const toSend = (focused.length ? focused : pending).slice(0, 2);
+        for (const cluster of toSend) {
+          if (ac.signal.aborted) break;
+          const strokes = cluster.glyphs.flatMap((g) => g.strokes);
+          const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
+          const localMatch = groups.find((g) => inkGroupKey(g) === key);
+          const crop = renderInkCrop(strokes);
+          const resp = await fetch("/api/recognize", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            signal: ac.signal,
+            body: JSON.stringify({
+              image: crop.dataUrl,
+              preferDigits: !!(localMatch && (localMatch.math || localMatch.mathish)),
+            }),
+          });
+          if (!resp.ok) continue;
+          const data = await resp.json();
+          if (data && data.error === "not_configured") {
+            cloudOcrEnabled = false;
+            break;
+          }
+          if (!data || !data.ok || !data.text) continue;
+          cloudOcrEnabled = true;
+          const text = SofiaInk.cleanOcrText(data.text);
+          if (!text) continue;
+          ocrCache.set(key, { text });
+          const solved = mathSolveEnabled ? SofiaInk.solveMath(text) : null;
+          cloudGroups.push({
+            bbox: cluster.bbox,
+            glyphs: localMatch ? localMatch.glyphs : [],
+            text,
+            math: !!(solved || SofiaInk.looksLikeMath(text)),
+            result: solved,
+            strokeIds: strokes.map((s) => s.id),
+            source: "cloudflare",
+          });
+        }
         if (recognizeAbort === ac && !ac.signal.aborted && cloudGroups.length) {
           const merged = mergeInkGroups(groups, cloudGroups);
           inkGroups = merged.filter((g) => !dismissedInk.has(inkGroupKey(g)));
@@ -2690,6 +2727,8 @@
         }
       }
     }
+    recognizeBusy = false;
+    if (recognizeAgain) scheduleRecognize(lastRecognizeFocus, 400);
   }
 
   if (recognizeEnabled && window.SofiaInk) {

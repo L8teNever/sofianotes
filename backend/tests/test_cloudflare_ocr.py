@@ -28,5 +28,7 @@ class CloudflareOcrTests(unittest.TestCase):
         self.assertEqual(clean_text("2π"), "2π")
         self.assertEqual(clean_text("50%"), "50%")
 
+        self.assertEqual(clean_text("Übung Hausaufgaben"), "Übung Hausaufgaben")
+
     def test_clean_empty(self):
         self.assertEqual(clean_text("   "), "")

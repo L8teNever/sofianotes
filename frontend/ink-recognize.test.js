@@ -100,6 +100,49 @@ test("plus is a cross", () => {
   assert.equal(op.char, "+");
 });
 
+test("glyphs 2cm apart are separate words", () => {
+  const strokes = [line("a", 0, 0, 0, 24, 6), line("b", 200, 0, 200, 24, 6)];
+  const groups = SofiaInk.clusterGlyphs(strokes);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].glyphs.length, 1);
+  assert.equal(groups[1].glyphs.length, 1);
+});
+
+test("word context turns 1 into l among letters", () => {
+  const glyphs = [
+    { char: "H", alts: [], source: "cnn" },
+    { char: "a", alts: [], source: "cnn" },
+    { char: "1", alts: ["l"], source: "cnn" },
+    { char: "1", alts: ["l"], source: "cnn" },
+    { char: "o", alts: [], source: "cnn" },
+  ];
+  SofiaInk.applyWordContext(glyphs);
+  assert.equal(glyphs.map((g) => g.char).join(""), "Hallo");
+});
+
+test("math context turns O into 0", () => {
+  const glyphs = [
+    { char: "1", alts: [], source: "cnn" },
+    { char: "+", alts: [], source: "geom", op: { char: "+", confidence: 0.9 } },
+    { char: "O", alts: ["0"], source: "cnn" },
+  ];
+  SofiaInk.applyWordContext(glyphs);
+  assert.equal(glyphs[2].char, "0");
+});
+
+test("plain digits stay digits without letter neighbors", () => {
+  const glyphs = [
+    { char: "1", alts: ["l"], source: "cnn" },
+    { char: "2", alts: ["Z"], source: "cnn" },
+  ];
+  SofiaInk.applyWordContext(glyphs);
+  assert.equal(glyphs.map((g) => g.char).join(""), "12");
+});
+
+test("cloud OCR cleanup keeps German letters", () => {
+  assert.equal(SofiaInk.cleanOcrText("Übung Hausaufgaben"), "Übung Hausaufgaben");
+});
+
 test("adjacent 7 minus 1 stay three glyphs", () => {
   const strokes = [line("7", 0, 0, 0, 36, 6), line("-", 16, 18, 30, 18, 4), line("1", 46, 0, 46, 36, 6)];
   const groups = SofiaInk.clusterGlyphs(strokes);

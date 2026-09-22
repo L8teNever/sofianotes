@@ -25,9 +25,14 @@ DIGIT_PROMPT = (
     "Keep math operators + - x * / = ^ ( ) % and signs for square root √, pi π, and equals."
 )
 TEXT_PROMPT = (
-    "Transcribe the handwritten whiteboard ink. "
-    "Reply with ONLY the written characters, no extra words."
+    "This is a school notebook whiteboard. "
+    "Transcribe the full handwritten word or phrase. Reply with ONLY that text. "
+    "Use neighboring letters as context to tell letters from digits "
+    "(l vs 1, O vs 0, S vs 5, Z vs 2). "
+    "Prefer real German or English words and keep umlauts ä ö ü ß. "
+    "Only use digits when the ink is clearly a number."
 )
+KEEP_CHARS = r"0-9A-Za-zÄÖÜäöüß+\-*/=xX^().,√π% "
 
 _PREFIX = re.compile(
     r"^(the\s+)?((handwritten|written)\s+)?(text|ink|characters?|transcription|answer)"
@@ -75,26 +80,28 @@ def clean_text(raw: str) -> str:
     s = re.sub(r"\bpi\b", "π", s, flags=re.I)
     if re.search(r"\b(image|shows|background|number|digit|character)\b", s, re.I):
         named = re.search(
-            r"(?:number|digit|character|says|reads)\s+['\"]?([0-9A-Za-z+\-*/=xX√π%()]{1,24})",
+            r"(?:number|digit|character|says|reads)\s+['\"]?([0-9A-Za-zÄÖÜäöüß+\-*/=xX√π%()]{1,32})",
             s,
             re.I,
         )
         if named:
             s = named.group(1)
         else:
-            quoted = re.search(r"['\"]([^'\"]{1,24})['\"]", s)
+            quoted = re.search(r"['\"]([^'\"]{1,48})['\"]", s)
             if quoted:
                 s = quoted.group(1)
             else:
-                tokens = re.findall(r"[0-9A-Za-z+\-*/=xX^()√π%]+", s)
+                tokens = re.findall(r"[0-9A-Za-zÄÖÜäöüß+\-*/=xX^()√π%]+", s)
                 s = max(tokens, key=len) if tokens else s
-    if re.search(r"[0-9+\-*/=xX^√π%]", s):
+    has_op = re.search(r"[+\-*/=√^%]", s)
+    has_letters = re.search(r"[A-Za-zÄÖÜäöüß]", s)
+    if has_op and not has_letters:
         s = re.sub(r"\s+", "", s)
     else:
         s = re.sub(r"\s+", " ", s).strip()
-    s = re.sub(r"[^0-9A-Za-z+\-*/=xX^().,√π% ]", "", s)
-    if len(s) > 48:
-        s = s[:48]
+    s = re.sub(r"[^" + KEEP_CHARS + r"]", "", s)
+    if len(s) > 80:
+        s = s[:80]
     return s.strip()
 
 
@@ -106,7 +113,7 @@ def _post(image_data_uri: str, prefer_digits: bool) -> dict:
         "task": "query",
         "reasoning": False,
         "temperature": 0,
-        "max_tokens": 48,
+        "max_tokens": 80 if not prefer_digits else 48,
         "stream": False,
     }
     req = urllib.request.Request(

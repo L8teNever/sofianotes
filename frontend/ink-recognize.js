@@ -548,13 +548,16 @@
     return ov / minW;
   }
 
-  function clusterGlyphs(strokes) {
+  const DEFAULT_WORD_GAP = 76;
+
+  function clusterGlyphs(strokes, opts) {
     const ink = strokes.filter(isLikelyHandwriting).map((s) => {
       const bbox = s.bbox || bboxOfPoints(s.points || []);
       return { ...s, bbox };
     });
     if (ink.length === 0) return [];
 
+    const wordGap = Math.max(36, (opts && opts.wordGap) || DEFAULT_WORD_GAP);
     const heights = ink.map((s) => Math.max(4, s.bbox.maxY - s.bbox.minY)).sort((a, b) => a - b);
     const medianH = heights[Math.floor(heights.length / 2)] || 24;
     const lineGap = Math.max(18, medianH * 0.85);
@@ -629,12 +632,24 @@
         });
       }
       glyphs.sort((a, b) => a.bbox.minX - b.bbox.minX);
-      if (glyphs.length) {
+      let bucket = [];
+      const flush = () => {
+        if (!bucket.length) return;
         groups.push({
-          bbox: unionBBox(glyphs.map((g) => g.bbox)),
-          glyphs,
+          bbox: unionBBox(bucket.map((g) => g.bbox)),
+          glyphs: bucket,
         });
+        bucket = [];
+      };
+      for (const g of glyphs) {
+        if (bucket.length) {
+          const prev = bucket[bucket.length - 1];
+          const gap = g.bbox.minX - prev.bbox.maxX;
+          if (gap > wordGap) flush();
+        }
+        bucket.push(g);
       }
+      flush();
     }
     return groups;
   }
@@ -711,10 +726,50 @@
     return top[0] ? { ...top[0], alts: top } : null;
   }
 
+  const DIGIT_TO_LETTER = {
+    "0": "O",
+    "1": "l",
+    "2": "Z",
+    "5": "S",
+    "6": "G",
+    "8": "B",
+    "9": "g",
+  };
+
   function biasMathChar(char, alts, mathish) {
     if (!mathish) return char;
     if (MATH_CONFUSIONS[char]) return MATH_CONFUSIONS[char];
     return char;
+  }
+
+  function applyWordContext(glyphs) {
+    if (!glyphs || glyphs.length < 2) return glyphs;
+    let letters = 0;
+    let digits = 0;
+    let ops = 0;
+    for (const g of glyphs) {
+      const ch = g.char || "";
+      if (/[+\-*/=√^%×]/.test(ch)) ops++;
+      else if (/[A-Za-zÄÖÜäöüß]/.test(ch)) letters++;
+      else if (/[0-9]/.test(ch)) digits++;
+    }
+    if (ops) {
+      for (const g of glyphs) {
+        if (g.source === "geom" && g.op && trustGeom(g.op)) continue;
+        if (MATH_CONFUSIONS[g.char]) g.char = MATH_CONFUSIONS[g.char];
+      }
+      return glyphs;
+    }
+    if (letters >= digits && letters >= 1) {
+      for (const g of glyphs) {
+        if (g.source === "geom" && g.op && trustGeom(g.op)) continue;
+        const mapped = DIGIT_TO_LETTER[g.char];
+        if (!mapped) continue;
+        const alts = g.alts || [];
+        if (alts.includes(mapped) || letters >= 2) g.char = mapped;
+      }
+    }
+    return glyphs;
   }
 
   function topFromProbs(probs, n) {
@@ -1206,11 +1261,12 @@
     await loadMemory();
     const preferDigits = !opts || opts.preferDigits !== false;
     const scoped = opts && opts.recentOnly === false ? strokes.filter(isLikelyHandwriting) : filterRecentStrokes(strokes, opts);
-    const groups = clusterGlyphs(scoped);
+    const groups = clusterGlyphs(scoped, { wordGap: opts && opts.wordGap });
     const pending = [];
     for (const group of groups) {
       const probe = group.glyphs.map((g) => detectOperator(g)).filter(Boolean);
-      const mathish = preferDigits || probe.some((p) => "+-×/=—√()%π".includes(p.char));
+      const hasOp = probe.some((p) => "+-×/=—√%π".includes(p.char));
+      const mathish = hasOp || (preferDigits && group.glyphs.length <= 3 && !hasOp);
       group.mathish = mathish;
       for (const g of group.glyphs) {
         const geom = detectOperator(g);
@@ -1231,23 +1287,36 @@
         pending.push({ g, geom, mem, mathish });
       }
     }
-    const batch = await cnnPredictBatch(
-      pending.map((p) => p.g.pixels),
-      { preferDigits }
+    const digitPend = pending.filter((p) => p.mathish);
+    const textPend = pending.filter((p) => !p.mathish);
+    const digitBatch = await cnnPredictBatch(
+      digitPend.map((p) => p.g.pixels),
+      { preferDigits: true }
     );
-    pending.forEach((p, i) => {
-      const cnn = batch[i];
+    const textBatch = await cnnPredictBatch(
+      textPend.map((p) => p.g.pixels),
+      { preferDigits: false }
+    );
+    digitPend.forEach((p, i) => {
+      const cnn = digitBatch[i];
       const pick =
         p.mem && p.mem.confidence >= 0.55 && (!cnn || p.mem.confidence >= cnn.confidence) ? p.mem : cnn;
-      applyPick(p.g, pick, p.geom, p.mathish);
+      applyPick(p.g, pick, p.geom, true);
+    });
+    textPend.forEach((p, i) => {
+      const cnn = textBatch[i];
+      const pick =
+        p.mem && p.mem.confidence >= 0.55 && (!cnn || p.mem.confidence >= cnn.confidence) ? p.mem : cnn;
+      applyPick(p.g, pick, p.geom, false);
     });
     const out = [];
     for (const group of groups) {
+      applyWordContext(group.glyphs);
       const layout = layoutInkOn(group.glyphs);
       const solved = layout.math ? solveMath(layout.text) : null;
       const avg =
         group.glyphs.reduce((s, g) => s + (g.confidence || 0), 0) / Math.max(1, group.glyphs.length);
-      const hasSymbol = /[0-9A-Za-z=√π%()+]/.test(layout.text.replace(/\?/g, ""));
+      const hasSymbol = /[0-9A-Za-zÄÖÜäöüß=√π%()+]/.test(layout.text.replace(/\?/g, ""));
       if (!hasSymbol && !solved) continue;
       if (avg < 0.38 && !solved) continue;
       out.push({
@@ -1255,6 +1324,7 @@
         glyphs: group.glyphs,
         text: layout.text,
         math: layout.math,
+        mathish: group.mathish,
         result: solved,
         strokeIds: group.glyphs.flatMap((g) => g.strokes.map((s) => s.id)),
       });
@@ -1278,10 +1348,12 @@
     s = s.replace(/^["'`]+|["'`]+$/g, "");
     s = s.replace(/sqrt/gi, "√").replace(/\bpi\b/gi, "π");
     s = s.replace(/[×]/g, "x").replace(/[÷]/g, "/").replace(/[—–]/g, "-");
-    if (/[0-9+\-*/=xX^√π%]/.test(s)) s = s.replace(/\s+/g, "");
+    const hasOp = /[+\-*/=√^%]/.test(s);
+    const hasLetters = /[A-Za-zÄÖÜäöüß]/.test(s);
+    if (hasOp && !hasLetters) s = s.replace(/\s+/g, "");
     else s = s.replace(/\s+/g, " ").trim();
-    s = s.replace(/[^0-9A-Za-z+\-*/=xX^().,√π% ]/g, "");
-    if (s.length > 48) s = s.slice(0, 48);
+    s = s.replace(/[^0-9A-Za-zÄÖÜäöüß+\-*/=xX^().,√π% ]/g, "");
+    if (s.length > 80) s = s.slice(0, 80);
     return s.trim();
   }
 
@@ -1297,10 +1369,12 @@
     isLikelyHandwriting,
     detectOperator,
     clusterGlyphs,
+    DEFAULT_WORD_GAP,
     parseMath,
     solveMath,
     looksLikeMath,
     layoutInkOn,
+    applyWordContext,
     loadEmnistModel,
     loadMemory,
     rememberGlyph,
