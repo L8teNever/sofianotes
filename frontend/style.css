@@ -19,6 +19,9 @@
 * {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 html, body {
@@ -32,6 +35,8 @@ html, body {
   color: var(--ink);
   overscroll-behavior: none;
   touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -49,6 +54,9 @@ html, body {
   display: block;
   touch-action: none;
   cursor: crosshair;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 #eraser-cursor {
@@ -151,7 +159,9 @@ button {
   padding: 4px 6px;
   border-radius: 8px;
   outline: none;
+  -webkit-user-select: text;
   user-select: text;
+  -webkit-touch-callout: default;
   touch-action: manipulation;
 }
 #canvas-filename:focus {
@@ -202,7 +212,13 @@ button {
 #undo-redo-dock.corner-top-right { top: var(--safe-top); right: var(--safe-right); }
 #undo-redo-dock.corner-bottom-left { bottom: var(--safe-bottom); left: var(--safe-left); }
 #undo-redo-dock.corner-bottom-right { bottom: var(--safe-bottom); right: var(--safe-right); }
-#undo-redo-dock.dragging { opacity: 0.85; transform: scale(0.96); }
+#undo-redo-dock.dragging { opacity: 0.95; }
+#undo-redo-dock.free-drag {
+  z-index: 95;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  transition: none;
+  transform: none;
+}
 
 .zoom-wrap { position: relative; }
 
@@ -304,10 +320,28 @@ button {
   backdrop-filter: blur(18px);
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 24px);
-  overflow: auto;
+  overflow: visible;
   transition: top 0.2s, bottom 0.2s, left 0.2s, right 0.2s, transform 0.2s, border-radius 0.2s;
 }
-#toolbar.dragging { opacity: 0.9; }
+#toolbar.dragging { opacity: 0.96; }
+#toolbar.free-drag {
+  z-index: 94;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  transition: none;
+  transform: none;
+  flex-direction: row;
+}
+#toolbar.free-drag.orient-vertical {
+  flex-direction: column;
+}
+#toolbar.free-drag.orient-vertical .tools-container,
+#toolbar.free-drag.orient-vertical #swatches-container {
+  flex-direction: column;
+}
+#toolbar.free-drag.orient-vertical .dock-divider {
+  width: 28px;
+  height: 1px;
+}
 
 #toolbar.dock-bottom {
   bottom: var(--safe-bottom);
@@ -497,8 +531,8 @@ button {
 }
 
 .tool-popover {
-  position: absolute;
-  z-index: 80;
+  position: fixed;
+  z-index: 90;
   width: 240px;
   padding: 14px;
   border-radius: 24px;
@@ -506,11 +540,8 @@ button {
   border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow: var(--shadow);
   backdrop-filter: blur(20px);
+  pointer-events: auto;
 }
-.dock-bottom .tool-popover { bottom: calc(100% + 14px); left: 50%; transform: translateX(-50%); }
-.dock-top .tool-popover { top: calc(100% + 14px); bottom: auto; left: 50%; transform: translateX(-50%); }
-.dock-left .tool-popover { left: calc(100% + 14px); top: 50%; transform: translateY(-50%); }
-.dock-right .tool-popover { right: calc(100% + 14px); left: auto; top: 50%; transform: translateY(-50%); }
 
 .presets {
   display: grid;
@@ -570,17 +601,32 @@ button {
   position: fixed;
   pointer-events: none;
   border-radius: 999px;
-  background: rgba(11, 87, 208, 0.18);
-  border: 2px dashed rgba(11, 87, 208, 0.55);
+  background: rgba(11, 87, 208, 0.12);
+  border: 2px dashed rgba(11, 87, 208, 0.4);
   opacity: 0;
   z-index: 55;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
-.drag-guide.visible { opacity: 1; }
+.drag-guide.visible { opacity: 0.55; }
+.drag-guide.visible.hot {
+  opacity: 1;
+  background: rgba(11, 87, 208, 0.32);
+  border-color: rgba(11, 87, 208, 0.9);
+  transform: scale(1.06);
+}
 #guide-top { top: 8px; left: 50%; transform: translateX(-50%); width: 180px; height: 40px; }
 #guide-bottom { bottom: 8px; left: 50%; transform: translateX(-50%); width: 180px; height: 40px; }
 #guide-left { left: 8px; top: 50%; transform: translateY(-50%); width: 40px; height: 180px; }
 #guide-right { right: 8px; top: 50%; transform: translateY(-50%); width: 40px; height: 180px; }
+#guide-top.hot { transform: translateX(-50%) scale(1.06); }
+#guide-bottom.hot { transform: translateX(-50%) scale(1.06); }
+#guide-left.hot { transform: translateY(-50%) scale(1.06); }
+#guide-right.hot { transform: translateY(-50%) scale(1.06); }
+.guide-corner { width: 52px; height: 52px; border-radius: 18px; }
+#guide-tl { top: 8px; left: 8px; }
+#guide-tr { top: 8px; right: 8px; }
+#guide-bl { bottom: 8px; left: 8px; }
+#guide-br { bottom: 8px; right: 8px; }
 
 .presence-label {
   position: absolute;

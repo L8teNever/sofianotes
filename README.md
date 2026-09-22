@@ -88,10 +88,11 @@ Board neu zu laden. Live-Cursor-Updates (`cursor`) zeigen Position und
 aktuell gewaehltes Werkzeug der anderen Person ueber ihrem Zeichenpunkt an.
 Persistiert wird erst der fertige Strich (SQLite) — das Board uebersteht also
 Server-Neustarts. Parallel schreibt der Server nach jeder Aenderung
-`data/sofianotes.goodnotes` (ZIP mit `strokes.json` + Vektor-PDF) und
-`data/sofianotes.pdf`. Das native GoodNotes-App-Format ist geschlossen; die
-PDF in der Datei laesst sich in GoodNotes als Dokument importieren. Download
-in der Toolbar (📓) oder per `/api/export.goodnotes` bzw. `/api/export.pdf`.
+`data/sofianotes.pdf` (Vektor-PDF, das GoodNotes als Dokument importiert)
+und zusaetzlich `data/sofianotes.goodnotes` (ZIP mit `strokes.json` + derselben
+PDF — das native GoodNotes-Dateiformat ist geschlossen, daher kein direkter
+`.goodnotes`-Import). Download in der Leiste ist die PDF (`/api/export.pdf`);
+das Archiv bleibt unter `/api/export.goodnotes`.
 
 ## Deployment (GitHub -> Server, Pull-Mechanismus)
 

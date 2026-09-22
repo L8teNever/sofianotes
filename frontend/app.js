@@ -21,7 +21,8 @@
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
   const HOLD_MS = 450; // wie lange der Stift ruhig gehalten werden muss, damit eine Form erkannt wird
-  const MIN_MOVE_WORLD = 1.2; // Punkte unterhalb dieser Bewegung gelten als "Zittern", nicht als echte Bewegung
+  const MIN_MOVE_WORLD = 0.35; // kleine Stiftbewegungen zaehlen mit, sonst wirken Kurven eckig
+  const GAP_FILL_WORLD = 3.5; // grosse Luecken zwischen Samples mit Zwischenpunkten fuellen
 
   const uuid = () =>
     (crypto.randomUUID && crypto.randomUUID()) ||
@@ -55,7 +56,10 @@
     canvas.style.height = window.innerHeight + "px";
     requestRedraw();
   }
-  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+    positionToolPopover();
+  });
 
   // ---- board state ------------------------------------------------------
   const boardStrokes = new Map(); // id -> stroke
@@ -88,34 +92,45 @@
     return u;
   }
 
-  function widthAt(size, pressure) {
-    const p = pressure && pressure > 0 ? pressure : 0.5;
-    return Math.max(1, size * (0.3 + 0.7 * p));
+  function widthAt(size, _pressure) {
+    // Stift und Marker haben eine feste Staerke — kein Druck vom Pencil.
+    return Math.max(1, size);
   }
 
-  function catmullRomPoint(p0, p1, p2, p3, t) {
-    const t2 = t * t;
-    const t3 = t2 * t;
+  function lerpPt(a, b, t) {
     return {
-      x: 0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-      y: 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
-      p: (p1.p || 0.5) * (1 - t) + (p2.p || 0.5) * t,
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t,
+      p: (a.p || 0.5) * (1 - t) + (b.p || 0.5) * t,
     };
   }
 
+  function quadPoint(p0, p1, p2, t) {
+    const u = 1 - t;
+    return {
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y,
+      p: u * u * (p0.p || 0.5) + 2 * u * t * (p1.p || 0.5) + t * t * (p2.p || 0.5),
+    };
+  }
+
+  // Quadratische Mittelpunkt-Kurve statt Catmull-Rom: folgt den Punkten
+  // ohne UeberSchwinger, die als dunkle Marker-Perlen oder eckige Tinte wirken.
   function densifyStroke(pts) {
     if (pts.length < 3) return pts;
-    const out = [];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i === 0 ? 0 : i - 1];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] || p2;
-      const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-      const steps = Math.max(1, Math.min(10, Math.ceil(segLen / 3.5)));
-      for (let s = 0; s < steps; s++) {
-        out.push(catmullRomPoint(p0, p1, p2, p3, s / steps));
-      }
+    const out = [pts[0]];
+    const firstMid = lerpPt(pts[0], pts[1], 0.5);
+    const firstLen = Math.hypot(firstMid.x - pts[0].x, firstMid.y - pts[0].y);
+    const firstSteps = Math.max(1, Math.min(6, Math.ceil(firstLen / 2.2)));
+    for (let s = 1; s <= firstSteps; s++) out.push(lerpPt(pts[0], firstMid, s / firstSteps));
+    for (let i = 1; i < pts.length - 1; i++) {
+      const start = lerpPt(pts[i - 1], pts[i], 0.5);
+      const ctrl = pts[i];
+      const end = lerpPt(pts[i], pts[i + 1], 0.5);
+      const segLen =
+        Math.hypot(ctrl.x - start.x, ctrl.y - start.y) + Math.hypot(end.x - ctrl.x, end.y - ctrl.y);
+      const steps = Math.max(1, Math.min(10, Math.ceil(segLen / 2.2)));
+      for (let s = 1; s <= steps; s++) out.push(quadPoint(start, ctrl, end, s / steps));
     }
     out.push(pts[pts.length - 1]);
     return out;
@@ -129,7 +144,7 @@
     return Math.hypot(a.x - b.x, a.y - b.y) < 6;
   }
 
-  function drawRibbon(pts, size, color, alpha, constantWidth) {
+  function drawRibbon(c, pts, size, color, alpha, constantWidth) {
     const radii = new Array(pts.length);
     for (let i = 0; i < pts.length; i++) {
       radii[i] = constantWidth ? size / 2 : widthAt(size, pts[i].p) / 2;
@@ -164,73 +179,101 @@
       right[i] = { x: pts[i].x - nx * r, y: pts[i].y - ny * r };
     }
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    for (let i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
-    for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(pts[0].x, pts[0].y, radii[0], 0, Math.PI * 2);
-    ctx.arc(pts[pts.length - 1].x, pts[pts.length - 1].y, radii[radii.length - 1], 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    c.save();
+    c.globalAlpha = alpha;
+    c.fillStyle = color;
+    c.beginPath();
+    c.moveTo(left[0].x, left[0].y);
+    for (let i = 1; i < left.length; i++) c.lineTo(left[i].x, left[i].y);
+    for (let i = right.length - 1; i >= 0; i--) c.lineTo(right[i].x, right[i].y);
+    c.closePath();
+    c.fill();
+    c.beginPath();
+    c.arc(pts[0].x, pts[0].y, radii[0], 0, Math.PI * 2);
+    c.arc(pts[pts.length - 1].x, pts[pts.length - 1].y, radii[radii.length - 1], 0, Math.PI * 2);
+    c.fill();
+    c.restore();
   }
 
-  function drawPolylineStroke(pts, size, color, alpha, constantWidth) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    if (constantWidth) {
-      ctx.lineWidth = size;
-      ctx.stroke();
-    } else {
-      // wenige Punkte (erkannte Formen): trotzdem eine durchgehende Linie,
-      // Breite aus mittlerem Druck, keine Perlen durch Einzel-Segmente
-      let pSum = 0;
-      for (const p of pts) pSum += p.p || 0.5;
-      ctx.lineWidth = widthAt(size, pSum / pts.length);
-      ctx.stroke();
+  function avgPressureWidth(pts, size) {
+    let pSum = 0;
+    for (const p of pts) pSum += p.p || 0.5;
+    return widthAt(size, pSum / pts.length);
+  }
+
+  function traceStraightPath(c, pts) {
+    c.beginPath();
+    c.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) c.lineTo(pts[i].x, pts[i].y);
+  }
+
+  function traceMidpointPath(c, pts) {
+    c.beginPath();
+    c.moveTo(pts[0].x, pts[0].y);
+    if (pts.length === 2) {
+      c.lineTo(pts[1].x, pts[1].y);
+      return;
     }
-    ctx.restore();
+    c.lineTo((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i].x + pts[i + 1].x) / 2;
+      const my = (pts[i].y + pts[i + 1].y) / 2;
+      c.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    }
+    const last = pts[pts.length - 1];
+    c.lineTo(last.x, last.y);
   }
 
-  function drawStroke(stroke) {
+  function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth) {
+    c.save();
+    c.globalAlpha = alpha;
+    c.strokeStyle = color;
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.miterLimit = 2;
+    if (smooth && !looksLikePolygon(pts)) traceMidpointPath(c, pts);
+    else traceStraightPath(c, pts);
+    c.lineWidth = constantWidth ? size : avgPressureWidth(pts, size);
+    c.stroke();
+    c.restore();
+  }
+
+  function drawStroke(stroke, target, opts) {
+    const c = target || ctx;
     const pts = stroke.points;
     if (pts.length === 0) return;
     const isMarker = stroke.tool === "marker";
-    const alpha = isMarker ? 0.38 : 1;
+    const alpha = opts && opts.alpha != null ? opts.alpha : isMarker ? 0.38 : 1;
     if (pts.length === 1) {
       const p = pts[0];
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.beginPath();
-      ctx.fillStyle = stroke.color;
-      ctx.arc(p.x, p.y, (isMarker ? stroke.size : widthAt(stroke.size, p.p)) / 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      c.save();
+      c.globalAlpha = alpha;
+      c.beginPath();
+      c.fillStyle = stroke.color;
+      c.arc(p.x, p.y, stroke.size / 2, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
       return;
     }
     if (looksLikePolygon(pts)) {
-      drawPolylineStroke(pts, stroke.size, stroke.color, alpha, isMarker);
+      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false);
       return;
     }
-    const dense = densifyStroke(pts);
-    if (isMarker) {
-      // eine durchgehende Linie: keine dunklen Perlen durch ueberlappende Alpha-Caps
-      drawPolylineStroke(dense, stroke.size, stroke.color, alpha, true);
-      return;
+    // feste Breite, glatte Kurve — Druckstaerke aendert die Dicke nicht
+    drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
+  }
+
+  const markerLayer = document.createElement("canvas");
+  const markerCtx = markerLayer.getContext("2d", { alpha: true });
+
+  function syncMarkerLayer() {
+    if (markerLayer.width !== canvas.width || markerLayer.height !== canvas.height) {
+      markerLayer.width = canvas.width;
+      markerLayer.height = canvas.height;
+    } else {
+      markerCtx.setTransform(1, 0, 0, 1, 0, 0);
+      markerCtx.clearRect(0, 0, markerLayer.width, markerLayer.height);
     }
-    drawRibbon(dense, stroke.size, stroke.color, alpha, false);
   }
 
   let gridStyle = "graph";
@@ -311,10 +354,19 @@
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     drawGrid();
 
-    // Marker/Textmarker zuerst (liegt optisch unter der normalen Tinte).
-    for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke);
-    for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke);
-    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke);
+    // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
+    // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
+    syncMarkerLayer();
+    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
+    for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+    for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 0.38;
+    ctx.drawImage(markerLayer, 0, 0, window.innerWidth, window.innerHeight);
+    ctx.restore();
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
     for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker") drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker") drawStroke(stroke);
@@ -381,6 +433,50 @@
     return tool === "pen" || tool === "marker";
   }
 
+  function currentDock() {
+    if (toolbarEl.classList.contains("dock-top")) return "top";
+    if (toolbarEl.classList.contains("dock-left")) return "left";
+    if (toolbarEl.classList.contains("dock-right")) return "right";
+    return "bottom";
+  }
+
+  function positionToolPopover() {
+    if (!toolPopover || toolPopover.classList.contains("hidden")) return;
+    if (toolPopover.parentElement !== document.body) document.body.appendChild(toolPopover);
+    const dock = currentDock();
+    const active = toolbarEl.querySelector(".tool-btn.active");
+    const tools = toolbarEl.querySelector(".tools-container");
+    const r = (active || tools).getBoundingClientRect();
+    const gap = 12;
+    const pad = 8;
+    toolPopover.style.position = "fixed";
+    toolPopover.style.zIndex = "90";
+    toolPopover.style.right = "auto";
+    toolPopover.style.bottom = "auto";
+    toolPopover.style.transform = "none";
+    const pw = toolPopover.offsetWidth || 240;
+    const ph = toolPopover.offsetHeight || 180;
+    let left;
+    let top;
+    if (dock === "bottom") {
+      left = r.left + r.width / 2 - pw / 2;
+      top = r.top - gap - ph;
+    } else if (dock === "top") {
+      left = r.left + r.width / 2 - pw / 2;
+      top = r.bottom + gap;
+    } else if (dock === "left") {
+      left = r.right + gap;
+      top = r.top + r.height / 2 - ph / 2;
+    } else {
+      left = r.left - gap - pw;
+      top = r.top + r.height / 2 - ph / 2;
+    }
+    left = Math.max(pad, Math.min(window.innerWidth - pw - pad, left));
+    top = Math.max(pad, Math.min(window.innerHeight - ph - pad, top));
+    toolPopover.style.left = left + "px";
+    toolPopover.style.top = top + "px";
+  }
+
   function hidePopovers() {
     toolPopover.classList.add("hidden");
     settingsPopover.classList.add("hidden");
@@ -443,6 +539,7 @@
       popoverPreview.style.background = currentColor;
       popoverPreview.style.border = "none";
     }
+    if (!toolPopover.classList.contains("hidden")) positionToolPopover();
   }
 
   function setTool(tool, { openPopover } = {}) {
@@ -453,24 +550,42 @@
     });
     updateEraserCursorVisibility();
     if (tool !== "select") clearSelection();
+    settingsPopover.classList.add("hidden");
+    zoomPopover.classList.add("hidden");
     if (tool === "select") {
       toolPopover.classList.add("hidden");
       return;
     }
     renderToolPopover();
-    if (openPopover || already) {
-      if (already && !toolPopover.classList.contains("hidden")) toolPopover.classList.add("hidden");
-      else toolPopover.classList.remove("hidden");
-    } else {
-      toolPopover.classList.remove("hidden");
+    if (!openPopover) return;
+    // Erst das Werkzeug wechseln, Menue nur beim zweiten Klick auf dasselbe.
+    if (!already) {
+      toolPopover.classList.add("hidden");
+      return;
     }
-    settingsPopover.classList.add("hidden");
-    zoomPopover.classList.add("hidden");
+    if (!toolPopover.classList.contains("hidden")) {
+      toolPopover.classList.add("hidden");
+      return;
+    }
+    toolPopover.classList.remove("hidden");
+    positionToolPopover();
   }
 
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
+    let ignoreClick = false;
+    btn.addEventListener("pointerup", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const r = btn.getBoundingClientRect();
+      if (e.clientX < r.left - 2 || e.clientX > r.right + 2 || e.clientY < r.top - 2 || e.clientY > r.bottom + 2) return;
+      ignoreClick = true;
+      setTool(btn.dataset.tool, { openPopover: true });
+    });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (ignoreClick) {
+        ignoreClick = false;
+        return;
+      }
       setTool(btn.dataset.tool, { openPopover: true });
     });
   });
@@ -563,13 +678,32 @@
 
   // ---- movable docks ------------------------------------------------
   function setDockPosition(pos) {
-    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging", "orient-vertical");
+    toolbarEl.style.left = "";
+    toolbarEl.style.top = "";
+    toolbarEl.style.right = "";
+    toolbarEl.style.bottom = "";
+    toolbarEl.style.transform = "";
     toolbarEl.classList.add("dock-" + pos);
     topBar.classList.toggle("pushed", pos === "top");
     localStorage.setItem("sofianotes-dock", pos);
+    positionToolPopover();
   }
   function setUndoCorner(corner) {
-    undoDock.className = "corner-" + corner;
+    undoDock.classList.remove(
+      "corner-top-left",
+      "corner-top-right",
+      "corner-bottom-left",
+      "corner-bottom-right",
+      "free-drag",
+      "dragging"
+    );
+    undoDock.style.left = "";
+    undoDock.style.top = "";
+    undoDock.style.right = "";
+    undoDock.style.bottom = "";
+    undoDock.style.transform = "";
+    undoDock.classList.add("corner-" + corner);
     localStorage.setItem("sofianotes-undo-corner", corner);
   }
 
@@ -578,17 +712,51 @@
     bottom: document.getElementById("guide-bottom"),
     left: document.getElementById("guide-left"),
     right: document.getElementById("guide-right"),
+    tl: document.getElementById("guide-tl"),
+    tr: document.getElementById("guide-tr"),
+    bl: document.getElementById("guide-bl"),
+    br: document.getElementById("guide-br"),
   };
-  function showGuide(edge) {
-    Object.entries(guides).forEach(([k, el]) => el.classList.toggle("visible", k === edge));
-  }
+  const EDGE_GUIDE_KEYS = ["top", "bottom", "left", "right"];
+  const CORNER_GUIDE_KEYS = ["tl", "tr", "bl", "br"];
+  const CORNER_BY_GUIDE = {
+    tl: "top-left",
+    tr: "top-right",
+    bl: "bottom-left",
+    br: "bottom-right",
+  };
+  const GUIDE_BY_CORNER = {
+    "top-left": "tl",
+    "top-right": "tr",
+    "bottom-left": "bl",
+    "bottom-right": "br",
+  };
+  const DOCK_HOLD_MS = 380;
+  const SNAP_PX = 88;
+  const HOLD_MOVE_CANCEL_PX = 14;
+
   function hideGuides() {
-    Object.values(guides).forEach((el) => el.classList.remove("visible"));
+    Object.values(guides).forEach((el) => el.classList.remove("visible", "hot"));
+  }
+  function showSnapGuides(kind, hotKey) {
+    const keys = kind === "dock" ? EDGE_GUIDE_KEYS : CORNER_GUIDE_KEYS;
+    Object.entries(guides).forEach(([k, el]) => {
+      const on = keys.includes(k);
+      el.classList.toggle("visible", on);
+      el.classList.toggle("hot", on && k === hotKey);
+    });
   }
   function nearestEdge(x, y) {
     const w = window.innerWidth, h = window.innerHeight;
     const d = { top: y, bottom: h - y, left: x, right: w - x };
     return Object.keys(d).reduce((a, b) => (d[a] < d[b] ? a : b));
+  }
+  function edgeDistance(x, y, edge) {
+    const w = window.innerWidth, h = window.innerHeight;
+    if (edge === "top") return y;
+    if (edge === "bottom") return h - y;
+    if (edge === "left") return x;
+    return w - x;
   }
   function nearestCorner(x, y) {
     const w = window.innerWidth, h = window.innerHeight;
@@ -600,39 +768,176 @@
     };
     return Object.keys(opts).reduce((a, b) => (opts[a] < opts[b] ? a : b));
   }
+  function cornerDistance(x, y, corner) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const cx = corner.includes("right") ? w : 0;
+    const cy = corner.includes("bottom") ? h : 0;
+    return Math.hypot(x - cx, y - cy);
+  }
+  function safePad() {
+    return 12;
+  }
+  function placeEl(el, left, top) {
+    const pad = 6;
+    const maxL = Math.max(pad, window.innerWidth - el.offsetWidth - pad);
+    const maxT = Math.max(pad, window.innerHeight - el.offsetHeight - pad);
+    el.style.left = Math.min(maxL, Math.max(pad, left)) + "px";
+    el.style.top = Math.min(maxT, Math.max(pad, top)) + "px";
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+    el.style.transform = "none";
+  }
+  function dockSnapPoint(edge, el) {
+    const pad = safePad();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (edge === "bottom") return { left: (vw - w) / 2, top: vh - h - pad };
+    if (edge === "top") return { left: (vw - w) / 2, top: pad };
+    if (edge === "left") return { left: pad, top: (vh - h) / 2 };
+    return { left: vw - w - pad, top: (vh - h) / 2 };
+  }
+  function cornerSnapPoint(corner, el) {
+    const pad = safePad();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    return {
+      left: corner.includes("right") ? window.innerWidth - w - pad : pad,
+      top: corner.includes("bottom") ? window.innerHeight - h - pad : pad,
+    };
+  }
+  function applyToolbarOrient(edge) {
+    toolbarEl.classList.toggle("orient-vertical", edge === "left" || edge === "right");
+  }
+  function liftDock(el, kind) {
+    const r = el.getBoundingClientRect();
+    if (kind === "dock") {
+      toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+    } else {
+      undoDock.classList.remove(
+        "corner-top-left",
+        "corner-top-right",
+        "corner-bottom-left",
+        "corner-bottom-right"
+      );
+    }
+    el.classList.add("free-drag", "dragging");
+    placeEl(el, r.left, r.top);
+    try {
+      if (navigator.vibrate) navigator.vibrate(12);
+    } catch (err) {}
+    return r;
+  }
 
   let dockDrag = null;
-  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
+
+  function armDockDrag(kind, e) {
     e.preventDefault();
     e.stopPropagation();
     hidePopovers();
-    dockDrag = "dock";
-    toolbarEl.classList.add("dragging");
-    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {}
+    const el = kind === "dock" ? toolbarEl : undoDock;
+    dockDrag = {
+      kind,
+      el,
+      pointerId: e.pointerId,
+      live: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      grabDX: 0,
+      grabDY: 0,
+      snap: null,
+      timer: setTimeout(() => {
+        if (!dockDrag || dockDrag.live) return;
+        const r = liftDock(el, kind);
+        dockDrag.live = true;
+        dockDrag.grabDX = dockDrag.lastX - r.left;
+        dockDrag.grabDY = dockDrag.lastY - r.top;
+        moveDockDrag(dockDrag.lastX, dockDrag.lastY);
+      }, DOCK_HOLD_MS),
+    };
+  }
+
+  function moveDockDrag(x, y) {
+    if (!dockDrag || !dockDrag.live) return;
+    const el = dockDrag.el;
+    if (dockDrag.kind === "dock") {
+      const edge = nearestEdge(x, y);
+      applyToolbarOrient(edge);
+      const dist = edgeDistance(x, y, edge);
+      const snapping = dist < SNAP_PX;
+      dockDrag.snap = snapping ? edge : null;
+      showSnapGuides("dock", edge);
+      if (snapping) {
+        const p = dockSnapPoint(edge, el);
+        placeEl(el, p.left, p.top);
+      } else {
+        placeEl(el, x - dockDrag.grabDX, y - dockDrag.grabDY);
+      }
+    } else {
+      const corner = nearestCorner(x, y);
+      const dist = cornerDistance(x, y, corner);
+      const snapping = dist < SNAP_PX;
+      dockDrag.snap = snapping ? corner : null;
+      showSnapGuides("undo", GUIDE_BY_CORNER[corner]);
+      if (snapping) {
+        const p = cornerSnapPoint(corner, el);
+        placeEl(el, p.left, p.top);
+      } else {
+        placeEl(el, x - dockDrag.grabDX, y - dockDrag.grabDY);
+      }
+    }
+    positionToolPopover();
+  }
+
+  function endDockDrag() {
+    if (!dockDrag) return;
+    clearTimeout(dockDrag.timer);
+    const { kind, live, lastX, lastY, el } = dockDrag;
+    dockDrag = null;
+    hideGuides();
+    if (!live) return;
+    if (kind === "dock") {
+      setDockPosition(nearestEdge(lastX, lastY));
+    } else {
+      setUndoCorner(nearestCorner(lastX, lastY));
+    }
+    el.classList.remove("free-drag", "dragging");
+    positionToolPopover();
+  }
+
+  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    armDockDrag("dock", e);
   });
   document.getElementById("undo-drag-handle").addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    hidePopovers();
-    dockDrag = "undo";
-    undoDock.classList.add("dragging");
-    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    armDockDrag("undo", e);
   });
   window.addEventListener("pointermove", (e) => {
-    if (!dockDrag) return;
-    if (dockDrag === "dock") showGuide(nearestEdge(e.clientX, e.clientY));
-  });
-  window.addEventListener("pointerup", (e) => {
-    if (!dockDrag) return;
-    if (dockDrag === "dock") {
-      setDockPosition(nearestEdge(e.clientX, e.clientY));
-      toolbarEl.classList.remove("dragging");
-    } else {
-      setUndoCorner(nearestCorner(e.clientX, e.clientY));
-      undoDock.classList.remove("dragging");
+    if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
+    dockDrag.lastX = e.clientX;
+    dockDrag.lastY = e.clientY;
+    if (!dockDrag.live) {
+      const moved = Math.hypot(e.clientX - dockDrag.startX, e.clientY - dockDrag.startY);
+      if (moved > HOLD_MOVE_CANCEL_PX) {
+        clearTimeout(dockDrag.timer);
+        dockDrag = null;
+      }
+      return;
     }
-    hideGuides();
-    dockDrag = null;
+    e.preventDefault();
+    moveDockDrag(e.clientX, e.clientY);
+  }, { passive: false });
+  window.addEventListener("pointerup", (e) => {
+    if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
+    endDockDrag();
+  });
+  window.addEventListener("pointercancel", (e) => {
+    if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
+    endDockDrag();
   });
 
   document.querySelectorAll(".btn-dock-quick").forEach((btn) => {
@@ -644,7 +949,14 @@
   });
 
   document.addEventListener("pointerdown", (e) => {
-    if (e.target.closest("#toolbar") || e.target.closest("#undo-redo-dock") || e.target.closest("#top-filename-bar")) return;
+    if (
+      e.target.closest("#toolbar") ||
+      e.target.closest("#tool-popover") ||
+      e.target.closest("#undo-redo-dock") ||
+      e.target.closest("#top-filename-bar")
+    ) {
+      return;
+    }
     hidePopovers();
   });
 
@@ -934,7 +1246,8 @@
   redoBtn.addEventListener("click", redo);
   const exportBtn = document.getElementById("export-btn");
   exportBtn.addEventListener("click", () => {
-    window.location.href = "/api/export.goodnotes";
+    // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
+    window.location.href = "/api/export.pdf";
   });
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
@@ -1437,8 +1750,21 @@
   function extendStroke(wx, wy, pressure) {
     if (!currentStroke || currentStroke.locked) return;
     const last = currentStroke.points[currentStroke.points.length - 1];
-    const moved = !last || Math.hypot(wx - last.x, wy - last.y) >= MIN_MOVE_WORLD;
-    if (!moved) return; // Zittern ignorieren, Halte-Timer NICHT zuruecksetzen
+    const dist = last ? Math.hypot(wx - last.x, wy - last.y) : 0;
+    if (last && dist < MIN_MOVE_WORLD) return;
+    if (last && dist > GAP_FILL_WORLD) {
+      const steps = Math.min(12, Math.ceil(dist / GAP_FILL_WORLD));
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        const pt = {
+          x: last.x + (wx - last.x) * t,
+          y: last.y + (wy - last.y) * t,
+          p: (last.p || 0.5) * (1 - t) + pressure * t,
+        };
+        currentStroke.points.push(pt);
+        currentStroke.unsent.push(pt);
+      }
+    }
     const point = { x: wx, y: wy, p: pressure };
     currentStroke.points.push(point);
     currentStroke.unsent.push(point);
@@ -1446,9 +1772,135 @@
     requestRedraw();
   }
 
+  function coalescedEvents(e) {
+    let list = [];
+    if (typeof e.getCoalescedEvents === "function") {
+      try {
+        list = e.getCoalescedEvents();
+      } catch (err) {
+        list = [];
+      }
+    }
+    if (!list || list.length === 0) return [e];
+    return list;
+  }
+
+  function strokePathLength(pts) {
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return len;
+  }
+
+  function countDirectionReversals(pts) {
+    const dirs = [];
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x;
+      const dy = pts[i].y - pts[i - 1].y;
+      const len = Math.hypot(dx, dy);
+      if (len < 5) continue;
+      dirs.push({ dx: dx / len, dy: dy / len });
+    }
+    let n = 0;
+    for (let i = 1; i < dirs.length; i++) {
+      if (dirs[i].dx * dirs[i - 1].dx + dirs[i].dy * dirs[i - 1].dy < -0.12) n++;
+    }
+    return n;
+  }
+
+  function looksLikeStrikeGesture(pts) {
+    if (pts.length < 4) return false;
+    const pathLength = strokePathLength(pts);
+    if (pathLength < 36) return false;
+    const start = pts[0];
+    const end = pts[pts.length - 1];
+    const chord = Math.hypot(end.x - start.x, end.y - start.y);
+    let maxDev = 0;
+    for (const p of pts) {
+      const d = perpDist(p, start, end);
+      if (d > maxDev) maxDev = d;
+    }
+    const straight = chord > 28 && pathLength > 0 && chord / pathLength > 0.7 && maxDev / pathLength < 0.18;
+    const scribble = countDirectionReversals(pts) >= 2 && pathLength > 48;
+    return straight || scribble;
+  }
+
+  function strikeCrossesStroke(poly, stroke) {
+    const b = stroke.bbox;
+    if (!b) return false;
+    const hitR = Math.max(10, stroke.size * 0.65 + 6);
+    const bw = b.maxX - b.minX;
+    const bh = b.maxY - b.minY;
+    const diag = Math.hypot(bw, bh);
+    const innerPadX = bw * 0.2;
+    const innerPadY = bh * 0.2;
+    let hits = 0;
+    let interiorHits = 0;
+    let firstI = -1;
+    let lastI = -1;
+    for (let i = 0; i < poly.length; i++) {
+      const q = poly[i];
+      if (q.x < b.minX - hitR || q.x > b.maxX + hitR || q.y < b.minY - hitR || q.y > b.maxY + hitR) continue;
+      let near = false;
+      for (const p of stroke.points) {
+        const dx = p.x - q.x;
+        const dy = p.y - q.y;
+        if (dx * dx + dy * dy <= hitR * hitR) {
+          near = true;
+          break;
+        }
+      }
+      if (!near && stroke.points.length >= 2) {
+        for (let j = 1; j < stroke.points.length; j++) {
+          if (perpDist(q, stroke.points[j - 1], stroke.points[j]) <= hitR) {
+            near = true;
+            break;
+          }
+        }
+      }
+      if (!near) continue;
+      hits++;
+      if (firstI < 0) firstI = i;
+      lastI = i;
+      if (q.x >= b.minX + innerPadX && q.x <= b.maxX - innerPadX && q.y >= b.minY + innerPadY && q.y <= b.maxY - innerPadY) {
+        interiorHits++;
+      }
+    }
+    if (hits === 0) return false;
+    if (diag < 18) return hits >= 1;
+    if (interiorHits === 0) return false;
+    return lastI > firstI || hits >= 2;
+  }
+
+  function findStruckStrokes(pts) {
+    if (!looksLikeStrikeGesture(pts)) return [];
+    const hit = [];
+    for (const stroke of boardStrokes.values()) {
+      if (strikeCrossesStroke(pts, stroke)) hit.push(stroke);
+    }
+    return hit;
+  }
+
   function endStroke() {
     if (!currentStroke) return;
     clearHoldTimer();
+    if (currentStroke.tool === "pen" && !currentStroke.locked) {
+      const struck = findStruckStrokes(currentStroke.points);
+      if (struck.length > 0) {
+        wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
+        const clones = struck.map((s) => cloneStroke(s));
+        const ids = struck.map((s) => s.id);
+        for (const id of ids) {
+          boardStrokes.delete(id);
+          pendingErase.add(id);
+        }
+        wsSend({ type: "erase", strokeIds: ids });
+        pendingErase.clear();
+        pushUndo({ type: "erase", strokes: clones });
+        currentStroke = null;
+        requestRedraw();
+        return;
+      }
+    }
     if (currentStroke.unsent.length > 0) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
@@ -1540,6 +1992,9 @@
   }
 
   canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.rangeCount) sel.removeAllRanges();
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch (err) {
@@ -1582,7 +2037,7 @@
     if (e.pointerType === "mouse" && e.button !== 0) return;
 
     dispatchPrimaryDown(e);
-  });
+  }, { passive: false });
 
   canvas.addEventListener("pointermove", (e) => {
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
@@ -1651,11 +2106,17 @@
         return;
       }
       if (currentStroke.eraser) {
-        eraseSegment(currentStroke.lastX, currentStroke.lastY, world.x, world.y);
-        currentStroke.lastX = world.x;
-        currentStroke.lastY = world.y;
+        for (const ev of coalescedEvents(e)) {
+          const w = screenToWorld(ev.clientX, ev.clientY);
+          eraseSegment(currentStroke.lastX, currentStroke.lastY, w.x, w.y);
+          currentStroke.lastX = w.x;
+          currentStroke.lastY = w.y;
+        }
       } else {
-        extendStroke(world.x, world.y, pointerPressure(e));
+        for (const ev of coalescedEvents(e)) {
+          const w = screenToWorld(ev.clientX, ev.clientY);
+          extendStroke(w.x, w.y, pointerPressure(ev));
+        }
       }
     }
 
@@ -1732,6 +2193,20 @@
   );
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("contextmenu", (e) => {
+    if (e.target.closest("input, textarea")) return;
+    e.preventDefault();
+  });
+  document.addEventListener("selectstart", (e) => {
+    if (e.target.closest("input, textarea")) return;
+    e.preventDefault();
+  });
+  document.addEventListener("selectionchange", () => {
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.rangeCount) sel.removeAllRanges();
+  });
 
   // ---- boot ------------------------------------------------------
   resizeCanvas();
