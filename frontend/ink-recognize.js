@@ -6,7 +6,7 @@
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   const SIZE = 28;
   const PAD = 4;
-  const INNER = SIZE - PAD * 2;
+  const INNER = SIZE - PAD * 2 - 2;
   const MAX_MEMORY = 220;
   const KNN_K = 3;
   const KNN_MAX_DIST = 7.2;
@@ -124,25 +124,93 @@
     }
   }
 
+  function smoothPoints(pts) {
+    if (!pts || pts.length < 4) return pts || [];
+    let cur = pts;
+    for (let pass = 0; pass < 2; pass++) {
+      const next = [cur[0]];
+      for (let i = 1; i < cur.length - 1; i++) {
+        next.push({
+          x: cur[i - 1].x * 0.22 + cur[i].x * 0.56 + cur[i + 1].x * 0.22,
+          y: cur[i - 1].y * 0.22 + cur[i].y * 0.56 + cur[i + 1].y * 0.22,
+          p: cur[i].p,
+        });
+      }
+      next.push(cur[cur.length - 1]);
+      cur = next;
+    }
+    return cur;
+  }
+
+  function estimateSlantDeg(pointLists, w, h) {
+    if (h < 12 || w / h > 0.78) return 0;
+    let acc = 0;
+    let wsum = 0;
+    for (const pts of pointLists) {
+      for (let i = 1; i < pts.length; i++) {
+        const dx = pts[i].x - pts[i - 1].x;
+        const dy = pts[i].y - pts[i - 1].y;
+        const len = hypot(dx, dy);
+        if (len < 3) continue;
+        if (Math.abs(dy) <= Math.abs(dx) * 0.62) continue;
+        acc += Math.atan2(dx, dy) * len;
+        wsum += len;
+      }
+    }
+    if (wsum < 10) return 0;
+    return Math.max(-26, Math.min(26, (acc / wsum) * (180 / Math.PI)));
+  }
+
   function rasterizeGlyph(strokes, opts) {
     const transpose = !!(opts && opts.transpose);
-    const all = [];
+    const raw = [];
     for (const s of strokes) {
-      for (const p of s.points || []) all.push(p);
+      const pts = smoothPoints(s.points || []);
+      if (pts.length) raw.push(pts);
     }
-    if (all.length === 0) return new Float32Array(SIZE * SIZE);
+    if (raw.length === 0) return new Float32Array(SIZE * SIZE);
+    const all0 = [];
+    for (const pts of raw) for (const p of pts) all0.push(p);
+    const b0 = bboxOfPoints(all0);
+    const w0 = Math.max(1, b0.maxX - b0.minX);
+    const h0 = Math.max(1, b0.maxY - b0.minY);
+    const slant = estimateSlantDeg(raw, w0, h0);
+    const rad = (-slant * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const ox = (b0.minX + b0.maxX) / 2;
+    const oy = (b0.minY + b0.maxY) / 2;
+    const rotated =
+      Math.abs(slant) < 3
+        ? raw
+        : raw.map((pts) =>
+            pts.map((p) => ({
+              x: ox + (p.x - ox) * cos - (p.y - oy) * sin,
+              y: oy + (p.x - ox) * sin + (p.y - oy) * cos,
+              p: p.p,
+            }))
+          );
+    const all = [];
+    for (const pts of rotated) for (const p of pts) all.push(p);
     const b = bboxOfPoints(all);
     const w = Math.max(1, b.maxX - b.minX);
     const h = Math.max(1, b.maxY - b.minY);
     const scale = INNER / Math.max(w, h);
-    const cx = (b.minX + b.maxX) / 2;
-    const cy = (b.minY + b.maxY) / 2;
+    const mass = { x: 0, y: 0, n: 0 };
+    for (const p of all) {
+      mass.x += p.x;
+      mass.y += p.y;
+      mass.n++;
+    }
+    const bboxCx = (b.minX + b.maxX) / 2;
+    const bboxCy = (b.minY + b.maxY) / 2;
+    const cx = mass.n ? bboxCx * 0.35 + (mass.x / mass.n) * 0.65 : bboxCx;
+    const cy = mass.n ? bboxCy * 0.35 + (mass.y / mass.n) * 0.65 : bboxCy;
     const toX = (x) => SIZE / 2 + (x - cx) * scale;
     const toY = (y) => SIZE / 2 + (y - cy) * scale;
-    const r = 1.85;
+    const r = 2.35;
     const buf = new Float32Array(SIZE * SIZE);
-    for (const s of strokes) {
-      const pts = s.points || [];
+    for (const pts of rotated) {
       if (pts.length === 0) continue;
       if (pts.length === 1) {
         paintDisk(buf, toX(pts[0].x), toY(pts[0].y), r);
@@ -202,11 +270,12 @@
     if (!stroke || stroke.tool !== "pen") return false;
     const pts = stroke.points || [];
     if (pts.length === 0) return false;
-    if (pts.length >= 80) return false;
     const b = stroke.bbox || bboxOfPoints(pts);
     const w = b.maxX - b.minX;
     const h = b.maxY - b.minY;
     if (w > 260 && h > 180) return false;
+    const path = strokePathLength(pts);
+    if (path > 720 && w > 200 && h > 150) return false;
     return true;
   }
 
@@ -240,13 +309,85 @@
   function nearlyHorizontal(strokes, stats) {
     const { w, h, path, maxDev } = stats;
     if (w < 8) return false;
-    if (h > w * 0.42 && h > 10) return false;
-    if (path > 0 && maxDev / Math.max(path, w) > 0.22) return false;
-    return h < 14 || h / w < 0.38;
+    if (h > w * 0.72 && h > 18) return false;
+    if (path > 0 && maxDev / Math.max(path, w) > 0.46) return false;
+    return h < 26 || h / w < 0.6;
   }
 
   function nearlyVertical(stats) {
-    return stats.h > 10 && stats.w / stats.h < 0.38;
+    return stats.h > 10 && stats.w / stats.h < 0.5;
+  }
+
+  function sampleBilinear(buf, x, y) {
+    if (x < 0 || y < 0 || x >= SIZE - 1 || y >= SIZE - 1) return 0;
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const fx = x - x0;
+    const fy = y - y0;
+    const a = buf[y0 * SIZE + x0];
+    const b = buf[y0 * SIZE + x0 + 1];
+    const c = buf[(y0 + 1) * SIZE + x0];
+    const d = buf[(y0 + 1) * SIZE + x0 + 1];
+    return a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy;
+  }
+
+  function rotatePixels(src, deg) {
+    const rad = (deg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const out = new Float32Array(SIZE * SIZE);
+    const c = (SIZE - 1) / 2;
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const dx = x - c;
+        const dy = y - c;
+        const sx = cos * dx + sin * dy + c;
+        const sy = -sin * dx + cos * dy + c;
+        out[y * SIZE + x] = sampleBilinear(src, sx, sy);
+      }
+    }
+    return out;
+  }
+
+  function shiftPixels(src, dx, dy) {
+    const out = new Float32Array(SIZE * SIZE);
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        out[y * SIZE + x] = sampleBilinear(src, x - dx, y - dy);
+      }
+    }
+    return out;
+  }
+
+  function looksLikeOne(pts, st) {
+    if (!pts || pts.length < 2 || st.h < 14) return false;
+    if (st.w > st.h * 0.82) return false;
+    const start = pts[0];
+    const end = pts[pts.length - 1];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const chord = hypot(dx, dy);
+    if (chord < 12) return false;
+    const fromVert = Math.abs(Math.atan2(dx, dy));
+    const thin = st.w / st.h < 0.48;
+    const maxTilt = ((thin ? 42 : 38) * Math.PI) / 180;
+    if (fromVert > maxTilt) return false;
+    if (st.path / chord > 1.85) return false;
+    return true;
+  }
+
+  function looksLikeSlash(pts, st) {
+    if (!pts || pts.length < 2) return false;
+    if (st.w / st.h < 0.5) return false;
+    const start = pts[0];
+    const end = pts[pts.length - 1];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const chord = hypot(dx, dy);
+    if (chord < 16 || st.path <= 0) return false;
+    if (chord / st.path < 0.7) return false;
+    const fromVert = Math.abs(Math.atan2(dx, dy));
+    return fromVert > (40 * Math.PI) / 180 && fromVert < (58 * Math.PI) / 180;
   }
 
   function detectOperator(glyph) {
@@ -297,17 +438,13 @@
 
     if (strokes.length === 1) {
       const pts = strokes[0].points;
-      const start = pts[0];
-      const end = pts[pts.length - 1];
-      const dx = end.x - start.x;
-      const dy = end.y - start.y;
-      const chord = hypot(dx, dy);
-      const slope = Math.abs(dy) / Math.max(1, Math.abs(dx));
-      if (chord > 16 && path > 0 && chord / path > 0.72 && slope > 0.35 && slope < 2.8 && aspect > 0.35 && aspect < 2.4) {
-        return { char: "/", confidence: 0.8, source: "geom" };
+      if (looksLikeOne(pts, st)) {
+        return { char: "1", confidence: 0.72, source: "geom" };
       }
-      if (nearlyVertical(st) && st.h > 16 && aspect < 0.42) {
-        return { char: "1", confidence: 0.8, source: "geom" };
+      if (looksLikeSlash(pts, st)) {
+        const fromVert = Math.abs(Math.atan2(pts[pts.length - 1].x - pts[0].x, pts[pts.length - 1].y - pts[0].y));
+        const clear = fromVert > (44 * Math.PI) / 180 && st.w / st.h > 0.7;
+        return { char: "/", confidence: clear ? 0.84 : 0.76, source: "geom" };
       }
     }
     return null;
@@ -383,7 +520,10 @@
               b,
               0
             );
-            if ((sameColumn || stackedDot) && closeY) {
+            const contained =
+              (b.minX >= box.minX - 8 && b.maxX <= box.maxX + 8) ||
+              (box.minX >= b.minX - 8 && box.maxX <= b.maxX + 8);
+            if ((sameColumn || stackedDot || contained) && closeY) {
               member.push(items[j]);
               used.add(j);
               changed = true;
@@ -427,15 +567,60 @@
     X: "×",
   };
 
+  const LETTER_TO_DIGIT = {
+    O: 0,
+    o: 0,
+    D: 0,
+    Q: 0,
+    I: 1,
+    l: 1,
+    i: 1,
+    "|": 1,
+    Z: 2,
+    z: 2,
+    S: 5,
+    s: 5,
+    G: 6,
+    B: 8,
+    g: 9,
+    q: 9,
+  };
+
+  function digitScores(probs) {
+    const d = new Float64Array(10);
+    for (let i = 0; i < 10; i++) d[i] = probs[i] || 0;
+    for (let i = 10; i < probs.length; i++) {
+      const mapped = LETTER_TO_DIGIT[EMNIST_CHARS[i]];
+      if (mapped != null) d[mapped] += (probs[i] || 0) * 0.9;
+    }
+    return d;
+  }
+
+  function pickFromProbs(probs, preferDigits) {
+    if (preferDigits) {
+      const d = digitScores(probs);
+      let bestI = 0;
+      let bestV = -1;
+      for (let i = 0; i < 10; i++) {
+        if (d[i] > bestV) {
+          bestV = d[i];
+          bestI = i;
+        }
+      }
+      const alts = [];
+      const order = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].sort((a, b) => d[b] - d[a]);
+      for (let i = 0; i < 4; i++) {
+        alts.push({ char: String(order[i]), confidence: d[order[i]], source: "cnn" });
+      }
+      return { char: String(bestI), confidence: Math.min(0.99, bestV), source: "cnn", alts };
+    }
+    const top = topFromProbs(probs, 4);
+    return top[0] ? { ...top[0], alts: top } : null;
+  }
+
   function biasMathChar(char, alts, mathish) {
     if (!mathish) return char;
     if (MATH_CONFUSIONS[char]) return MATH_CONFUSIONS[char];
-    if (alts) {
-      for (const a of alts) {
-        if (a.confidence >= 0.18 && /[0-9]/.test(a.char)) return a.char;
-        if (/[+\-*/=.]/.test(a.char)) return a.char;
-      }
-    }
     return char;
   }
 
@@ -767,30 +952,48 @@
     return tfLoad;
   }
 
-  async function cnnPredictBatch(pixelsList) {
+  async function cnnPredictBatch(pixelsList, opts) {
     const model = tfModel || (await loadEmnistModel());
     const tf = root.tf;
     if (!model || !tf || !pixelsList.length) return pixelsList.map(() => null);
-    const n = pixelsList.length;
+    const preferDigits = !opts || opts.preferDigits !== false;
+    const views = [];
+    const owners = [];
+    for (let i = 0; i < pixelsList.length; i++) {
+      const p = pixelsList[i];
+      const vars = preferDigits
+        ? [p, rotatePixels(p, -16), rotatePixels(p, 16), shiftPixels(p, 0, 1)]
+        : [p, rotatePixels(p, -10), rotatePixels(p, 10)];
+      for (const v of vars) {
+        views.push(v);
+        owners.push(i);
+      }
+    }
+    const n = views.length;
     const flat = new Float32Array(n * SIZE * SIZE);
-    for (let i = 0; i < n; i++) flat.set(pixelsList[i], i * SIZE * SIZE);
+    for (let i = 0; i < n; i++) flat.set(views[i], i * SIZE * SIZE);
     const t = tf.tensor4d(flat, [n, SIZE, SIZE, 1]);
     const pred = model.predict(t);
     const data = pred.dataSync ? pred.dataSync() : await pred.data();
     t.dispose();
     pred.dispose();
-    const out = [];
     const stride = EMNIST_CHARS.length;
+    const acc = pixelsList.map(() => new Float64Array(stride));
+    const counts = pixelsList.map(() => 0);
     for (let i = 0; i < n; i++) {
-      const slice = Array.from(data.slice(i * stride, (i + 1) * stride));
-      const top = topFromProbs(slice, 4);
-      out.push(top[0] ? { ...top[0], alts: top } : null);
+      const owner = owners[i];
+      counts[owner]++;
+      for (let k = 0; k < stride; k++) acc[owner][k] += data[i * stride + k];
     }
-    return out;
+    return acc.map((sum, i) => {
+      const c = Math.max(1, counts[i]);
+      for (let k = 0; k < stride; k++) sum[k] /= c;
+      return pickFromProbs(sum, preferDigits);
+    });
   }
 
-  async function cnnPredict(pixels) {
-    const [one] = await cnnPredictBatch([pixels]);
+  async function cnnPredict(pixels, opts) {
+    const [one] = await cnnPredictBatch([pixels], opts);
     return one;
   }
 
@@ -823,7 +1026,7 @@
     const geom = detectOperator(glyph);
     glyph.op = geom;
     glyph.pixels = rasterizeGlyph(glyph.strokes);
-    if (geom && geom.confidence >= 0.8) {
+    if (geom && geom.confidence >= 0.8 && "-+=/.".includes(geom.char)) {
       glyph.char = geom.char;
       glyph.confidence = geom.confidence;
       glyph.source = geom.source;
@@ -832,7 +1035,7 @@
     }
     const mem = knnPredict(glyph.pixels, memoryExamples());
     if (mem && mem.confidence >= 0.7) return applyPick(glyph, mem, geom, mathish);
-    const cnn = await cnnPredict(glyph.pixels);
+    const cnn = await cnnPredict(glyph.pixels, { preferDigits: mathish });
     return applyPick(glyph, mem && mem.confidence >= 0.55 && (!cnn || mem.confidence >= cnn.confidence) ? mem : cnn, geom, mathish);
   }
 
@@ -850,18 +1053,19 @@
 
   async function recognizeStrokes(strokes, opts) {
     await loadMemory();
+    const preferDigits = !opts || opts.preferDigits !== false;
     const scoped = opts && opts.recentOnly === false ? strokes.filter(isLikelyHandwriting) : filterRecentStrokes(strokes, opts);
     const groups = clusterGlyphs(scoped);
     const pending = [];
     for (const group of groups) {
       const probe = group.glyphs.map((g) => detectOperator(g)).filter(Boolean);
-      const mathish = probe.some((p) => "+-×/=—".includes(p.char));
+      const mathish = preferDigits || probe.some((p) => "+-×/=—".includes(p.char));
       group.mathish = mathish;
       for (const g of group.glyphs) {
         const geom = detectOperator(g);
         g.op = geom;
         g.pixels = rasterizeGlyph(g.strokes);
-        if (geom && geom.confidence >= 0.8) {
+        if (geom && geom.confidence >= 0.8 && "-+=/.".includes(geom.char)) {
           g.char = geom.char;
           g.confidence = geom.confidence;
           g.source = geom.source;
@@ -876,7 +1080,10 @@
         pending.push({ g, geom, mem, mathish });
       }
     }
-    const batch = await cnnPredictBatch(pending.map((p) => p.g.pixels));
+    const batch = await cnnPredictBatch(
+      pending.map((p) => p.g.pixels),
+      { preferDigits }
+    );
     pending.forEach((p, i) => {
       const cnn = batch[i];
       const pick =

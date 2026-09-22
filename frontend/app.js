@@ -2422,6 +2422,7 @@
       const groups = await SofiaInk.recognizeStrokes(Array.from(boardStrokes.values()), {
         focusId: lastRecognizeFocus,
         windowMs: 15000,
+        preferDigits: mathSolveEnabled,
       });
       inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
       const live = new Set(groups.map(inkGroupKey));

@@ -152,6 +152,38 @@ test("k-NN recalls a stored label", () => {
   assert.equal(hit.source, "memory");
 });
 
+test("slanted 1 is a one not a slash", () => {
+  const g = { strokes: [line("a", 10, 0, 36, 40)] };
+  const op = SofiaInk.detectOperator(g);
+  assert.ok(op);
+  assert.equal(op.char, "1");
+});
+
+test("diagonal slash stays a slash", () => {
+  const g = { strokes: [line("a", 0, 0, 32, 32)] };
+  const op = SofiaInk.detectOperator(g);
+  assert.ok(op);
+  assert.equal(op.char, "/");
+});
+
+test("wobbly minus is still a minus", () => {
+  const pts = [];
+  for (let i = 0; i <= 14; i++) {
+    pts.push(pt(i * 3, 20 + Math.sin(i * 0.9) * 2.2));
+  }
+  const op = SofiaInk.detectOperator({ strokes: [stroke("m", pts)] });
+  assert.ok(op);
+  assert.equal(op.char, "-");
+});
+
+test("dense sampled digit still counts as handwriting", () => {
+  const pts = [];
+  for (let i = 0; i <= 200; i++) {
+    pts.push(pt(8, i * 0.2));
+  }
+  assert.equal(SofiaInk.isLikelyHandwriting(stroke("d", pts)), true);
+});
+
 test("fraction layout becomes division", () => {
   const num = {
     char: "1",
