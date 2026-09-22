@@ -1,9 +1,9 @@
-const CACHE_NAME = "sofianotes-v8";
+const CACHE_NAME = "sofianotes-v9";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/style.css?v=8",
-  "/app.js?v=8",
+  "/style.css?v=9",
+  "/app.js?v=9",
   "/manifest.json",
   "/icons/icon-192.png",
   "/icons/icon-512.png",

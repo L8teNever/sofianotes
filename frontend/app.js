@@ -673,14 +673,32 @@
 
   // ---- movable docks ------------------------------------------------
   function setDockPosition(pos) {
-    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging", "orient-vertical");
+    toolbarEl.style.left = "";
+    toolbarEl.style.top = "";
+    toolbarEl.style.right = "";
+    toolbarEl.style.bottom = "";
+    toolbarEl.style.transform = "";
     toolbarEl.classList.add("dock-" + pos);
     topBar.classList.toggle("pushed", pos === "top");
     localStorage.setItem("sofianotes-dock", pos);
     positionToolPopover();
   }
   function setUndoCorner(corner) {
-    undoDock.className = "corner-" + corner;
+    undoDock.classList.remove(
+      "corner-top-left",
+      "corner-top-right",
+      "corner-bottom-left",
+      "corner-bottom-right",
+      "free-drag",
+      "dragging"
+    );
+    undoDock.style.left = "";
+    undoDock.style.top = "";
+    undoDock.style.right = "";
+    undoDock.style.bottom = "";
+    undoDock.style.transform = "";
+    undoDock.classList.add("corner-" + corner);
     localStorage.setItem("sofianotes-undo-corner", corner);
   }
 
@@ -689,17 +707,51 @@
     bottom: document.getElementById("guide-bottom"),
     left: document.getElementById("guide-left"),
     right: document.getElementById("guide-right"),
+    tl: document.getElementById("guide-tl"),
+    tr: document.getElementById("guide-tr"),
+    bl: document.getElementById("guide-bl"),
+    br: document.getElementById("guide-br"),
   };
-  function showGuide(edge) {
-    Object.entries(guides).forEach(([k, el]) => el.classList.toggle("visible", k === edge));
-  }
+  const EDGE_GUIDE_KEYS = ["top", "bottom", "left", "right"];
+  const CORNER_GUIDE_KEYS = ["tl", "tr", "bl", "br"];
+  const CORNER_BY_GUIDE = {
+    tl: "top-left",
+    tr: "top-right",
+    bl: "bottom-left",
+    br: "bottom-right",
+  };
+  const GUIDE_BY_CORNER = {
+    "top-left": "tl",
+    "top-right": "tr",
+    "bottom-left": "bl",
+    "bottom-right": "br",
+  };
+  const DOCK_HOLD_MS = 380;
+  const SNAP_PX = 88;
+  const HOLD_MOVE_CANCEL_PX = 14;
+
   function hideGuides() {
-    Object.values(guides).forEach((el) => el.classList.remove("visible"));
+    Object.values(guides).forEach((el) => el.classList.remove("visible", "hot"));
+  }
+  function showSnapGuides(kind, hotKey) {
+    const keys = kind === "dock" ? EDGE_GUIDE_KEYS : CORNER_GUIDE_KEYS;
+    Object.entries(guides).forEach(([k, el]) => {
+      const on = keys.includes(k);
+      el.classList.toggle("visible", on);
+      el.classList.toggle("hot", on && k === hotKey);
+    });
   }
   function nearestEdge(x, y) {
     const w = window.innerWidth, h = window.innerHeight;
     const d = { top: y, bottom: h - y, left: x, right: w - x };
     return Object.keys(d).reduce((a, b) => (d[a] < d[b] ? a : b));
+  }
+  function edgeDistance(x, y, edge) {
+    const w = window.innerWidth, h = window.innerHeight;
+    if (edge === "top") return y;
+    if (edge === "bottom") return h - y;
+    if (edge === "left") return x;
+    return w - x;
   }
   function nearestCorner(x, y) {
     const w = window.innerWidth, h = window.innerHeight;
@@ -711,39 +763,176 @@
     };
     return Object.keys(opts).reduce((a, b) => (opts[a] < opts[b] ? a : b));
   }
+  function cornerDistance(x, y, corner) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const cx = corner.includes("right") ? w : 0;
+    const cy = corner.includes("bottom") ? h : 0;
+    return Math.hypot(x - cx, y - cy);
+  }
+  function safePad() {
+    return 12;
+  }
+  function placeEl(el, left, top) {
+    const pad = 6;
+    const maxL = Math.max(pad, window.innerWidth - el.offsetWidth - pad);
+    const maxT = Math.max(pad, window.innerHeight - el.offsetHeight - pad);
+    el.style.left = Math.min(maxL, Math.max(pad, left)) + "px";
+    el.style.top = Math.min(maxT, Math.max(pad, top)) + "px";
+    el.style.right = "auto";
+    el.style.bottom = "auto";
+    el.style.transform = "none";
+  }
+  function dockSnapPoint(edge, el) {
+    const pad = safePad();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (edge === "bottom") return { left: (vw - w) / 2, top: vh - h - pad };
+    if (edge === "top") return { left: (vw - w) / 2, top: pad };
+    if (edge === "left") return { left: pad, top: (vh - h) / 2 };
+    return { left: vw - w - pad, top: (vh - h) / 2 };
+  }
+  function cornerSnapPoint(corner, el) {
+    const pad = safePad();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    return {
+      left: corner.includes("right") ? window.innerWidth - w - pad : pad,
+      top: corner.includes("bottom") ? window.innerHeight - h - pad : pad,
+    };
+  }
+  function applyToolbarOrient(edge) {
+    toolbarEl.classList.toggle("orient-vertical", edge === "left" || edge === "right");
+  }
+  function liftDock(el, kind) {
+    const r = el.getBoundingClientRect();
+    if (kind === "dock") {
+      toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+    } else {
+      undoDock.classList.remove(
+        "corner-top-left",
+        "corner-top-right",
+        "corner-bottom-left",
+        "corner-bottom-right"
+      );
+    }
+    el.classList.add("free-drag", "dragging");
+    placeEl(el, r.left, r.top);
+    try {
+      if (navigator.vibrate) navigator.vibrate(12);
+    } catch (err) {}
+    return r;
+  }
 
   let dockDrag = null;
-  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
+
+  function armDockDrag(kind, e) {
     e.preventDefault();
     e.stopPropagation();
     hidePopovers();
-    dockDrag = "dock";
-    toolbarEl.classList.add("dragging");
-    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {}
+    const el = kind === "dock" ? toolbarEl : undoDock;
+    dockDrag = {
+      kind,
+      el,
+      pointerId: e.pointerId,
+      live: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      grabDX: 0,
+      grabDY: 0,
+      snap: null,
+      timer: setTimeout(() => {
+        if (!dockDrag || dockDrag.live) return;
+        const r = liftDock(el, kind);
+        dockDrag.live = true;
+        dockDrag.grabDX = dockDrag.lastX - r.left;
+        dockDrag.grabDY = dockDrag.lastY - r.top;
+        moveDockDrag(dockDrag.lastX, dockDrag.lastY);
+      }, DOCK_HOLD_MS),
+    };
+  }
+
+  function moveDockDrag(x, y) {
+    if (!dockDrag || !dockDrag.live) return;
+    const el = dockDrag.el;
+    if (dockDrag.kind === "dock") {
+      const edge = nearestEdge(x, y);
+      applyToolbarOrient(edge);
+      const dist = edgeDistance(x, y, edge);
+      const snapping = dist < SNAP_PX;
+      dockDrag.snap = snapping ? edge : null;
+      showSnapGuides("dock", edge);
+      if (snapping) {
+        const p = dockSnapPoint(edge, el);
+        placeEl(el, p.left, p.top);
+      } else {
+        placeEl(el, x - dockDrag.grabDX, y - dockDrag.grabDY);
+      }
+    } else {
+      const corner = nearestCorner(x, y);
+      const dist = cornerDistance(x, y, corner);
+      const snapping = dist < SNAP_PX;
+      dockDrag.snap = snapping ? corner : null;
+      showSnapGuides("undo", GUIDE_BY_CORNER[corner]);
+      if (snapping) {
+        const p = cornerSnapPoint(corner, el);
+        placeEl(el, p.left, p.top);
+      } else {
+        placeEl(el, x - dockDrag.grabDX, y - dockDrag.grabDY);
+      }
+    }
+    positionToolPopover();
+  }
+
+  function endDockDrag() {
+    if (!dockDrag) return;
+    clearTimeout(dockDrag.timer);
+    const { kind, live, lastX, lastY, el } = dockDrag;
+    dockDrag = null;
+    hideGuides();
+    if (!live) return;
+    if (kind === "dock") {
+      setDockPosition(nearestEdge(lastX, lastY));
+    } else {
+      setUndoCorner(nearestCorner(lastX, lastY));
+    }
+    el.classList.remove("free-drag", "dragging");
+    positionToolPopover();
+  }
+
+  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    armDockDrag("dock", e);
   });
   document.getElementById("undo-drag-handle").addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    hidePopovers();
-    dockDrag = "undo";
-    undoDock.classList.add("dragging");
-    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    armDockDrag("undo", e);
   });
   window.addEventListener("pointermove", (e) => {
-    if (!dockDrag) return;
-    if (dockDrag === "dock") showGuide(nearestEdge(e.clientX, e.clientY));
-  });
-  window.addEventListener("pointerup", (e) => {
-    if (!dockDrag) return;
-    if (dockDrag === "dock") {
-      setDockPosition(nearestEdge(e.clientX, e.clientY));
-      toolbarEl.classList.remove("dragging");
-    } else {
-      setUndoCorner(nearestCorner(e.clientX, e.clientY));
-      undoDock.classList.remove("dragging");
+    if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
+    dockDrag.lastX = e.clientX;
+    dockDrag.lastY = e.clientY;
+    if (!dockDrag.live) {
+      const moved = Math.hypot(e.clientX - dockDrag.startX, e.clientY - dockDrag.startY);
+      if (moved > HOLD_MOVE_CANCEL_PX) {
+        clearTimeout(dockDrag.timer);
+        dockDrag = null;
+      }
+      return;
     }
-    hideGuides();
-    dockDrag = null;
+    e.preventDefault();
+    moveDockDrag(e.clientX, e.clientY);
+  }, { passive: false });
+  window.addEventListener("pointerup", (e) => {
+    if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
+    endDockDrag();
+  });
+  window.addEventListener("pointercancel", (e) => {
+    if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
+    endDockDrag();
   });
 
   document.querySelectorAll(".btn-dock-quick").forEach((btn) => {
