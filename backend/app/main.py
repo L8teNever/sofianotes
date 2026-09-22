@@ -42,9 +42,16 @@ async def health() -> dict[str, bool]:
 
 @app.get("/api/recognize")
 async def recognize_status() -> dict:
+    budget = cloudflare_ocr.DAILY_NEURON_BUDGET
+    snap = await db.ocr_snapshot()
+    remaining = max(0.0, budget - float(snap.get("used") or 0))
     return {
         "enabled": cloudflare_ocr.configured(),
         "model": cloudflare_ocr.model_name() if cloudflare_ocr.configured() else None,
+        "dailyNeurons": budget,
+        "usedNeurons": round(float(snap.get("used") or 0), 1),
+        "remainingNeurons": round(remaining, 1),
+        "calls": int(snap.get("calls") or 0),
     }
 
 
@@ -56,13 +63,41 @@ async def recognize_ink(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="json required") from exc
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="json object required")
+    if not cloudflare_ocr.configured():
+        return {"ok": False, "error": "not_configured"}
+    budget = cloudflare_ocr.DAILY_NEURON_BUDGET
+    estimate = cloudflare_ocr.DEFAULT_CALL_NEURONS
+    reserved = await db.ocr_reserve(estimate, budget)
+    if reserved is None:
+        snap = await db.ocr_snapshot()
+        return {
+            "ok": False,
+            "error": "quota",
+            "remainingNeurons": 0,
+            "usedNeurons": round(float(snap.get("used") or 0), 1),
+            "dailyNeurons": budget,
+        }
     image = body.get("image") or ""
     prefer = body.get("preferDigits", True)
     result = await cloudflare_ocr.transcribe(image, prefer_digits=bool(prefer))
     if result.get("error") == "bad_image":
+        await db.ocr_adjust(-estimate)
         raise HTTPException(status_code=400, detail="image data URI required")
     if result.get("error") == "too_large":
+        await db.ocr_adjust(-estimate)
         raise HTTPException(status_code=413, detail="image too large")
+    err = str(result.get("error") or "")
+    if err in ("http_429", "http_402") or result.get("error") == "quota":
+        await db.ocr_fill(budget)
+        result = {**result, "error": "quota", "remainingNeurons": 0, "dailyNeurons": budget}
+        return result
+    actual = float(result.get("neurons") or estimate)
+    if abs(actual - estimate) > 0.5:
+        await db.ocr_adjust(actual - estimate)
+    snap = await db.ocr_snapshot()
+    result["usedNeurons"] = round(float(snap.get("used") or 0), 1)
+    result["remainingNeurons"] = round(max(0.0, budget - float(snap.get("used") or 0)), 1)
+    result["dailyNeurons"] = budget
     return result
 
 

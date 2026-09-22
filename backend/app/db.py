@@ -39,6 +39,15 @@ def _init_sync() -> None:
         )
         """
     )
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ocr_usage (
+            day TEXT PRIMARY KEY,
+            neurons REAL NOT NULL DEFAULT 0,
+            calls INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     _conn.commit()
 
 
@@ -102,3 +111,80 @@ async def insert_stroke(stroke: dict[str, Any]) -> None:
 async def delete_strokes(stroke_ids: list[str]) -> None:
     async with _lock:
         await asyncio.get_event_loop().run_in_executor(None, _delete_sync, stroke_ids)
+
+
+def _ocr_day() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def _ocr_snapshot_sync() -> dict[str, float]:
+    day = _ocr_day()
+    row = _conn.execute(
+        "SELECT neurons, calls FROM ocr_usage WHERE day = ?", (day,)
+    ).fetchone()
+    used = float(row[0]) if row else 0.0
+    calls = int(row[1]) if row else 0
+    return {"day": day, "used": used, "calls": calls}
+
+
+def _ocr_reserve_sync(amount: float, budget: float) -> dict[str, float] | None:
+    snap = _ocr_snapshot_sync()
+    if snap["used"] + amount > budget + 1e-6:
+        return None
+    _conn.execute(
+        """
+        INSERT INTO ocr_usage (day, neurons, calls) VALUES (?, ?, 1)
+        ON CONFLICT(day) DO UPDATE SET
+            neurons = neurons + excluded.neurons,
+            calls = calls + 1
+        """,
+        (snap["day"], amount),
+    )
+    _conn.commit()
+    return _ocr_snapshot_sync()
+
+
+def _ocr_adjust_sync(delta: float) -> None:
+    day = _ocr_day()
+    _conn.execute(
+        """
+        INSERT INTO ocr_usage (day, neurons, calls) VALUES (?, ?, 0)
+        ON CONFLICT(day) DO UPDATE SET neurons = MAX(0, neurons + ?)
+        """,
+        (day, delta, delta),
+    )
+    _conn.commit()
+
+
+def _ocr_fill_sync(budget: float) -> None:
+    day = _ocr_day()
+    _conn.execute(
+        """
+        INSERT INTO ocr_usage (day, neurons, calls) VALUES (?, ?, 0)
+        ON CONFLICT(day) DO UPDATE SET neurons = MAX(neurons, ?)
+        """,
+        (day, budget, budget),
+    )
+    _conn.commit()
+
+
+async def ocr_snapshot() -> dict[str, float]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _ocr_snapshot_sync)
+
+
+async def ocr_reserve(amount: float, budget: float) -> dict[str, float] | None:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(
+            None, _ocr_reserve_sync, amount, budget
+        )
+
+
+async def ocr_adjust(delta: float) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _ocr_adjust_sync, delta)
+
+
+async def ocr_fill(budget: float) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _ocr_fill_sync, budget)

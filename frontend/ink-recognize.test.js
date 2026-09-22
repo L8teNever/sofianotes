@@ -125,6 +125,18 @@ test("ocrLooksPlausible rejects gibberish and keeps real notes", () => {
   assert.equal(SofiaInk.ocrLooksPlausible("4", { strokes: 1 }), true);
 });
 
+test("context region swallows ink in between as one box", () => {
+  const a = line("a", 0, 0, 20, 0, 4);
+  const mid = line("m", 40, 8, 70, 8, 4);
+  const b = line("b", 90, 24, 120, 24, 4);
+  const far = line("f", 400, 0, 430, 0, 4);
+  const region = SofiaInk.contextRegion([a, mid, b, far], [a, b], 20);
+  const ids = region.strokes.map((s) => s.id).sort().join(",");
+  assert.equal(ids, "a,b,m");
+  assert.ok(region.bbox.maxX >= b.bbox.maxX);
+  assert.ok(region.bbox.minY <= a.bbox.minY);
+});
+
 test("cluster blocks keep stacked text and math, split far ink", () => {
   const top = line("t", 0, 0, 40, 0, 4);
   const bot = line("m", 8, 28, 36, 28, 4);
@@ -217,6 +229,7 @@ test("plain digits stay digits without letter neighbors", () => {
 
 test("cloud OCR cleanup keeps German letters", () => {
   assert.equal(SofiaInk.cleanOcrText("Übung Hausaufgaben"), "Übung Hausaufgaben");
+  assert.equal(SofiaInk.cleanOcrText("Hallo\n4+4="), "Hallo 4+4=");
 });
 
 test("adjacent 7 minus 1 stay three glyphs", () => {

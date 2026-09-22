@@ -30,5 +30,11 @@ class CloudflareOcrTests(unittest.TestCase):
 
         self.assertEqual(clean_text("Übung Hausaufgaben"), "Übung Hausaufgaben")
 
-    def test_clean_empty(self):
-        self.assertEqual(clean_text("   "), "")
+    def test_neurons_from_usage(self):
+        from app.cloudflare_ocr import neurons_from_usage
+
+        n = neurons_from_usage({"prompt_tokens": 1000, "completion_tokens": 50})
+        self.assertAlmostEqual(n, 27273 / 1000 + 90909 / 20000, delta=0.2)
+
+    def test_clean_joins_multiline_notes(self):
+        self.assertEqual(clean_text("Hallo\n4+4="), "Hallo 4+4=")

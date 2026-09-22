@@ -15,6 +15,10 @@ API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
 MODEL = os.environ.get(
     "CLOUDFLARE_OCR_MODEL", "@cf/moondream/moondream3.1-9B-A2B"
 ).strip() or "@cf/moondream/moondream3.1-9B-A2B"
+INPUT_NEURONS_PER_M = 27273.0
+OUTPUT_NEURONS_PER_M = 90909.0
+DEFAULT_CALL_NEURONS = float(os.environ.get("OCR_NEURONS_PER_CALL", "80") or "80")
+DAILY_NEURON_BUDGET = float(os.environ.get("OCR_DAILY_NEURONS", "10000") or "10000")
 TIMEOUT_SEC = 12
 MAX_IMAGE_CHARS = 900_000
 
@@ -42,6 +46,21 @@ _PREFIX = re.compile(
     r"(\s+(is|says|reads|shown))?\s*[:\-–]\s*",
     re.I,
 )
+
+
+def neurons_from_usage(usage: dict | None) -> float | None:
+    if not isinstance(usage, dict):
+        return None
+    inp = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+    out = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+    try:
+        inp_n = float(inp)
+        out_n = float(out)
+    except (TypeError, ValueError):
+        return None
+    if inp_n <= 0 and out_n <= 0:
+        return None
+    return inp_n * INPUT_NEURONS_PER_M / 1_000_000.0 + out_n * OUTPUT_NEURONS_PER_M / 1_000_000.0
 
 
 def configured() -> bool:
@@ -76,7 +95,7 @@ def clean_text(raw: str) -> str:
     s = str(raw or "").strip().strip("`\"'")
     lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
     if lines:
-        s = lines[-1]
+        s = " ".join(lines)
     s = _PREFIX.sub("", s).strip().strip("`\"'")
     s = s.replace("×", "x").replace("÷", "/").replace("—", "-").replace("–", "-")
     s = re.sub(r"sqrt", "√", s, flags=re.I)
@@ -103,8 +122,8 @@ def clean_text(raw: str) -> str:
     else:
         s = re.sub(r"\s+", " ", s).strip()
     s = re.sub(r"[^" + KEEP_CHARS + r"]", "", s)
-    if len(s) > 96:
-        s = s[:96]
+    if len(s) > 160:
+        s = s[:160]
     return s.strip()
 
 
@@ -116,7 +135,7 @@ def _post(image_data_uri: str, prefer_digits: bool) -> dict:
         "task": "query",
         "reasoning": False,
         "temperature": 0,
-        "max_tokens": 96 if not prefer_digits else 48,
+        "max_tokens": 160 if not prefer_digits else 64,
         "stream": False,
     }
     req = urllib.request.Request(
@@ -144,13 +163,18 @@ async def transcribe(image_data_uri: str, prefer_digits: bool = True) -> dict:
         payload = await asyncio.to_thread(_post, image_data_uri, prefer_digits)
     except urllib.error.HTTPError as err:
         detail = err.read().decode("utf-8", "replace")[:240]
-        return {"ok": False, "error": f"http_{err.code}", "detail": detail}
+        return {"ok": False, "error": f"http_{err.code}", "detail": detail, "neurons": DEFAULT_CALL_NEURONS}
     except Exception as err:  # noqa: BLE001 — network/timeouts stay optional
         return {"ok": False, "error": type(err).__name__}
     if not payload.get("success"):
         return {"ok": False, "error": "model_error", "detail": payload.get("errors")}
     text = clean_text(extract_answer(payload))
     ms = int((time.monotonic() - started) * 1000)
+    usage = None
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if isinstance(result, dict):
+        usage = result.get("usage")
+    neurons = neurons_from_usage(usage) or DEFAULT_CALL_NEURONS
     if not text:
-        return {"ok": False, "error": "empty", "ms": ms}
-    return {"ok": True, "text": text, "ms": ms, "model": MODEL}
+        return {"ok": False, "error": "empty", "ms": ms, "neurons": neurons}
+    return {"ok": True, "text": text, "ms": ms, "model": MODEL, "neurons": neurons}

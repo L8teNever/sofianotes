@@ -674,6 +674,35 @@
     return burst;
   }
 
+  function padBBox(b, pad) {
+    const p = pad || 0;
+    return {
+      minX: b.minX - p,
+      minY: b.minY - p,
+      maxX: b.maxX + p,
+      maxY: b.maxY + p,
+    };
+  }
+
+  function bboxesOverlap(a, b) {
+    if (!a || !b) return false;
+    return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
+  }
+
+  function contextRegion(all, seed, pad) {
+    const ink = (all || [])
+      .filter(isLikelyHandwriting)
+      .map((s) => ({ ...s, bbox: s.bbox || bboxOfPoints(s.points || []) }));
+    const seeds = (seed || [])
+      .filter(Boolean)
+      .map((s) => ({ ...s, bbox: s.bbox || bboxOfPoints(s.points || []) }));
+    if (!seeds.length) return { strokes: [], bbox: null };
+    const area = padBBox(unionBBox(seeds.map((s) => s.bbox)), pad == null ? 36 : pad);
+    const inside = ink.filter((s) => bboxesOverlap(s.bbox, area));
+    const members = inside.length ? inside : seeds;
+    return { strokes: members, bbox: unionBBox(members.map((s) => s.bbox)) };
+  }
+
   function ocrLooksPlausible(text, opts) {
     const s = String(text || "").trim();
     if (!s) return false;
@@ -1641,7 +1670,7 @@
       .split(/\n/)
       .map((ln) => ln.trim())
       .filter(Boolean);
-    if (lines.length) s = lines[lines.length - 1];
+    if (lines.length) s = lines.join(" ");
     s = s.replace(
       /^(the\s+)?((handwritten|written)\s+)?(text|ink|characters?|transcription|answer)(\s+(is|says|reads|shown))?\s*[:\-–]\s*/i,
       ""
@@ -1654,7 +1683,7 @@
     if (hasOp && !hasLetters) s = s.replace(/\s+/g, "");
     else s = s.replace(/\s+/g, " ").trim();
     s = s.replace(/[^0-9A-Za-zÄÖÜäöüß+\-*/=xX^().,√π% ]/g, "");
-    if (s.length > 96) s = s.slice(0, 96);
+    if (s.length > 160) s = s.slice(0, 160);
     return s.trim();
   }
 
@@ -1671,6 +1700,7 @@
     detectOperator,
     clusterGlyphs,
     writingBurst,
+    contextRegion,
     ocrLooksPlausible,
     clusterBlocks,
     DEFAULT_WORD_GAP,

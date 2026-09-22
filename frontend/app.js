@@ -1957,6 +1957,7 @@
       color: currentColor,
       size,
       points: [{ x: wx, y: wy, p: pressure }],
+      ownerId: myClientId,
       unsent: [],
       pointerId,
       pointerType,
@@ -2451,15 +2452,17 @@
   const ocrCache = new Map();
   let scanBoxes = [];
   let recognizeWide = false;
-  const RECOGNIZE_PAUSE_MS = 4500;
-  const CONTEXT_WAIT_MS = 3200;
-  const WIDE_BURST_MS = 14000;
+  let ocrRemaining = Infinity;
+  const RECOGNIZE_PAUSE_MS = 1600;
+  const CONTEXT_WAIT_MS = 1800;
+  const WIDE_BURST_MS = 8000;
   const PX_PER_CM = 96 / 2.54;
 
   fetch("/api/recognize")
     .then((r) => r.json())
     .then((d) => {
       cloudOcrEnabled = !!(d && d.enabled);
+      if (typeof d.remainingNeurons === "number") ocrRemaining = d.remainingNeurons;
     })
     .catch(() => {});
 
@@ -2769,25 +2772,30 @@
       all = Array.from(boardStrokes.values());
       pruneOcrCache(new Set(all.map((s) => s.id)));
       const pauseMs = recognizeWide ? WIDE_BURST_MS : RECOGNIZE_PAUSE_MS;
-      const gap = recognizeWide ? wordGap * 2.2 : wordGap;
-      burst = SofiaInk.writingBurst(all, { pauseMs, now });
+      const pad = recognizeWide ? 80 : 36;
+      const mine = all.filter(
+        (s) => s.ownerId === myClientId || s.id === lastRecognizeFocus
+      );
+      burst = SofiaInk.writingBurst(mine.length ? mine : all, { pauseMs, now });
       if (!burst.length && lastRecognizeFocus) {
         const focus = all.find((s) => s.id === lastRecognizeFocus);
         if (focus) burst = [focus];
       }
-      let blocks = burst.length ? SofiaInk.clusterBlocks(burst, gap) : [];
-      if (recognizeWide && burst.length) {
-        const seed = new Set(burst.map((s) => s.id));
-        const recent = all.filter((s) => s.endedAt && now - s.endedAt < 40000);
-        const wide = SofiaInk.clusterBlocks(recent, gap);
-        blocks = wide.filter((b) => b.strokes.some((s) => seed.has(s.id)));
-        if (!blocks.length) blocks = SofiaInk.clusterBlocks(burst, gap);
-      }
-      scanBoxes = blocks.map((b) => ({ bbox: b.bbox, label: "KI liest …" }));
+      const region = burst.length ? SofiaInk.contextRegion(all, burst, pad) : { strokes: [], bbox: null };
+      const blocks = region.bbox
+        ? [{ strokes: region.strokes, bbox: region.bbox }]
+        : [];
+      scanBoxes = region.bbox ? [{ bbox: region.bbox, label: "KI liest …" }] : [];
       renderInkOverlay();
 
       const cloudGroups = [];
-      if (burst.length && cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
+      const canCloud =
+        burst.length &&
+        cloudOcrEnabled !== false &&
+        ocrRemaining > 1 &&
+        recognizeAbort === ac &&
+        !ac.signal.aborted;
+      if (canCloud && region.strokes.length) {
         const ocrBlock = async (block) => {
           const strokes = block.strokes;
           const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
@@ -2815,10 +2823,19 @@
               preferDigits: mathSolveEnabled,
             }),
           });
+          if (resp.status === 429) {
+            ocrRemaining = 0;
+            return null;
+          }
           if (!resp.ok) return null;
           const data = await resp.json();
+          if (typeof data.remainingNeurons === "number") ocrRemaining = data.remainingNeurons;
           if (data && data.error === "not_configured") {
             cloudOcrEnabled = false;
+            return null;
+          }
+          if (data && data.error === "quota") {
+            ocrRemaining = 0;
             return null;
           }
           if (!data || !data.ok || !data.text) return null;
@@ -2838,8 +2855,8 @@
             source: "cloudflare",
           };
         };
-        const parts = await Promise.all(blocks.map((block) => ocrBlock(block).catch(() => null)));
-        for (const g of parts) if (g) cloudGroups.push(g);
+        const g = await ocrBlock(blocks[0]).catch(() => null);
+        if (g) cloudGroups.push(g);
       }
 
       if (cloudGroups.length) {
@@ -2850,7 +2867,7 @@
           let local = await SofiaInk.recognizeStrokes(leftover, {
             recentOnly: false,
             preferDigits: mathSolveEnabled,
-            wordGap: gap,
+            wordGap,
           });
           local = SofiaInk.stitchBlockGroups(local, blocks);
           groups = mergeInkGroups(local, cloudGroups);
@@ -2859,7 +2876,7 @@
         groups = await SofiaInk.recognizeStrokes(burst, {
           recentOnly: false,
           preferDigits: mathSolveEnabled,
-          wordGap: gap,
+            wordGap,
         });
         groups = SofiaInk.stitchBlockGroups(groups, blocks);
       }
@@ -2881,10 +2898,12 @@
       }
       if (!recognizeWide && (dubious.length || emptyRead)) {
         recognizeWide = true;
-        scanBoxes = (dubious.length ? dubious : blocks).map((g) => ({
-          bbox: g.bbox,
-          label: "Wartet …",
-        }));
+        scanBoxes = region.bbox
+          ? [{ bbox: region.bbox, label: "Wartet …" }]
+          : (dubious.length ? dubious : blocks).map((g) => ({
+              bbox: g.bbox,
+              label: "Wartet …",
+            }));
         renderInkOverlay();
       } else {
         recognizeWide = false;
