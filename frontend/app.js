@@ -558,7 +558,12 @@
     }
     renderToolPopover();
     if (!openPopover) return;
-    if (already && !toolPopover.classList.contains("hidden")) {
+    // Erst das Werkzeug wechseln, Menue nur beim zweiten Klick auf dasselbe.
+    if (!already) {
+      toolPopover.classList.add("hidden");
+      return;
+    }
+    if (!toolPopover.classList.contains("hidden")) {
       toolPopover.classList.add("hidden");
       return;
     }
