@@ -373,6 +373,9 @@
     const maxTilt = ((thin ? 42 : 38) * Math.PI) / 180;
     if (fromVert > maxTilt) return false;
     if (st.path / chord > 1.85) return false;
+    const mid = pts[Math.floor(pts.length / 2)];
+    const bulge = Math.abs(mid.x - (start.x + end.x) / 2);
+    if (bulge > Math.max(5, st.w * 0.32) && st.w / st.h > 0.2) return false;
     return true;
   }
 
@@ -390,6 +393,61 @@
     return fromVert > (40 * Math.PI) / 180 && fromVert < (58 * Math.PI) / 180;
   }
 
+  function looksLikeSqrt(pts, st) {
+    if (!pts || pts.length < 6) return false;
+    if (st.h < 12 || st.w < 14) return false;
+    let minI = 0;
+    let minY = pts[0].y;
+    for (let i = 1; i < pts.length; i++) {
+      if (pts[i].y > minY) {
+        minY = pts[i].y;
+        minI = i;
+      }
+    }
+    if (minI < 1 || minI > pts.length * 0.58) return false;
+    const start = pts[0];
+    const valley = pts[minI];
+    const end = pts[pts.length - 1];
+    if (valley.x < start.x - 6) return false;
+    if (end.x < valley.x + 8) return false;
+    if (end.x - valley.x < valley.x - start.x + 4) return false;
+    if (start.y > valley.y - 5) return false;
+    if (end.y > valley.y - st.h * 0.22) return false;
+    return true;
+  }
+
+  function looksLikeParen(pts, st) {
+    if (!pts || pts.length < 5) return null;
+    if (st.h < 16 || st.w / st.h > 0.72 || st.w / st.h < 0.16) return null;
+    const start = pts[0];
+    const end = pts[pts.length - 1];
+    const mid = pts[Math.floor(pts.length / 2)];
+    const bulge = Math.abs(mid.x - (start.x + end.x) / 2);
+    if (bulge < Math.max(3.5, st.w * 0.22)) return null;
+    const leftOpen = mid.x < start.x - 2 && mid.x < end.x - 2;
+    const rightOpen = mid.x > start.x + 2 && mid.x > end.x + 2;
+    if (leftOpen && !rightOpen) return "(";
+    if (rightOpen && !leftOpen) return ")";
+    return null;
+  }
+
+  function looksLikePercent(strokes) {
+    if (!strokes || strokes.length !== 3) return false;
+    const parts = strokes.map((s) => ({ s, st: glyphStats([s]) }));
+    let slash = -1;
+    for (let i = 0; i < parts.length; i++) {
+      if (looksLikeSlash(parts[i].s.points, parts[i].st)) {
+        slash = i;
+        break;
+      }
+    }
+    if (slash < 0) return false;
+    const dots = parts.filter((_, i) => i !== slash);
+    if (dots.length !== 2) return false;
+    const slashSt = parts[slash].st;
+    return dots.every((d) => d.st.h < slashSt.h * 0.72 && d.st.w < slashSt.w * 1.35 && d.st.h < 22);
+  }
+
   function detectOperator(glyph) {
     const strokes = glyph.strokes;
     const st = glyphStats(strokes);
@@ -400,6 +458,10 @@
       return { char: ".", confidence: 0.84, source: "geom" };
     }
 
+    if (looksLikePercent(strokes)) {
+      return { char: "%", confidence: 0.86, source: "geom" };
+    }
+
     if (strokes.length === 2) {
       const a = glyphStats([strokes[0]]);
       const b = glyphStats([strokes[1]]);
@@ -407,7 +469,8 @@
       const hb = nearlyHorizontal([strokes[1]], b);
       if (ha && hb) {
         const gap = Math.abs((a.bbox.minY + a.bbox.maxY) / 2 - (b.bbox.minY + b.bbox.maxY) / 2);
-        if (gap > 3 && gap < Math.max(a.w, b.w) * 0.9) {
+        const xo = xOverlapRatio(a.bbox, b.bbox);
+        if (xo > 0.35 && gap > 2 && gap < Math.max(a.w, b.w, 16) * 1.2) {
           return { char: "=", confidence: 0.9, source: "geom" };
         }
       }
@@ -432,6 +495,17 @@
       }
     }
 
+    if (strokes.length === 1) {
+      const pts = strokes[0].points;
+      if (looksLikeSqrt(pts, st)) {
+        return { char: "√", confidence: 0.86, source: "geom" };
+      }
+      const paren = looksLikeParen(pts, st);
+      if (paren) {
+        return { char: paren, confidence: 0.78, source: "geom" };
+      }
+    }
+
     if (nearlyHorizontal(strokes, st) && strokes.length === 1) {
       return { char: "-", confidence: 0.86, source: "geom", fractionBar: w > 22 };
     }
@@ -448,6 +522,13 @@
       }
     }
     return null;
+  }
+
+  function trustGeom(geom) {
+    if (!geom || !geom.char) return false;
+    if (geom.confidence >= 0.8 && "-+=/.√%π".includes(geom.char)) return true;
+    if (geom.confidence >= 0.74 && "()√".includes(geom.char)) return true;
+    return false;
   }
 
   function boxesOverlap(a, b, pad) {
@@ -520,10 +601,22 @@
               b,
               0
             );
+            const boxH = Math.max(1, box.maxY - box.minY);
+            const bH = Math.max(1, b.maxY - b.minY);
+            const vGap = Math.max(0, Math.max(box.minY, b.minY) - Math.min(box.maxY, b.maxY));
+            const stackedBars =
+              xo > 0.4 &&
+              vGap > 1 &&
+              vGap < Math.max(18, medianH * 0.55) &&
+              bH < medianH * 0.42 &&
+              boxH < medianH * 0.55;
+            const accessory =
+              (bH < medianH * 0.32 && boxH > bH * 1.35) || (boxH < medianH * 0.32 && bH > boxH * 1.35);
             const contained =
-              (b.minX >= box.minX - 8 && b.maxX <= box.maxX + 8) ||
-              (box.minX >= b.minX - 8 && box.maxX <= b.maxX + 8);
-            if ((sameColumn || stackedDot || contained) && closeY) {
+              accessory &&
+              ((b.minX >= box.minX - 8 && b.maxX <= box.maxX + 8) ||
+                (box.minX >= b.minX - 8 && box.maxX <= b.maxX + 8));
+            if ((sameColumn || stackedDot || stackedBars || contained) && (closeY || stackedBars)) {
               member.push(items[j]);
               used.add(j);
               changed = true;
@@ -645,9 +738,12 @@
       .replace(/÷/g, "/")
       .replace(/·/g, "*")
       .replace(/—/g, "/")
+      .replace(/sqrt/gi, "√")
+      .replace(/pi/gi, "π")
       .replace(/\s+/g, "")
       .replace(/=+$/g, "")
-      .replace(/(\d)[xX](?=\d|\()/g, "$1*")
+      .replace(/(\d)[xX](?=\d|\(|√|π)/g, "$1*")
+      .replace(/(\d|π|\))(?=√|π|\()/g, "$1*")
       .replace(/(\d)\(/g, "$1*(")
       .replace(/\)(\d)/g, ")*$1")
       .replace(/\)\(/g, ")*(");
@@ -655,7 +751,7 @@
     let i = 0;
     while (i < s.length) {
       const c = s[i];
-      if ("+-*/^()".includes(c)) {
+      if ("+-*/^()√π%".includes(c)) {
         tokens.push({ t: c });
         i++;
         continue;
@@ -690,12 +786,31 @@
       if (!tok) throw new Error("eof");
       if (tok.t === "n") {
         i++;
-        return tok.v;
+        let v = tok.v;
+        if (peek() && peek().t === "%") {
+          eat("%");
+          v /= 100;
+        }
+        return v;
+      }
+      if (tok.t === "π") {
+        eat("π");
+        return Math.PI;
+      }
+      if (tok.t === "√") {
+        eat("√");
+        const inner = parsePow();
+        if (inner < 0) throw new Error("sqrt");
+        return Math.sqrt(inner);
       }
       if (tok.t === "(") {
         eat("(");
         const v = parseAdd();
         eat(")");
+        if (peek() && peek().t === "%") {
+          eat("%");
+          return v / 100;
+        }
         return v;
       }
       if (tok.t === "-") {
@@ -750,10 +865,10 @@
 
   function looksLikeMath(text) {
     if (!text) return false;
-    if (!/[0-9]/.test(text)) return false;
+    if (!/[0-9π]/.test(text) && !/√/.test(text)) return false;
     const cleaned = text.replace(/[×÷—]/g, "*");
     if (/[A-WYZa-wyz]/.test(cleaned)) return false;
-    return /[+\-*/^=xX]/.test(cleaned);
+    return /[+\-*/^=xX√π%()]/.test(cleaned);
   }
 
   function formatNumber(n) {
@@ -772,8 +887,44 @@
     }
   }
 
+  function coalesceEqualsGlyphs(glyphs) {
+    const sorted = glyphs.slice().sort((a, b) => a.bbox.minX - b.bbox.minX);
+    const out = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      if (
+        b &&
+        (a.char === "-" || a.char === "—") &&
+        (b.char === "-" || b.char === "—") &&
+        !(a.op && a.op.fractionBar) &&
+        !(b.op && b.op.fractionBar)
+      ) {
+        const xo = xOverlapRatio(a.bbox, b.bbox);
+        const vGap = Math.max(
+          0,
+          Math.max(a.bbox.minY, b.bbox.minY) - Math.min(a.bbox.maxY, b.bbox.maxY)
+        );
+        const maxW = Math.max(a.bbox.maxX - a.bbox.minX, b.bbox.maxX - b.bbox.minX, 12);
+        if (xo > 0.38 && vGap < maxW * 1.15) {
+          out.push({
+            ...a,
+            char: "=",
+            bbox: unionBBox([a.bbox, b.bbox]),
+            op: { char: "=", confidence: 0.9, source: "geom" },
+          });
+          i++;
+          continue;
+        }
+      }
+      out.push(a);
+    }
+    return out;
+  }
+
   function layoutInkOn(glyphs) {
     if (!glyphs.length) return { text: "", math: false };
+    glyphs = coalesceEqualsGlyphs(glyphs);
     const bars = [];
     const rest = [];
     for (const g of glyphs) {
@@ -1026,7 +1177,7 @@
     const geom = detectOperator(glyph);
     glyph.op = geom;
     glyph.pixels = rasterizeGlyph(glyph.strokes);
-    if (geom && geom.confidence >= 0.8 && "-+=/.".includes(geom.char)) {
+    if (trustGeom(geom)) {
       glyph.char = geom.char;
       glyph.confidence = geom.confidence;
       glyph.source = geom.source;
@@ -1059,13 +1210,13 @@
     const pending = [];
     for (const group of groups) {
       const probe = group.glyphs.map((g) => detectOperator(g)).filter(Boolean);
-      const mathish = preferDigits || probe.some((p) => "+-×/=—".includes(p.char));
+      const mathish = preferDigits || probe.some((p) => "+-×/=—√()%π".includes(p.char));
       group.mathish = mathish;
       for (const g of group.glyphs) {
         const geom = detectOperator(g);
         g.op = geom;
         g.pixels = rasterizeGlyph(g.strokes);
-        if (geom && geom.confidence >= 0.8 && "-+=/.".includes(geom.char)) {
+        if (trustGeom(geom)) {
           g.char = geom.char;
           g.confidence = geom.confidence;
           g.source = geom.source;
@@ -1096,7 +1247,7 @@
       const solved = layout.math ? solveMath(layout.text) : null;
       const avg =
         group.glyphs.reduce((s, g) => s + (g.confidence || 0), 0) / Math.max(1, group.glyphs.length);
-      const hasSymbol = /[0-9A-Za-z]/.test(layout.text.replace(/\?/g, ""));
+      const hasSymbol = /[0-9A-Za-z=√π%()+]/.test(layout.text.replace(/\?/g, ""));
       if (!hasSymbol && !solved) continue;
       if (avg < 0.38 && !solved) continue;
       out.push({
@@ -1125,10 +1276,11 @@
       ""
     );
     s = s.replace(/^["'`]+|["'`]+$/g, "");
+    s = s.replace(/sqrt/gi, "√").replace(/\bpi\b/gi, "π");
     s = s.replace(/[×]/g, "x").replace(/[÷]/g, "/").replace(/[—–]/g, "-");
-    if (/[0-9+\-*/=xX^]/.test(s)) s = s.replace(/\s+/g, "");
+    if (/[0-9+\-*/=xX^√π%]/.test(s)) s = s.replace(/\s+/g, "");
     else s = s.replace(/\s+/g, " ").trim();
-    s = s.replace(/[^0-9A-Za-z+\-*/=xX^()., ]/g, "");
+    s = s.replace(/[^0-9A-Za-z+\-*/=xX^().,√π% ]/g, "");
     if (s.length > 48) s = s.slice(0, 48);
     return s.trim();
   }

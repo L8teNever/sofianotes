@@ -23,5 +23,10 @@ class CloudflareOcrTests(unittest.TestCase):
             "7",
         )
 
+    def test_clean_keeps_root_equals_pi(self):
+        self.assertEqual(clean_text("sqrt 9 = 3"), "√9=3")
+        self.assertEqual(clean_text("2π"), "2π")
+        self.assertEqual(clean_text("50%"), "50%")
+
     def test_clean_empty(self):
         self.assertEqual(clean_text("   "), "")

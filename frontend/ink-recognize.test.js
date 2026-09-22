@@ -190,6 +190,87 @@ test("dense sampled digit still counts as handwriting", () => {
   assert.equal(SofiaInk.isLikelyHandwriting(stroke("d", pts)), true);
 });
 
+test("sqrt glyph is detected geometrically", () => {
+  const pts = [];
+  for (let i = 0; i <= 6; i++) pts.push(pt(8 + i, 18 + i * 4));
+  for (let i = 1; i <= 14; i++) pts.push(pt(14 + i * 4, 42 - i * 2.1));
+  const op = SofiaInk.detectOperator({ strokes: [stroke("r", pts)] });
+  assert.ok(op);
+  assert.equal(op.char, "√");
+});
+
+test("handwritten 7 is not a square root", () => {
+  const pts = [pt(0, 0), pt(22, 0), pt(20, 2), pt(4, 32)];
+  const op = SofiaInk.detectOperator({ strokes: [stroke("7", pts)] });
+  assert.ok(!op || op.char !== "√");
+});
+
+test("paren glyphs are detected geometrically", () => {
+  const left = [];
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12;
+    left.push(pt(18 - Math.sin(t * Math.PI) * 12, 4 + t * 40));
+  }
+  const right = [];
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12;
+    right.push(pt(6 + Math.sin(t * Math.PI) * 12, 4 + t * 40));
+  }
+  assert.equal(SofiaInk.detectOperator({ strokes: [stroke("lp", left)] }).char, "(");
+  assert.equal(SofiaInk.detectOperator({ strokes: [stroke("rp", right)] }).char, ")");
+});
+
+test("percent is slash with two dots", () => {
+  const g = {
+    strokes: [
+      line("a", 4, 6, 12, 14, 5),
+      line("s", 0, 0, 32, 32, 8),
+      line("b", 14, 22, 22, 30, 5),
+    ],
+  };
+  const op = SofiaInk.detectOperator(g);
+  assert.equal(op.char, "%");
+});
+
+test("stacked minuses cluster and layout as equals", () => {
+  const strokes = [line("a", 0, 10, 36, 10, 6), line("b", 1, 24, 35, 24, 6)];
+  const groups = SofiaInk.clusterGlyphs(strokes);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].glyphs.length, 1);
+  const op = SofiaInk.detectOperator(groups[0].glyphs[0]);
+  assert.equal(op.char, "=");
+  const layout = SofiaInk.layoutInkOn([
+    { char: "-", bbox: { minX: 0, minY: 10, maxX: 36, maxY: 13 }, op: null },
+    { char: "-", bbox: { minX: 1, minY: 24, maxX: 35, maxY: 27 }, op: null },
+  ]);
+  assert.equal(layout.text, "=");
+});
+
+test("radicand stays its own glyph under a sqrt bar", () => {
+  const rootPts = [];
+  for (let i = 0; i <= 6; i++) rootPts.push(pt(8 + i, 18 + i * 4));
+  for (let i = 1; i <= 16; i++) rootPts.push(pt(14 + i * 4, 42 - i * 2));
+  const strokes = [stroke("r", rootPts), line("n", 40, 22, 40, 40, 6)];
+  const groups = SofiaInk.clusterGlyphs(strokes);
+  assert.equal(groups.length, 1);
+  assert.ok(groups[0].glyphs.length >= 2);
+});
+
+test("solve roots percents and pi", () => {
+  assert.equal(SofiaInk.solveMath("√9").text, "3");
+  assert.equal(SofiaInk.solveMath("√(9+7)").text, "4");
+  assert.equal(SofiaInk.solveMath("50%").text, "0.5");
+  assert.ok(Math.abs(SofiaInk.parseMath("2π") - 2 * Math.PI) < 1e-6);
+  assert.equal(SofiaInk.solveMath("3+4=").text, "7");
+  assert.ok(SofiaInk.looksLikeMath("√9"));
+  assert.ok(SofiaInk.looksLikeMath("3+4="));
+});
+
+test("cloud OCR cleanup keeps roots and equals", () => {
+  assert.equal(SofiaInk.cleanOcrText("sqrt 9 = 3"), "√9=3");
+  assert.equal(SofiaInk.cleanOcrText("The handwritten text says: 2π"), "2π");
+});
+
 test("fraction layout becomes division", () => {
   const num = {
     char: "1",

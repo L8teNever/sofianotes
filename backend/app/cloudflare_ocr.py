@@ -22,7 +22,7 @@ DIGIT_PROMPT = (
     "Transcribe the handwritten whiteboard ink. "
     "Reply with ONLY the written characters, no extra words. "
     "Prefer digits 0-9 when a glyph could be a letter or a number. "
-    "Keep math operators + - x * / = ^ ( ) and the times sign."
+    "Keep math operators + - x * / = ^ ( ) % and signs for square root √, pi π, and equals."
 )
 TEXT_PROMPT = (
     "Transcribe the handwritten whiteboard ink. "
@@ -71,8 +71,14 @@ def clean_text(raw: str) -> str:
         s = lines[-1]
     s = _PREFIX.sub("", s).strip().strip("`\"'")
     s = s.replace("×", "x").replace("÷", "/").replace("—", "-").replace("–", "-")
+    s = re.sub(r"sqrt", "√", s, flags=re.I)
+    s = re.sub(r"\bpi\b", "π", s, flags=re.I)
     if re.search(r"\b(image|shows|background|number|digit|character)\b", s, re.I):
-        named = re.search(r"(?:number|digit|character|says|reads)\s+['\"]?([0-9A-Za-z+\-*/=xX]{1,24})", s, re.I)
+        named = re.search(
+            r"(?:number|digit|character|says|reads)\s+['\"]?([0-9A-Za-z+\-*/=xX√π%()]{1,24})",
+            s,
+            re.I,
+        )
         if named:
             s = named.group(1)
         else:
@@ -80,13 +86,13 @@ def clean_text(raw: str) -> str:
             if quoted:
                 s = quoted.group(1)
             else:
-                tokens = re.findall(r"[0-9A-Za-z+\-*/=xX^()]+", s)
+                tokens = re.findall(r"[0-9A-Za-z+\-*/=xX^()√π%]+", s)
                 s = max(tokens, key=len) if tokens else s
-    if re.search(r"[0-9+\-*/=xX^]", s):
+    if re.search(r"[0-9+\-*/=xX^√π%]", s):
         s = re.sub(r"\s+", "", s)
     else:
         s = re.sub(r"\s+", " ", s).strip()
-    s = re.sub(r"[^0-9A-Za-z+\-*/=xX^()., ]", "", s)
+    s = re.sub(r"[^0-9A-Za-z+\-*/=xX^().,√π% ]", "", s)
     if len(s) > 48:
         s = s[:48]
     return s.strip()
