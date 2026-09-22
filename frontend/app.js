@@ -1689,6 +1689,9 @@
   }
 
   canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.rangeCount) sel.removeAllRanges();
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch (err) {
@@ -1731,7 +1734,7 @@
     if (e.pointerType === "mouse" && e.button !== 0) return;
 
     dispatchPrimaryDown(e);
-  });
+  }, { passive: false });
 
   canvas.addEventListener("pointermove", (e) => {
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
@@ -1887,6 +1890,20 @@
   );
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("contextmenu", (e) => {
+    if (e.target.closest("input, textarea")) return;
+    e.preventDefault();
+  });
+  document.addEventListener("selectstart", (e) => {
+    if (e.target.closest("input, textarea")) return;
+    e.preventDefault();
+  });
+  document.addEventListener("selectionchange", () => {
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.rangeCount) sel.removeAllRanges();
+  });
 
   // ---- boot ------------------------------------------------------
   resizeCanvas();
