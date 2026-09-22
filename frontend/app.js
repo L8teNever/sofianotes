@@ -93,33 +93,139 @@
     return Math.max(1, size * (0.3 + 0.7 * p));
   }
 
+  function catmullRomPoint(p0, p1, p2, p3, t) {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return {
+      x: 0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+      y: 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      p: (p1.p || 0.5) * (1 - t) + (p2.p || 0.5) * t,
+    };
+  }
+
+  function densifyStroke(pts) {
+    if (pts.length < 3) return pts;
+    const out = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i === 0 ? 0 : i - 1];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const steps = Math.max(1, Math.min(10, Math.ceil(segLen / 3.5)));
+      for (let s = 0; s < steps; s++) {
+        out.push(catmullRomPoint(p0, p1, p2, p3, s / steps));
+      }
+    }
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
+
+  function looksLikePolygon(pts) {
+    if (pts.length === 2) return true;
+    if (pts.length < 3 || pts.length > 6) return false;
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    return Math.hypot(a.x - b.x, a.y - b.y) < 6;
+  }
+
+  function drawRibbon(pts, size, color, alpha, constantWidth) {
+    const radii = new Array(pts.length);
+    for (let i = 0; i < pts.length; i++) {
+      radii[i] = constantWidth ? size / 2 : widthAt(size, pts[i].p) / 2;
+    }
+    if (!constantWidth) {
+      for (let pass = 0; pass < 2; pass++) {
+        const next = radii.slice();
+        for (let i = 1; i < radii.length - 1; i++) next[i] = (radii[i - 1] + radii[i] * 2 + radii[i + 1]) / 4;
+        for (let i = 1; i < radii.length - 1; i++) radii[i] = next[i];
+      }
+    }
+
+    const left = new Array(pts.length);
+    const right = new Array(pts.length);
+    for (let i = 0; i < pts.length; i++) {
+      const prev = pts[i === 0 ? 0 : i - 1];
+      const next = pts[i === pts.length - 1 ? i : i + 1];
+      let dx = next.x - prev.x;
+      let dy = next.y - prev.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) {
+        dx = 1;
+        dy = 0;
+      } else {
+        dx /= len;
+        dy /= len;
+      }
+      const nx = -dy;
+      const ny = dx;
+      const r = radii[i];
+      left[i] = { x: pts[i].x + nx * r, y: pts[i].y + ny * r };
+      right[i] = { x: pts[i].x - nx * r, y: pts[i].y - ny * r };
+    }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(left[0].x, left[0].y);
+    for (let i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
+    for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(pts[0].x, pts[0].y, radii[0], 0, Math.PI * 2);
+    ctx.arc(pts[pts.length - 1].x, pts[pts.length - 1].y, radii[radii.length - 1], 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPolylineStroke(pts, size, color, alpha, constantWidth) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    if (constantWidth) {
+      ctx.lineWidth = size;
+      ctx.stroke();
+    } else {
+      // wenige Punkte (erkannte Formen): trotzdem eine durchgehende Linie,
+      // Breite aus mittlerem Druck, keine Perlen durch Einzel-Segmente
+      let pSum = 0;
+      for (const p of pts) pSum += p.p || 0.5;
+      ctx.lineWidth = widthAt(size, pSum / pts.length);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawStroke(stroke) {
     const pts = stroke.points;
     if (pts.length === 0) return;
     const isMarker = stroke.tool === "marker";
-    ctx.globalAlpha = isMarker ? 0.35 : 1;
+    const alpha = isMarker ? 0.38 : 1;
     if (pts.length === 1) {
       const p = pts[0];
+      ctx.save();
+      ctx.globalAlpha = alpha;
       ctx.beginPath();
       ctx.fillStyle = stroke.color;
-      ctx.arc(p.x, p.y, widthAt(stroke.size, p.p) / 2, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, (isMarker ? stroke.size : widthAt(stroke.size, p.p)) / 2, 0, Math.PI * 2);
       ctx.fill();
-      ctx.globalAlpha = 1;
+      ctx.restore();
       return;
     }
-    ctx.strokeStyle = stroke.color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1];
-      const b = pts[i];
-      ctx.beginPath();
-      ctx.lineWidth = widthAt(stroke.size, (a.p + b.p) / 2);
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
+    if (looksLikePolygon(pts)) {
+      drawPolylineStroke(pts, stroke.size, stroke.color, alpha, isMarker);
+      return;
     }
-    ctx.globalAlpha = 1;
+    const dense = densifyStroke(pts);
+    drawRibbon(dense, stroke.size, stroke.color, alpha, isMarker);
   }
 
   function drawGrid() {
@@ -576,6 +682,212 @@
     return section(points);
   }
 
+  function resampleByLength(points, spacing) {
+    if (points.length < 2) return points.slice();
+    const out = [{ x: points[0].x, y: points[0].y, p: points[0].p }];
+    let acc = 0;
+    for (let i = 1; i < points.length; i++) {
+      let x0 = points[i - 1].x;
+      let y0 = points[i - 1].y;
+      const x1 = points[i].x;
+      const y1 = points[i].y;
+      let dx = x1 - x0;
+      let dy = y1 - y0;
+      let dist = Math.hypot(dx, dy);
+      if (dist === 0) continue;
+      while (acc + dist >= spacing) {
+        const t = (spacing - acc) / dist;
+        x0 += dx * t;
+        y0 += dy * t;
+        out.push({ x: x0, y: y0, p: points[i].p });
+        dx = x1 - x0;
+        dy = y1 - y0;
+        dist = Math.hypot(dx, dy);
+        acc = 0;
+      }
+      acc += dist;
+    }
+    const last = points[points.length - 1];
+    const tail = out[out.length - 1];
+    if (Math.hypot(last.x - tail.x, last.y - tail.y) > 0.5) out.push({ x: last.x, y: last.y, p: last.p });
+    return out;
+  }
+
+  function turnAbs(a, b, c) {
+    const v1x = b.x - a.x, v1y = b.y - a.y;
+    const v2x = c.x - b.x, v2y = c.y - b.y;
+    const l1 = Math.hypot(v1x, v1y);
+    const l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) return 0;
+    const cross = v1x * v2y - v1y * v2x;
+    const dot = v1x * v2x + v1y * v2y;
+    return Math.abs(Math.atan2(cross, dot));
+  }
+
+  function findDominantCorners(rawPoints, diagonal, closed) {
+    const spacing = Math.max(3, diagonal * 0.018);
+    const pts = resampleByLength(rawPoints, spacing);
+    const n = pts.length;
+    if (n < 6) return rdpSimplify(rawPoints, diagonal * 0.05);
+
+    const k = Math.max(2, Math.round((diagonal * 0.045) / spacing));
+    const scores = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (!closed && (i < k || i >= n - k)) continue;
+      const a = pts[(i - k + n) % n];
+      const b = pts[i];
+      const c = pts[(i + k) % n];
+      scores[i] = turnAbs(a, b, c);
+    }
+
+    const minAngle = (28 * Math.PI) / 180;
+    const minSep = Math.max(4, Math.round((diagonal * 0.12) / spacing));
+    const peaks = [];
+    for (let i = 0; i < n; i++) {
+      if (scores[i] < minAngle) continue;
+      let isMax = true;
+      for (let d = 1; d <= minSep; d++) {
+        const j = (i + d) % n;
+        const h = (i - d + n) % n;
+        if (scores[j] > scores[i] || scores[h] > scores[i]) {
+          isMax = false;
+          break;
+        }
+      }
+      if (isMax) peaks.push({ i, score: scores[i], p: pts[i] });
+    }
+    peaks.sort((a, b) => b.score - a.score);
+
+    const chosen = [];
+    for (const peak of peaks) {
+      const tooClose = chosen.some((c) => {
+        const di = Math.abs(c.i - peak.i);
+        return Math.min(di, n - di) < minSep;
+      });
+      if (!tooClose) chosen.push(peak);
+    }
+    chosen.sort((a, b) => a.i - b.i);
+
+    if (chosen.length >= 3 && chosen.length <= 6) return chosen.map((c) => ({ x: c.p.x, y: c.p.y }));
+
+    // Fallback: RDP mit etwas groesserem Epsilon, damit zitternde Rechtecke
+    // auf vier Ecken zusammenfallen statt in viele Mini-Knicke.
+    const simplified = rdpSimplify(rawPoints, diagonal * 0.07);
+    if (closed && simplified.length >= 4) return simplified.slice(0, simplified.length - 1);
+    return simplified;
+  }
+
+  function collapseToQuad(corners, diagonal) {
+    if (corners.length === 4) return corners;
+    if (corners.length !== 5 && corners.length !== 6) return null;
+    // Schwaechste / kuerzeste Ecke(n) weglassen, bis vier uebrig sind.
+    let pts = corners.map((p) => ({ x: p.x, y: p.y }));
+    while (pts.length > 4) {
+      let drop = 0;
+      let best = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[(i - 1 + pts.length) % pts.length];
+        const b = pts[i];
+        const c = pts[(i + 1) % pts.length];
+        const ang = turnAbs(a, b, c);
+        const arm = Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(c.x - b.x, c.y - b.y);
+        const score = ang * arm;
+        if (score < best) {
+          best = score;
+          drop = i;
+        }
+      }
+      pts.splice(drop, 1);
+    }
+    const minSide = Math.min(
+      ...pts.map((p, i) => {
+        const q = pts[(i + 1) % 4];
+        return Math.hypot(q.x - p.x, q.y - p.y);
+      })
+    );
+    if (minSide < diagonal * 0.12) return null;
+    return pts;
+  }
+
+  function orderCornersCcw(corners) {
+    const cx = corners.reduce((s, p) => s + p.x, 0) / corners.length;
+    const cy = corners.reduce((s, p) => s + p.y, 0) / corners.length;
+    return corners.slice().sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+  }
+
+  function fitOrientedRect(corners, avgPressure) {
+    const pts = orderCornersCcw(corners);
+    let bestLen = 0;
+    let ux = 1, uy = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len > bestLen) {
+        bestLen = len;
+        ux = dx / len;
+        uy = dy / len;
+      }
+    }
+    // Nahezu achsenparallel: aufs Bounding-Box-Rechteck einrasten.
+    const angle = Math.atan2(uy, ux);
+    const snapped = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
+    if (Math.abs(angle - snapped) < (15 * Math.PI) / 180) {
+      ux = Math.cos(snapped);
+      uy = Math.sin(snapped);
+    }
+    const vx = -uy, vy = ux;
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (const p of pts) {
+      const u = p.x * ux + p.y * uy;
+      const v = p.x * vx + p.y * vy;
+      if (u < minU) minU = u;
+      if (u > maxU) maxU = u;
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    let du = maxU - minU;
+    let dv = maxV - minV;
+    if (du > 0 && Math.abs(du - dv) / Math.max(du, dv) < 0.22) {
+      const side = (du + dv) / 2;
+      const cu = (minU + maxU) / 2;
+      const cv = (minV + maxV) / 2;
+      minU = cu - side / 2;
+      maxU = cu + side / 2;
+      minV = cv - side / 2;
+      maxV = cv + side / 2;
+    }
+    const cornerAt = (u, v) => ({ x: u * ux + v * vx, y: u * uy + v * vy, p: avgPressure });
+    const quad = [cornerAt(minU, minV), cornerAt(maxU, minV), cornerAt(maxU, maxV), cornerAt(minU, maxV)];
+    return [...quad, quad[0]];
+  }
+
+  function bboxEdgeFraction(points, bbox) {
+    const w = bbox.maxX - bbox.minX;
+    const h = bbox.maxY - bbox.minY;
+    const tol = Math.max(5, Math.min(w, h) * 0.14);
+    let near = 0;
+    for (const p of points) {
+      const de = Math.min(
+        Math.abs(p.x - bbox.minX),
+        Math.abs(p.x - bbox.maxX),
+        Math.abs(p.y - bbox.minY),
+        Math.abs(p.y - bbox.maxY)
+      );
+      if (de <= tol) near++;
+    }
+    return near / points.length;
+  }
+
+  function makeEllipsePoints(cx, cy, rx, ry, avgPressure, n) {
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const t = (i / n) * Math.PI * 2;
+      pts.push({ x: cx + rx * Math.cos(t), y: cy + ry * Math.sin(t), p: avgPressure });
+    }
+    return pts;
+  }
+
   function detectShape(rawPoints) {
     if (rawPoints.length < 6) return null;
     const bbox = makeBBox(rawPoints);
@@ -590,7 +902,7 @@
     let pathLength = 0;
     for (let i = 1; i < rawPoints.length; i++) pathLength += Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
 
-    const closed = startEndDist < diagonal * 0.3;
+    const closed = startEndDist < diagonal * 0.38;
 
     if (!closed) {
       let maxDev = 0;
@@ -604,7 +916,6 @@
       return null;
     }
 
-    // geschlossene Form: Kreis/Ellipse oder Ecken-basiert (Dreieck/Rechteck)
     const cx = (bbox.minX + bbox.maxX) / 2, cy = (bbox.minY + bbox.maxY) / 2;
     const centroid = rawPoints.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
     centroid.x /= rawPoints.length;
@@ -613,51 +924,42 @@
     const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
     const variance = radii.reduce((a, r) => a + (r - meanR) * (r - meanR), 0) / radii.length;
     const circleFit = meanR > 0 ? Math.sqrt(variance) / meanR : 1;
+    const periFit = meanR > 0 ? Math.abs(pathLength - 2 * Math.PI * meanR) / (2 * Math.PI * meanR) : 1;
+    const aspectDiff = Math.max(w, h) > 0 ? Math.abs(w - h) / Math.max(w, h) : 1;
+    const boxy = bboxEdgeFraction(rawPoints, bbox);
+    const circular = circleFit < 0.28 && periFit < 0.32 && boxy < 0.55;
 
-    if (circleFit < 0.2) {
-      const rx = w / 2, ry = h / 2;
-      const aspectDiff = Math.abs(rx - ry) / Math.max(rx, ry);
-      const useCircle = aspectDiff < 0.15;
-      const N = 64;
-      const pts = [];
-      for (let i = 0; i <= N; i++) {
-        const t = (i / N) * Math.PI * 2;
-        pts.push({
-          x: cx + (useCircle ? meanR : rx) * Math.cos(t),
-          y: cy + (useCircle ? meanR : ry) * Math.sin(t),
-          p: avgPressure,
-        });
-      }
-      return { type: "circle", points: pts };
+    const corners = findDominantCorners(rawPoints, diagonal, true);
+    const quad = collapseToQuad(corners, diagonal);
+    const preferCircleOverQuad = circular && boxy < 0.42 && circleFit < 0.16;
+
+    // Rechteck/Quadrat hat Vorrang vor Kreis, sobald vier Ecken da sind
+    // (auch wenn die Winkel nicht sauber 90° sind).
+    if (quad && quad.length === 4 && !preferCircleOverQuad) {
+      return { type: "rectangle", points: fitOrientedRect(quad, avgPressure) };
+    }
+    if (boxy >= 0.62 && !circular) {
+      const aabb = [
+        { x: bbox.minX, y: bbox.minY, p: avgPressure },
+        { x: bbox.maxX, y: bbox.minY, p: avgPressure },
+        { x: bbox.maxX, y: bbox.maxY, p: avgPressure },
+        { x: bbox.minX, y: bbox.maxY, p: avgPressure },
+      ];
+      return { type: "rectangle", points: [...aabb, aabb[0]] };
     }
 
-    const simplified = rdpSimplify(rawPoints, diagonal * 0.06);
-    const corners = simplified.slice(0, simplified.length - 1); // letzter Punkt ~ erster (geschlossen)
-    if (corners.length === 3) {
+    if (corners.length === 3 && !(circular && circleFit < 0.18)) {
       return {
         type: "triangle",
         points: [...corners, corners[0]].map((p) => ({ x: p.x, y: p.y, p: avgPressure })),
       };
     }
-    if (corners.length === 4) {
-      const nearBBox = corners.every((p) => {
-        const dCorner = Math.min(
-          Math.hypot(p.x - bbox.minX, p.y - bbox.minY),
-          Math.hypot(p.x - bbox.maxX, p.y - bbox.minY),
-          Math.hypot(p.x - bbox.maxX, p.y - bbox.maxY),
-          Math.hypot(p.x - bbox.minX, p.y - bbox.maxY)
-        );
-        return dCorner < diagonal * 0.12;
-      });
-      const quad = nearBBox
-        ? [
-            { x: bbox.minX, y: bbox.minY },
-            { x: bbox.maxX, y: bbox.minY },
-            { x: bbox.maxX, y: bbox.maxY },
-            { x: bbox.minX, y: bbox.maxY },
-          ]
-        : corners;
-      return { type: "rectangle", points: [...quad, quad[0]].map((p) => ({ x: p.x, y: p.y, p: avgPressure })) };
+
+    if (circular || (circleFit < 0.22 && periFit < 0.28)) {
+      const useCircle = aspectDiff < 0.18;
+      const rx = useCircle ? meanR : w / 2;
+      const ry = useCircle ? meanR : h / 2;
+      return { type: "circle", points: makeEllipsePoints(cx, cy, rx, ry, avgPressure, 96) };
     }
     return null;
   }
