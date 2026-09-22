@@ -225,7 +225,12 @@
       return;
     }
     const dense = densifyStroke(pts);
-    drawRibbon(dense, stroke.size, stroke.color, alpha, isMarker);
+    if (isMarker) {
+      // eine durchgehende Linie: keine dunklen Perlen durch ueberlappende Alpha-Caps
+      drawPolylineStroke(dense, stroke.size, stroke.color, alpha, true);
+      return;
+    }
+    drawRibbon(dense, stroke.size, stroke.color, alpha, false);
   }
 
   function drawGrid() {
