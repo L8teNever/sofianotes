@@ -71,6 +71,17 @@ def clean_text(raw: str) -> str:
         s = lines[-1]
     s = _PREFIX.sub("", s).strip().strip("`\"'")
     s = s.replace("×", "x").replace("÷", "/").replace("—", "-").replace("–", "-")
+    if re.search(r"\b(image|shows|background|number|digit|character)\b", s, re.I):
+        named = re.search(r"(?:number|digit|character|says|reads)\s+['\"]?([0-9A-Za-z+\-*/=xX]{1,24})", s, re.I)
+        if named:
+            s = named.group(1)
+        else:
+            quoted = re.search(r"['\"]([^'\"]{1,24})['\"]", s)
+            if quoted:
+                s = quoted.group(1)
+            else:
+                tokens = re.findall(r"[0-9A-Za-z+\-*/=xX^()]+", s)
+                s = max(tokens, key=len) if tokens else s
     if re.search(r"[0-9+\-*/=xX^]", s):
         s = re.sub(r"\s+", "", s)
     else:
@@ -85,7 +96,7 @@ def _post(image_data_uri: str, prefer_digits: bool) -> dict:
     url = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{MODEL}"
     body = {
         "image": image_data_uri,
-        "prompt": DIGIT_PROMPT if prefer_digits else TEXT_PROMPT,
+        "question": DIGIT_PROMPT if prefer_digits else TEXT_PROMPT,
         "task": "query",
         "reasoning": False,
         "temperature": 0,

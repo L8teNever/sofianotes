@@ -18,6 +18,10 @@ class CloudflareOcrTests(unittest.TestCase):
         self.assertEqual(clean_text("The handwritten text says: 12 + 34"), "12+34")
         self.assertEqual(clean_text("`7`"), "7")
         self.assertEqual(clean_text("Hallo"), "Hallo")
+        self.assertEqual(
+            clean_text("The image shows a large, bold, black number 7 on a white background."),
+            "7",
+        )
 
     def test_clean_empty(self):
         self.assertEqual(clean_text("   "), "")
