@@ -4,45 +4,162 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>sofianotes</title>
-<meta name="theme-color" content="#ece9e3" />
+<meta name="theme-color" content="#F8F9FA" />
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <link rel="icon" href="icons/favicon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="sofianotes" />
-<link rel="stylesheet" href="style.css?v=4" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=add,arrow_back,arrow_downward,arrow_forward,arrow_upward,brush,crop_landscape,crop_square,description,download,drag_indicator,edit,gesture,grain,grid_4x4,hexagon,highlight,palette,redo,remove,reorder,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
+<link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
 <canvas id="board"></canvas>
 <div id="eraser-cursor"></div>
 
-<div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
-<div id="zoom-indicator">100%</div>
+<div id="guide-top" class="drag-guide"></div>
+<div id="guide-bottom" class="drag-guide"></div>
+<div id="guide-left" class="drag-guide"></div>
+<div id="guide-right" class="drag-guide"></div>
 
-<div id="toolbar">
-  <button id="undo-btn" class="tool-btn" title="Rückgängig (Strg/Cmd+Z)">↩️</button>
-  <button id="redo-btn" class="tool-btn" title="Wiederholen (Strg/Cmd+Shift+Z)">↪️</button>
-  <button id="export-btn" class="tool-btn" title="GoodNotes-Datei herunterladen (liegt auch auf dem Server unter data/sofianotes.goodnotes)">📓</button>
-  <div class="divider"></div>
-  <button class="tool-btn active" data-tool="pen" title="Stift">✏️</button>
-  <button class="tool-btn" data-tool="marker" title="Textmarker">🖍️</button>
-  <button class="tool-btn" data-tool="eraser" title="Radiergummi">🧹</button>
-  <button class="tool-btn" data-tool="select" title="Auswahl (Lasso) — markieren &amp; verschieben">👆</button>
-  <div class="divider"></div>
-  <button id="shape-toggle" class="tool-btn active" title="Formen-Erkennung (Kreis/Rechteck/Dreieck/Linie beim Halten erkennen)">🔷</button>
-  <button id="finger-draw-toggle" class="tool-btn" title="Mit dem Finger zeichnen erlauben (sonst nur Pencil/Maus, Finger = Navigation)">🖐️</button>
-  <div class="divider"></div>
-  <button class="swatch active" style="background:#1c1c1e" data-color="#1c1c1e"></button>
-  <button class="swatch" style="background:#e63946" data-color="#e63946"></button>
-  <button class="swatch" style="background:#2a6f97" data-color="#2a6f97"></button>
-  <button class="swatch" style="background:#2a9d59" data-color="#2a9d59"></button>
-  <button class="swatch" style="background:#f4a300" data-color="#f4a300"></button>
-  <div class="divider"></div>
-  <input type="range" id="size-slider" min="1" max="40" value="4" />
-</div>
+<header id="top-filename-bar">
+  <div class="file-icon">
+    <span class="material-symbols-rounded">description</span>
+  </div>
+  <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" />
+  <div class="bar-divider"></div>
+  <div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
+  <button id="export-btn" class="icon-btn" title="GoodNotes-Datei herunterladen">
+    <span class="material-symbols-rounded">download</span>
+  </button>
+</header>
 
-<script src="app.js?v=4"></script>
+<aside id="undo-redo-dock" class="corner-top-left">
+  <div id="undo-drag-handle" class="m3-press drag-handle" title="In eine der 4 Ecken ziehen">
+    <span class="material-symbols-rounded">drag_indicator</span>
+  </div>
+  <button id="undo-btn" class="icon-btn" title="Rückgängig (Strg/Cmd+Z)" disabled>
+    <span class="material-symbols-rounded">undo</span>
+  </button>
+  <button id="redo-btn" class="icon-btn" title="Wiederholen (Strg/Cmd+Shift+Z)" disabled>
+    <span class="material-symbols-rounded">redo</span>
+  </button>
+  <div class="bar-divider"></div>
+  <div class="zoom-wrap">
+    <button id="btn-zoom-toggle" class="icon-btn" title="Zoom">
+      <span class="material-symbols-rounded">zoom_in</span>
+    </button>
+    <div id="zoom-popover" class="popover hidden">
+      <div class="popover-head">
+        <span>Zoom</span>
+        <span id="zoom-indicator" class="chip">100%</span>
+      </div>
+      <div class="zoom-row">
+        <button id="btn-zoom-out" class="icon-btn" title="Herauszoomen"><span class="material-symbols-rounded">remove</span></button>
+        <button id="btn-zoom-reset" class="text-btn" title="100%">100%</button>
+        <button id="btn-zoom-in" class="icon-btn" title="Hereinzoomen"><span class="material-symbols-rounded">add</span></button>
+      </div>
+      <div class="zoom-presets">
+        <button class="btn-zoom-preset" data-zoom="75">75%</button>
+        <button class="btn-zoom-preset" data-zoom="100">100%</button>
+        <button class="btn-zoom-preset" data-zoom="150">150%</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<nav id="toolbar" class="dock-bottom">
+  <div id="dock-drag-handle" class="m3-press drag-handle dock-grip" title="An einen Rand ziehen">
+    <span class="material-symbols-rounded">drag_indicator</span>
+  </div>
+
+  <div class="tools-container">
+    <div class="tool-wrapper">
+      <button class="tool-btn active" data-tool="pen" title="Stift">
+        <span class="material-symbols-rounded">edit</span>
+      </button>
+    </div>
+    <div class="tool-wrapper">
+      <button class="tool-btn" data-tool="marker" title="Textmarker">
+        <span class="material-symbols-rounded">highlight</span>
+      </button>
+    </div>
+    <div class="tool-wrapper">
+      <button class="tool-btn" data-tool="eraser" title="Radiergummi">
+        <span class="material-symbols-rounded">crop_square</span>
+      </button>
+    </div>
+    <div class="tool-wrapper">
+      <button class="tool-btn" data-tool="select" title="Auswahl (Lasso)">
+        <span class="material-symbols-rounded">gesture</span>
+      </button>
+    </div>
+
+    <div id="tool-popover" class="tool-popover hidden">
+      <div class="popover-head">
+        <span id="popover-tool-title">Stift Stärke</span>
+        <span id="popover-size-text" class="chip">6 px</span>
+      </div>
+      <div id="popover-presets" class="presets"></div>
+      <div class="slider-box">
+        <div class="slider-label">
+          <span>Individuell</span>
+          <span id="popover-brush-preview"></span>
+        </div>
+        <input id="size-slider" type="range" min="1" max="45" value="6" />
+      </div>
+    </div>
+  </div>
+
+  <div id="swatches-container">
+    <button class="swatch active" data-color="#1E1F22" style="background:#1E1F22" title="Schwarz"></button>
+    <button class="swatch" data-color="#EA4335" style="background:#EA4335" title="Rot"></button>
+    <button class="swatch" data-color="#1A73E8" style="background:#1A73E8" title="Blau"></button>
+    <button class="swatch" data-color="#34A853" style="background:#34A853" title="Grün"></button>
+    <button class="swatch" data-color="#FBBC04" style="background:#FBBC04" title="Gelb"></button>
+    <label class="custom-color" title="Eigene Farbe">
+      <input id="custom-color-input" type="color" value="#8b5cf6" />
+      <span class="material-symbols-rounded">palette</span>
+    </label>
+  </div>
+
+  <div class="dock-divider"></div>
+
+  <div class="settings-wrap">
+    <button id="btn-settings-toggle" class="icon-btn" title="Raster &amp; Einstellungen">
+      <span class="material-symbols-rounded">tune</span>
+    </button>
+    <div id="settings-popover" class="popover hidden">
+      <div class="popover-label">Papier-Raster</div>
+      <div class="grid-style-row">
+        <button class="btn-grid-style active" data-grid="graph"><span class="material-symbols-rounded">grid_4x4</span> Kariert</button>
+        <button class="btn-grid-style" data-grid="dots"><span class="material-symbols-rounded">grain</span> Punkte</button>
+        <button class="btn-grid-style" data-grid="lines"><span class="material-symbols-rounded">reorder</span> Liniert</button>
+        <button class="btn-grid-style" data-grid="blank"><span class="material-symbols-rounded">crop_landscape</span> Blanko</button>
+      </div>
+      <div class="popover-label">Leiste</div>
+      <div class="dock-quick-row">
+        <button class="btn-dock-quick" data-pos="top" title="Oben"><span class="material-symbols-rounded">arrow_upward</span></button>
+        <button class="btn-dock-quick" data-pos="bottom" title="Unten"><span class="material-symbols-rounded">arrow_downward</span></button>
+        <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span></button>
+        <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span></button>
+      </div>
+      <div class="popover-label">Zeichnen</div>
+      <button id="shape-toggle" class="setting-toggle active" title="Formen-Erkennung">
+        <span class="material-symbols-rounded">hexagon</span> Formen erkennen
+      </button>
+      <button id="finger-draw-toggle" class="setting-toggle" title="Mit dem Finger zeichnen">
+        <span class="material-symbols-rounded">touch_app</span> Finger zeichnet
+      </button>
+    </div>
+  </div>
+</nav>
+
+<script src="app.js?v=5"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

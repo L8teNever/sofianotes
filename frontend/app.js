@@ -233,24 +233,42 @@
     drawRibbon(dense, stroke.size, stroke.color, alpha, false);
   }
 
+  let gridStyle = "graph";
+
   function drawGrid() {
+    if (gridStyle === "blank") return;
     const topLeft = screenToWorld(0, 0);
     const bottomRight = screenToWorld(window.innerWidth, window.innerHeight);
     const startX = Math.floor(topLeft.x / GRID_SIZE) * GRID_SIZE;
     const startY = Math.floor(topLeft.y / GRID_SIZE) * GRID_SIZE;
 
+    if (gridStyle === "dots") {
+      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      const r = 1.15 / scale;
+      for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
+        for (let y = startY; y <= bottomRight.y; y += GRID_SIZE) {
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      return;
+    }
+
     ctx.lineWidth = 1 / scale;
-    for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
-      const bold = Math.round(x / GRID_SIZE) % 4 === 0;
-      ctx.strokeStyle = bold ? "rgba(70,90,150,0.28)" : "rgba(70,90,150,0.14)";
-      ctx.beginPath();
-      ctx.moveTo(x, topLeft.y);
-      ctx.lineTo(x, bottomRight.y);
-      ctx.stroke();
+    if (gridStyle !== "lines") {
+      for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
+        const bold = Math.round(x / GRID_SIZE) % 4 === 0;
+        ctx.strokeStyle = bold ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
+        ctx.beginPath();
+        ctx.moveTo(x, topLeft.y);
+        ctx.lineTo(x, bottomRight.y);
+        ctx.stroke();
+      }
     }
     for (let y = startY; y <= bottomRight.y; y += GRID_SIZE) {
       const bold = Math.round(y / GRID_SIZE) % 4 === 0;
-      ctx.strokeStyle = bold ? "rgba(70,90,150,0.28)" : "rgba(70,90,150,0.14)";
+      ctx.strokeStyle = bold ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
       ctx.beginPath();
       ctx.moveTo(topLeft.x, y);
       ctx.lineTo(bottomRight.x, y);
@@ -287,7 +305,7 @@
 
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = "#ece9e3";
+    ctx.fillStyle = "#f8f9fa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
@@ -319,12 +337,32 @@
 
   // ---- toolbar ------------------------------------------------------
   let currentTool = "pen"; // pen | marker | eraser | select
-  let currentColor = "#1c1c1e";
-  let penSize = 4;
-  let markerSize = 18;
-  let eraserSize = 24;
+  let currentColor = "#1E1F22";
+  let penSize = 6;
+  let markerSize = 24;
+  let eraserSize = 28;
   let shapeRecognitionEnabled = true;
   let fingerDrawEnabled = false;
+
+  const toolConfigs = {
+    pen: { label: "Stift", min: 1, max: 45, presets: [3, 8, 20] },
+    marker: { label: "Marker", min: 6, max: 60, presets: [12, 24, 40] },
+    eraser: { label: "Radierer", min: 5, max: 80, presets: [12, 28, 55] },
+    select: { label: "Auswahl", min: 1, max: 20, presets: [] },
+  };
+
+  const toolPopover = document.getElementById("tool-popover");
+  const popoverTitle = document.getElementById("popover-tool-title");
+  const popoverSizeText = document.getElementById("popover-size-text");
+  const popoverPresets = document.getElementById("popover-presets");
+  const popoverPreview = document.getElementById("popover-brush-preview");
+  const settingsToggleBtn = document.getElementById("btn-settings-toggle");
+  const settingsPopover = document.getElementById("settings-popover");
+  const zoomToggleBtn = document.getElementById("btn-zoom-toggle");
+  const zoomPopover = document.getElementById("zoom-popover");
+  const filenameInput = document.getElementById("canvas-filename");
+  const topBar = document.getElementById("top-filename-bar");
+  const undoDock = document.getElementById("undo-redo-dock");
 
   function activeSize() {
     if (currentTool === "eraser") return eraserSize;
@@ -332,18 +370,108 @@
     return penSize;
   }
 
+  function setActiveSize(v) {
+    const n = Number(v);
+    if (currentTool === "eraser") eraserSize = n;
+    else if (currentTool === "marker") markerSize = n;
+    else penSize = n;
+  }
+
   function isInkTool(tool) {
     return tool === "pen" || tool === "marker";
   }
 
+  function hidePopovers() {
+    toolPopover.classList.add("hidden");
+    settingsPopover.classList.add("hidden");
+    zoomPopover.classList.add("hidden");
+  }
+
+  function hexToRgba(hex, alpha) {
+    let c = (hex || "#000").replace("#", "");
+    if (c.length === 3) c = c.split("").map((x) => x + x).join("");
+    const r = parseInt(c.slice(0, 2), 16) || 0;
+    const g = parseInt(c.slice(2, 4), 16) || 0;
+    const b = parseInt(c.slice(4, 6), 16) || 0;
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  function renderToolPopover() {
+    const cfg = toolConfigs[currentTool] || toolConfigs.pen;
+    const size = activeSize();
+    popoverTitle.textContent = cfg.label + " Stärke";
+    popoverSizeText.textContent = Math.round(size) + " px";
+    sizeSlider.min = String(cfg.min);
+    sizeSlider.max = String(cfg.max);
+    sizeSlider.value = String(size);
+    popoverPresets.innerHTML = "";
+    const names = ["Dünn", "Mittel", "Dick"];
+    cfg.presets.forEach((preset, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "preset-btn" + (preset === size ? " active" : "");
+      const dot = document.createElement("span");
+      dot.className = "preset-dot";
+      const px = 6 + i * 5;
+      dot.style.width = px + "px";
+      dot.style.height = px + "px";
+      if (currentTool === "marker") dot.style.background = hexToRgba(currentColor, 0.55);
+      else if (currentTool === "eraser") dot.style.background = "#94a3b8";
+      else dot.style.background = currentColor;
+      btn.appendChild(dot);
+      const lab = document.createElement("span");
+      lab.textContent = names[i] || String(preset);
+      btn.appendChild(lab);
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setActiveSize(preset);
+        renderToolPopover();
+        updateEraserCursorVisibility();
+      });
+      popoverPresets.appendChild(btn);
+    });
+    const previewPx = Math.min(22, Math.max(4, size / 2));
+    popoverPreview.style.width = previewPx + "px";
+    popoverPreview.style.height = previewPx + "px";
+    if (currentTool === "eraser") {
+      popoverPreview.style.background = "#e2e8f0";
+      popoverPreview.style.border = "1px solid #94a3b8";
+    } else if (currentTool === "marker") {
+      popoverPreview.style.background = hexToRgba(currentColor, 0.55);
+      popoverPreview.style.border = "none";
+    } else {
+      popoverPreview.style.background = currentColor;
+      popoverPreview.style.border = "none";
+    }
+  }
+
+  function setTool(tool, { openPopover } = {}) {
+    const already = currentTool === tool;
+    currentTool = tool;
+    toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tool === tool);
+    });
+    updateEraserCursorVisibility();
+    if (tool !== "select") clearSelection();
+    if (tool === "select") {
+      toolPopover.classList.add("hidden");
+      return;
+    }
+    renderToolPopover();
+    if (openPopover || already) {
+      if (already && !toolPopover.classList.contains("hidden")) toolPopover.classList.add("hidden");
+      else toolPopover.classList.remove("hidden");
+    } else {
+      toolPopover.classList.remove("hidden");
+    }
+    settingsPopover.classList.add("hidden");
+    zoomPopover.classList.add("hidden");
+  }
+
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      currentTool = btn.dataset.tool;
-      sizeSlider.value = String(activeSize());
-      updateEraserCursorVisibility();
-      if (currentTool !== "select") clearSelection();
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setTool(btn.dataset.tool, { openPopover: true });
     });
   });
   toolbarEl.querySelectorAll(".swatch").forEach((btn) => {
@@ -351,26 +479,198 @@
       toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       currentColor = btn.dataset.color;
+      renderToolPopover();
     });
   });
+  const customColorInput = document.getElementById("custom-color-input");
+  customColorInput.addEventListener("input", (e) => {
+    currentColor = e.target.value;
+    toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
+    renderToolPopover();
+  });
   sizeSlider.addEventListener("input", () => {
-    const v = Number(sizeSlider.value);
-    if (currentTool === "eraser") eraserSize = v * 2;
-    else if (currentTool === "marker") markerSize = v * 1.5;
-    else penSize = v;
+    setActiveSize(sizeSlider.value);
+    renderToolPopover();
     updateEraserCursorVisibility();
   });
-  sizeSlider.value = String(penSize);
 
-  shapeToggleEl.addEventListener("click", () => {
+  shapeToggleEl.addEventListener("click", (e) => {
+    e.stopPropagation();
     shapeRecognitionEnabled = !shapeRecognitionEnabled;
     shapeToggleEl.classList.toggle("active", shapeRecognitionEnabled);
   });
 
-  fingerDrawToggleEl.addEventListener("click", () => {
+  fingerDrawToggleEl.addEventListener("click", (e) => {
+    e.stopPropagation();
     fingerDrawEnabled = !fingerDrawEnabled;
     fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
   });
+
+  settingsToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toolPopover.classList.add("hidden");
+    zoomPopover.classList.add("hidden");
+    settingsPopover.classList.toggle("hidden");
+  });
+
+  document.querySelectorAll(".btn-grid-style").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      gridStyle = btn.dataset.grid;
+      localStorage.setItem("sofianotes-grid", gridStyle);
+      document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b === btn));
+      requestRedraw();
+    });
+  });
+
+  function applyZoomPercent(pct, cx, cy) {
+    const x = cx == null ? window.innerWidth / 2 : cx;
+    const y = cy == null ? window.innerHeight / 2 : cy;
+    const anchor = screenToWorld(x, y);
+    scale = clampZoom(pct / 100);
+    offsetX = x - anchor.x * scale;
+    offsetY = y - anchor.y * scale;
+    requestRedraw();
+    document.querySelectorAll(".btn-zoom-preset").forEach((b) => {
+      b.classList.toggle("active", Number(b.dataset.zoom) === Math.round(scale * 100));
+    });
+  }
+
+  zoomToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toolPopover.classList.add("hidden");
+    settingsPopover.classList.add("hidden");
+    zoomPopover.classList.toggle("hidden");
+  });
+  document.getElementById("btn-zoom-in").addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyZoomPercent(Math.round(scale * 100) + 15);
+  });
+  document.getElementById("btn-zoom-out").addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyZoomPercent(Math.round(scale * 100) - 15);
+  });
+  document.getElementById("btn-zoom-reset").addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyZoomPercent(100);
+  });
+  document.querySelectorAll(".btn-zoom-preset").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyZoomPercent(Number(btn.dataset.zoom));
+    });
+  });
+
+  // ---- movable docks ------------------------------------------------
+  function setDockPosition(pos) {
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+    toolbarEl.classList.add("dock-" + pos);
+    topBar.classList.toggle("pushed", pos === "top");
+    localStorage.setItem("sofianotes-dock", pos);
+  }
+  function setUndoCorner(corner) {
+    undoDock.className = "corner-" + corner;
+    localStorage.setItem("sofianotes-undo-corner", corner);
+  }
+
+  const guides = {
+    top: document.getElementById("guide-top"),
+    bottom: document.getElementById("guide-bottom"),
+    left: document.getElementById("guide-left"),
+    right: document.getElementById("guide-right"),
+  };
+  function showGuide(edge) {
+    Object.entries(guides).forEach(([k, el]) => el.classList.toggle("visible", k === edge));
+  }
+  function hideGuides() {
+    Object.values(guides).forEach((el) => el.classList.remove("visible"));
+  }
+  function nearestEdge(x, y) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const d = { top: y, bottom: h - y, left: x, right: w - x };
+    return Object.keys(d).reduce((a, b) => (d[a] < d[b] ? a : b));
+  }
+  function nearestCorner(x, y) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const opts = {
+      "top-left": Math.hypot(x, y),
+      "top-right": Math.hypot(w - x, y),
+      "bottom-left": Math.hypot(x, h - y),
+      "bottom-right": Math.hypot(w - x, h - y),
+    };
+    return Object.keys(opts).reduce((a, b) => (opts[a] < opts[b] ? a : b));
+  }
+
+  let dockDrag = null;
+  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hidePopovers();
+    dockDrag = "dock";
+    toolbarEl.classList.add("dragging");
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  document.getElementById("undo-drag-handle").addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hidePopovers();
+    dockDrag = "undo";
+    undoDock.classList.add("dragging");
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!dockDrag) return;
+    if (dockDrag === "dock") showGuide(nearestEdge(e.clientX, e.clientY));
+  });
+  window.addEventListener("pointerup", (e) => {
+    if (!dockDrag) return;
+    if (dockDrag === "dock") {
+      setDockPosition(nearestEdge(e.clientX, e.clientY));
+      toolbarEl.classList.remove("dragging");
+    } else {
+      setUndoCorner(nearestCorner(e.clientX, e.clientY));
+      undoDock.classList.remove("dragging");
+    }
+    hideGuides();
+    dockDrag = null;
+  });
+
+  document.querySelectorAll(".btn-dock-quick").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setDockPosition(btn.dataset.pos);
+      settingsPopover.classList.add("hidden");
+    });
+  });
+
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("#toolbar") || e.target.closest("#undo-redo-dock") || e.target.closest("#top-filename-bar")) return;
+    hidePopovers();
+  });
+
+  const savedDock = localStorage.getItem("sofianotes-dock") || "bottom";
+  const savedCorner = localStorage.getItem("sofianotes-undo-corner") || "top-left";
+  const savedGrid = localStorage.getItem("sofianotes-grid");
+  setDockPosition(savedDock);
+  setUndoCorner(savedCorner);
+  if (savedGrid) {
+    gridStyle = savedGrid;
+    document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b.dataset.grid === gridStyle));
+  }
+  if (filenameInput) {
+    const savedName = localStorage.getItem("sofianotes-filename");
+    if (savedName) filenameInput.value = savedName;
+    filenameInput.addEventListener("change", () => {
+      const v = filenameInput.value.trim() || "Unbenannte Skizze";
+      filenameInput.value = v;
+      localStorage.setItem("sofianotes-filename", v);
+      document.title = v + " – sofianotes";
+    });
+    filenameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") filenameInput.blur();
+    });
+  }
+  renderToolPopover();
 
   function updateEraserCursorVisibility() {
     if (currentTool !== "eraser") {
