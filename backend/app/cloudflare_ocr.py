@@ -26,7 +26,9 @@ DIGIT_PROMPT = (
 )
 TEXT_PROMPT = (
     "This is a school notebook whiteboard. "
-    "Transcribe the full handwritten word or phrase. Reply with ONLY that text. "
+    "Transcribe ALL handwritten ink in the image in one answer: words, "
+    "square roots √, and any math written underneath. "
+    "Reply with ONLY that text. "
     "Use neighboring letters as context to tell letters from digits "
     "(l vs 1, O vs 0, S vs 5, Z vs 2). "
     "Prefer real German or English words and keep umlauts ä ö ü ß. "
@@ -100,8 +102,8 @@ def clean_text(raw: str) -> str:
     else:
         s = re.sub(r"\s+", " ", s).strip()
     s = re.sub(r"[^" + KEEP_CHARS + r"]", "", s)
-    if len(s) > 80:
-        s = s[:80]
+    if len(s) > 96:
+        s = s[:96]
     return s.strip()
 
 
@@ -113,7 +115,7 @@ def _post(image_data_uri: str, prefer_digits: bool) -> dict:
         "task": "query",
         "reasoning": False,
         "temperature": 0,
-        "max_tokens": 80 if not prefer_digits else 48,
+        "max_tokens": 96 if not prefer_digits else 48,
         "stream": False,
     }
     req = urllib.request.Request(

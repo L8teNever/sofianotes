@@ -100,6 +100,32 @@ test("plus is a cross", () => {
   assert.equal(op.char, "+");
 });
 
+test("writing burst stops at a 2s pause", () => {
+  const a = line("a", 0, 0, 0, 20);
+  const b = line("b", 12, 0, 12, 20);
+  const c = line("c", 24, 0, 24, 20);
+  a.endedAt = 1000;
+  b.endedAt = 1500;
+  c.endedAt = 5000;
+  const burst = SofiaInk.writingBurst([a, b, c], { pauseMs: 2200, now: 5200 });
+  assert.equal(burst.map((s) => s.id).join(","), "c");
+  const mid = SofiaInk.writingBurst([a, b, c], { pauseMs: 2200, now: 1600 });
+  assert.equal(mid.map((s) => s.id).join(","), "a,b");
+});
+
+test("cluster blocks keep stacked text and math, split far ink", () => {
+  const top = line("t", 0, 0, 40, 0, 4);
+  const bot = line("m", 8, 28, 36, 28, 4);
+  const far = line("f", 220, 0, 250, 0, 4);
+  const blocks = SofiaInk.clusterBlocks([top, bot, far], 76);
+  assert.equal(blocks.length, 2);
+});
+
+test("solveFromBurst finds math under words", () => {
+  assert.equal(SofiaInk.solveFromBurst("Haus √9").text, "3");
+  assert.equal(SofiaInk.solveFromBurst("12+34=").text, "46");
+});
+
 test("glyphs 2cm apart are separate words", () => {
   const strokes = [line("a", 0, 0, 0, 24, 6), line("b", 200, 0, 200, 24, 6)];
   const groups = SofiaInk.clusterGlyphs(strokes);

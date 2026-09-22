@@ -654,6 +654,66 @@
     return groups;
   }
 
+  function writingBurst(strokes, opts) {
+    const pauseMs = (opts && opts.pauseMs) || 2200;
+    const now = (opts && opts.now) || (typeof performance !== "undefined" ? performance.now() : Date.now());
+    const ink = (strokes || [])
+      .filter(isLikelyHandwriting)
+      .filter((s) => s.endedAt && s.endedAt <= now)
+      .slice()
+      .sort((a, b) => a.endedAt - b.endedAt);
+    if (!ink.length) return [];
+    const last = ink[ink.length - 1];
+    if (now - last.endedAt > 30000) return [];
+    const burst = [last];
+    for (let i = ink.length - 2; i >= 0; i--) {
+      if (ink[i + 1].endedAt - ink[i].endedAt > pauseMs) break;
+      burst.push(ink[i]);
+    }
+    burst.reverse();
+    return burst;
+  }
+
+  function boxGapXY(a, b) {
+    const dx = Math.max(0, Math.max(a.minX, b.minX) - Math.min(a.maxX, b.maxX));
+    const dy = Math.max(0, Math.max(a.minY, b.minY) - Math.min(a.maxY, b.maxY));
+    return { dx, dy };
+  }
+
+  function clusterBlocks(strokes, gap) {
+    const ink = (strokes || [])
+      .filter(isLikelyHandwriting)
+      .map((s) => ({ ...s, bbox: s.bbox || bboxOfPoints(s.points || []) }));
+    if (!ink.length) return [];
+    const lim = Math.max(36, gap || DEFAULT_WORD_GAP);
+    const parent = ink.map((_, i) => i);
+    const find = (i) => {
+      if (parent[i] !== i) parent[i] = find(parent[i]);
+      return parent[i];
+    };
+    const unite = (i, j) => {
+      const a = find(i);
+      const b = find(j);
+      if (a !== b) parent[a] = b;
+    };
+    for (let i = 0; i < ink.length; i++) {
+      for (let j = i + 1; j < ink.length; j++) {
+        const g = boxGapXY(ink[i].bbox, ink[j].bbox);
+        if (g.dx <= lim && g.dy <= lim) unite(i, j);
+      }
+    }
+    const buckets = new Map();
+    ink.forEach((s, i) => {
+      const p = find(i);
+      if (!buckets.has(p)) buckets.set(p, []);
+      buckets.get(p).push(s);
+    });
+    return Array.from(buckets.values()).map((member) => ({
+      strokes: member,
+      bbox: unionBBox(member.map((m) => m.bbox)),
+    }));
+  }
+
   const MATH_CONFUSIONS = {
     O: "0",
     o: "0",
@@ -940,6 +1000,24 @@
     } catch (_err) {
       return null;
     }
+  }
+
+  function solveFromBurst(text) {
+    if (!text) return null;
+    const direct = solveMath(text);
+    if (direct) return direct;
+    const parts = String(text).split(/\s+/);
+    let last = null;
+    for (const p of parts) {
+      const hit = solveMath(p);
+      if (hit) last = hit;
+    }
+    const m = String(text).match(/[0-9√π(][0-9+\-*/=√π%().^x×]*[0-9π)]=?/);
+    if (m) {
+      const hit = solveMath(m[0]);
+      if (hit) last = hit;
+    }
+    return last;
   }
 
   function coalesceEqualsGlyphs(glyphs) {
@@ -1353,7 +1431,7 @@
     if (hasOp && !hasLetters) s = s.replace(/\s+/g, "");
     else s = s.replace(/\s+/g, " ").trim();
     s = s.replace(/[^0-9A-Za-zÄÖÜäöüß+\-*/=xX^().,√π% ]/g, "");
-    if (s.length > 80) s = s.slice(0, 80);
+    if (s.length > 96) s = s.slice(0, 96);
     return s.trim();
   }
 
@@ -1369,9 +1447,12 @@
     isLikelyHandwriting,
     detectOperator,
     clusterGlyphs,
+    writingBurst,
+    clusterBlocks,
     DEFAULT_WORD_GAP,
     parseMath,
     solveMath,
+    solveFromBurst,
     looksLikeMath,
     layoutInkOn,
     applyWordContext,

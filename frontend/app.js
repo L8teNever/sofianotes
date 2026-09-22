@@ -2401,8 +2401,7 @@
   let recognizeAbort = null;
   const dismissedInk = new Set();
   const ocrCache = new Map();
-  const RECOGNIZE_PAUSE_MS = 1100;
-  const OCR_BURST_MS = 8000;
+  const RECOGNIZE_PAUSE_MS = 2200;
   const PX_PER_CM = 96 / 2.54;
 
   fetch("/api/recognize")
@@ -2627,21 +2626,29 @@
     const ac = new AbortController();
     recognizeAbort = ac;
     const wordGap = recognizeWordGap();
+    const now = performance.now();
     let all = [];
+    let burst = [];
     let groups = [];
     try {
       all = Array.from(boardStrokes.values());
       pruneOcrCache(new Set(all.map((s) => s.id)));
-      groups = await SofiaInk.recognizeStrokes(all, {
-        focusId: lastRecognizeFocus,
-        windowMs: 20000,
-        preferDigits: mathSolveEnabled,
-        wordGap,
-      });
+      burst = SofiaInk.writingBurst(all, { pauseMs: RECOGNIZE_PAUSE_MS, now });
+      if (!burst.length && lastRecognizeFocus) {
+        const focus = all.find((s) => s.id === lastRecognizeFocus);
+        if (focus) burst = [focus];
+      }
+      groups = burst.length
+        ? await SofiaInk.recognizeStrokes(burst, {
+            recentOnly: false,
+            preferDigits: mathSolveEnabled,
+            wordGap,
+          })
+        : [];
       groups = groups.map((g) => {
         const hit = ocrCache.get(inkGroupKey(g));
         if (!hit) return g;
-        const solved = mathSolveEnabled ? SofiaInk.solveMath(hit.text) : null;
+        const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
         return { ...g, text: hit.text, math: !!(solved || SofiaInk.looksLikeMath(hit.text)), result: solved, source: "cloudflare" };
       });
       inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
@@ -2656,30 +2663,31 @@
       }
     }
 
-    if (cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
+    if (burst.length && cloudOcrEnabled !== false && recognizeAbort === ac && !ac.signal.aborted) {
       try {
-        const now = performance.now();
-        const recent = SofiaInk.filterRecentStrokes(all, {
-          focusId: lastRecognizeFocus,
-          windowMs: 20000,
-          now,
-        });
-        const clustered = SofiaInk.clusterGlyphs(recent, { wordGap });
+        const blocks = SofiaInk.clusterBlocks(burst, wordGap);
         const cloudGroups = [];
-        const pending = clustered.filter((cluster) => {
-          const strokes = cluster.glyphs.flatMap((g) => g.strokes);
-          if (!strokes.length) return false;
-          const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
-          if (ocrCache.has(key)) return false;
-          return strokes.some((s) => s.id === lastRecognizeFocus || (s.endedAt && now - s.endedAt <= OCR_BURST_MS));
-        });
-        const focused = pending.filter((c) => c.glyphs.some((g) => g.strokes.some((s) => s.id === lastRecognizeFocus)));
-        const toSend = (focused.length ? focused : pending).slice(0, 2);
-        for (const cluster of toSend) {
+        const toSend = blocks.slice(0, 2);
+        for (const block of toSend) {
           if (ac.signal.aborted) break;
-          const strokes = cluster.glyphs.flatMap((g) => g.strokes);
+          const strokes = block.strokes;
           const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
-          const localMatch = groups.find((g) => inkGroupKey(g) === key);
+          if (ocrCache.has(key)) {
+            const hit = ocrCache.get(key);
+            const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(hit.text) : null;
+            cloudGroups.push({
+              bbox: block.bbox,
+              glyphs: groups.filter((g) => (g.strokeIds || []).some((id) => strokes.some((s) => s.id === id))).flatMap((g) => g.glyphs || []),
+              text: hit.text,
+              math: !!(solved || SofiaInk.looksLikeMath(hit.text)),
+              result: solved,
+              strokeIds: strokes.map((s) => s.id),
+              source: "cloudflare",
+            });
+            continue;
+          }
+          const hasMath = groups.some((g) => g.math || g.mathish);
+          const hasLetters = groups.some((g) => /[A-Za-zÄÖÜäöüß]/.test(g.text || ""));
           const crop = renderInkCrop(strokes);
           const resp = await fetch("/api/recognize", {
             method: "POST",
@@ -2687,7 +2695,7 @@
             signal: ac.signal,
             body: JSON.stringify({
               image: crop.dataUrl,
-              preferDigits: !!(localMatch && (localMatch.math || localMatch.mathish)),
+              preferDigits: hasMath && !hasLetters,
             }),
           });
           if (!resp.ok) continue;
@@ -2701,10 +2709,10 @@
           const text = SofiaInk.cleanOcrText(data.text);
           if (!text) continue;
           ocrCache.set(key, { text });
-          const solved = mathSolveEnabled ? SofiaInk.solveMath(text) : null;
+          const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
           cloudGroups.push({
-            bbox: cluster.bbox,
-            glyphs: localMatch ? localMatch.glyphs : [],
+            bbox: block.bbox,
+            glyphs: groups.flatMap((g) => g.glyphs || []),
             text,
             math: !!(solved || SofiaInk.looksLikeMath(text)),
             result: solved,
@@ -2728,7 +2736,7 @@
       }
     }
     recognizeBusy = false;
-    if (recognizeAgain) scheduleRecognize(lastRecognizeFocus, 400);
+    if (recognizeAgain) scheduleRecognize(lastRecognizeFocus, RECOGNIZE_PAUSE_MS);
   }
 
   if (recognizeEnabled && window.SofiaInk) {
