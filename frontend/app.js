@@ -1715,9 +1715,12 @@
     requestRedraw();
   }
   function putStroke(stroke) {
-    const withBBox = { ...stroke, bbox: strokeWorldBBox(stroke), endedAt: performance.now() };
-    boardStrokes.set(withBBox.id, withBBox);
-    wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
+    const copy = cloneStroke(stroke);
+    copy.bbox = strokeWorldBBox(copy);
+    copy.endedAt = performance.now();
+    boardStrokes.set(copy.id, copy);
+    if (copy.tool === "image" && copy.extra && copy.extra.mediaId) ensureMedia(copy.extra.mediaId);
+    wsSend({ type: "stroke_move", stroke: serializeStroke(copy) });
   }
   function removeStrokes(ids) {
     for (const id of ids) boardStrokes.delete(id);
@@ -3319,6 +3322,28 @@
     requestRedraw();
   }
 
+  function eraseHitsStroke(stroke, sx, sy, r) {
+    const b = stroke.bbox || strokeWorldBBox(stroke);
+    if (!b) return false;
+    if (sx < b.minX - r || sx > b.maxX + r || sy < b.minY - r || sy > b.maxY + r) return false;
+    if (stroke.tool === "image") {
+      const quad = imageRotatedCorners(stroke);
+      if (quad.length === 4) return pointInPolygon({ x: sx, y: sy }, quad);
+      return sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY;
+    }
+    if (stroke.tool === "text") {
+      return sx >= b.minX - r && sx <= b.maxX + r && sy >= b.minY - r && sy <= b.maxY + r;
+    }
+    const hitR = r + (stroke.size || 6) / 2;
+    const pts = stroke.points || [];
+    if (pts.length === 0) return false;
+    if (pts.length === 1) return Math.hypot(pts[0].x - sx, pts[0].y - sy) <= hitR;
+    for (let i = 1; i < pts.length; i++) {
+      if (distPointToSeg({ x: sx, y: sy }, pts[i - 1], pts[i]) <= hitR) return true;
+    }
+    return false;
+  }
+
   function eraseSegment(x0, y0, x1, y1) {
     const r = eraserSize / 2;
     const dist = Math.hypot(x1 - x0, y1 - y0);
@@ -3329,24 +3354,9 @@
       const sy = y0 + (y1 - y0) * t;
       for (const stroke of boardStrokes.values()) {
         if (erasedThisGesture.has(stroke.id)) continue;
-        const b = stroke.bbox;
-        if (sx < b.minX - r || sx > b.maxX + r || sy < b.minY - r || sy > b.maxY + r) continue;
-        if (stroke.tool === "text" || stroke.tool === "image") {
-          if (sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY) {
-            erasedThisGesture.add(stroke.id);
-            erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
-          }
-          continue;
-        }
-        const hitR = r + stroke.size / 2;
-        for (const p of stroke.points) {
-          const dx = p.x - sx, dy = p.y - sy;
-          if (dx * dx + dy * dy <= hitR * hitR) {
-            erasedThisGesture.add(stroke.id);
-            erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
-            break;
-          }
-        }
+        if (!eraseHitsStroke(stroke, sx, sy, r)) continue;
+        erasedThisGesture.add(stroke.id);
+        erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
       }
     }
     if (erasedThisGesture.size > 0) {
