@@ -519,8 +519,12 @@
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     drawGrid();
 
+    for (const stroke of boardStrokes.values()) if (stroke.tool === "image") drawStroke(stroke);
+    for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
+
     // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
+    // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
     syncMarkerLayer();
     markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
@@ -533,9 +537,8 @@
     ctx.restore();
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
-    for (const stroke of boardStrokes.values()) if (stroke.tool === "image") drawStroke(stroke);
     for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
-    for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker") drawStroke(stroke);
+    for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
     drawLassoAndSelection();
