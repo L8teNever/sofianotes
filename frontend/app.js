@@ -66,6 +66,7 @@
   const remoteInProgress = new Map(); // strokeId -> stroke (owned by other client)
   let currentStroke = null; // own in-progress stroke
   let dirty = true;
+  let cropState = null;
   function requestRedraw() {
     dirty = true;
   }
@@ -242,6 +243,26 @@
     const c = target || ctx;
     const pts = stroke.points;
     if (pts.length === 0) return;
+    if (stroke.tool === "text") {
+      const label = (pts[0] && pts[0].text) || "";
+      if (!label) return;
+      c.save();
+      c.globalAlpha = 1;
+      c.fillStyle = stroke.color || "#0b57d0";
+      c.font = `600 ${Math.max(14, stroke.size || 22)}px Inter, sans-serif`;
+      c.textBaseline = "alphabetic";
+      c.textAlign = "left";
+      c.translate(pts[0].x, pts[0].y);
+      const rot = strokeRotation(stroke);
+      if (rot) c.rotate(rot);
+      c.fillText(label, 0, 0);
+      c.restore();
+      return;
+    }
+    if (stroke.tool === "image") {
+      drawImageStroke(c, stroke);
+      return;
+    }
     const isMarker = stroke.tool === "marker";
     const alpha = opts && opts.alpha != null ? opts.alpha : isMarker ? 0.38 : 1;
     if (pts.length === 1) {
@@ -255,12 +276,151 @@
       c.restore();
       return;
     }
-    if (looksLikePolygon(pts)) {
+    const taggedShape = stroke.extra && stroke.extra.shape;
+    if (
+      taggedShape === "rectangle" ||
+      taggedShape === "triangle" ||
+      taggedShape === "line" ||
+      looksLikePolygon(pts)
+    ) {
       drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false);
       return;
     }
     // feste Breite, glatte Kurve — Druckstaerke aendert die Dicke nicht
     drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
+  }
+
+  const mediaImages = new Map();
+
+  function ensureMedia(mediaId) {
+    if (!mediaId) return null;
+    let img = mediaImages.get(mediaId);
+    if (img) return img;
+    img = new Image();
+    img.decoding = "async";
+    img.onload = () => requestRedraw();
+    img.src = "/api/media/" + encodeURIComponent(mediaId);
+    img.onerror = () => {
+      if (!window.SofiaOffline) return;
+      SofiaOffline.getMedia(mediaId).then((blob) => {
+        if (!blob) return;
+        img.src = URL.createObjectURL(blob);
+      });
+    };
+    mediaImages.set(mediaId, img);
+    return img;
+  }
+
+  function imageDestRect(stroke) {
+    const pts = stroke.points || [];
+    if (pts.length < 2) return null;
+    const minX = Math.min(pts[0].x, pts[1].x);
+    const minY = Math.min(pts[0].y, pts[1].y);
+    const maxX = Math.max(pts[0].x, pts[1].x);
+    const maxY = Math.max(pts[0].y, pts[1].y);
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  }
+
+  function imageCrop(stroke) {
+    const c = (stroke.extra && stroke.extra.crop) || {};
+    const l = Math.max(0, Math.min(0.98, c.l == null ? 0 : c.l));
+    const t = Math.max(0, Math.min(0.98, c.t == null ? 0 : c.t));
+    const r = Math.max(l + 0.02, Math.min(1, c.r == null ? 1 : c.r));
+    const b = Math.max(t + 0.02, Math.min(1, c.b == null ? 1 : c.b));
+    return { l, t, r, b };
+  }
+
+  function imageFullRect(stroke) {
+    const dest = imageDestRect(stroke);
+    if (!dest) return null;
+    const crop = imageCrop(stroke);
+    const fw = dest.w / (crop.r - crop.l);
+    const fh = dest.h / (crop.b - crop.t);
+    const minX = dest.minX - crop.l * fw;
+    const minY = dest.minY - crop.t * fh;
+    return { minX, minY, maxX: minX + fw, maxY: minY + fh, w: fw, h: fh };
+  }
+
+  function rotatePoint(p, cx, cy, ang) {
+    const cos = Math.cos(ang);
+    const sin = Math.sin(ang);
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos, p: p.p, text: p.text };
+  }
+
+  function strokeRotation(stroke) {
+    const r = stroke && stroke.extra && stroke.extra.rotation;
+    return Number.isFinite(r) ? r : 0;
+  }
+
+  function imageRotatedCorners(stroke) {
+    const dest = imageDestRect(stroke);
+    if (!dest) return [];
+    const cx = dest.minX + dest.w / 2;
+    const cy = dest.minY + dest.h / 2;
+    const rot = strokeRotation(stroke);
+    const pts = [
+      { x: dest.minX, y: dest.minY },
+      { x: dest.maxX, y: dest.minY },
+      { x: dest.maxX, y: dest.maxY },
+      { x: dest.minX, y: dest.maxY },
+    ];
+    if (!rot) return pts;
+    return pts.map((p) => rotatePoint(p, cx, cy, rot));
+  }
+
+  function strokeWorldBBox(stroke) {
+    if (!stroke) return null;
+    if (stroke.tool === "image") {
+      const corners = imageRotatedCorners(stroke);
+      if (corners.length) return makeBBox(corners);
+    }
+    return makeBBox(stroke.points || []);
+  }
+
+  function drawImageStroke(c, stroke) {
+    const dest = imageDestRect(stroke);
+    if (!dest || dest.w < 1 || dest.h < 1) return;
+    const extra = stroke.extra || {};
+    const showingCrop = cropState && cropState.strokeId === stroke.id;
+    const rect = showingCrop ? cropState.full : dest;
+    const crop = showingCrop ? cropState.crop : imageCrop(stroke);
+    const img = ensureMedia(extra.mediaId);
+    c.save();
+    if (!img || !img.complete || !img.naturalWidth) {
+      c.fillStyle = "#e8eaed";
+      c.fillRect(dest.minX, dest.minY, dest.w, dest.h);
+      c.strokeStyle = "#9aa0a6";
+      c.lineWidth = 1.5 / scale;
+      c.strokeRect(dest.minX, dest.minY, dest.w, dest.h);
+      c.restore();
+      return;
+    }
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    const sx = crop.l * nw;
+    const sy = crop.t * nh;
+    const sw = Math.max(1, (crop.r - crop.l) * nw);
+    const sh = Math.max(1, (crop.b - crop.t) * nh);
+    if (showingCrop) {
+      c.globalAlpha = 0.38;
+      c.drawImage(img, rect.minX, rect.minY, rect.w, rect.h);
+      c.globalAlpha = 1;
+      const cx = rect.minX + crop.l * rect.w;
+      const cy = rect.minY + crop.t * rect.h;
+      const cw = (crop.r - crop.l) * rect.w;
+      const ch = (crop.b - crop.t) * rect.h;
+      c.drawImage(img, sx, sy, sw, sh, cx, cy, cw, ch);
+    } else {
+      const rot = strokeRotation(stroke);
+      const cx = dest.minX + dest.w / 2;
+      const cy = dest.minY + dest.h / 2;
+      c.translate(cx, cy);
+      if (rot) c.rotate(rot);
+      c.drawImage(img, sx, sy, sw, sh, -dest.w / 2, -dest.h / 2, dest.w, dest.h);
+    }
+    c.restore();
   }
 
   const markerLayer = document.createElement("canvas");
@@ -342,8 +502,102 @@
       const x = b.minX - pad, y = b.minY - pad, w = b.maxX - b.minX + pad * 2, h = b.maxY - b.minY + pad * 2;
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#3b6fe0";
+      ctx.lineWidth = 1.5 / scale;
+      const hs = 5 / scale;
+      for (const p of selectionHandlePoints(b, pad)) {
+        ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+        ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+      }
+      const rot = selectionRotateHandle(b, pad);
+      const midBottom = { x: (b.minX + b.maxX) / 2, y: b.maxY + pad };
+      ctx.beginPath();
+      ctx.moveTo(midBottom.x, midBottom.y);
+      ctx.lineTo(rot.x, rot.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rot.x, rot.y, 7 / scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#3b6fe0";
+      ctx.beginPath();
+      ctx.arc(rot.x, rot.y, 2.2 / scale, 0, Math.PI * 2);
+      ctx.fill();
+      const knots = selectedEditKnots();
+      const kr = 4.5 / scale;
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#0b57d0";
+      ctx.lineWidth = 1.6 / scale;
+      for (const k of knots) {
+        ctx.beginPath();
+        ctx.arc(k.x, k.y, kr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
       ctx.restore();
     }
+    if (cropState && cropState.full) {
+      const full = cropState.full;
+      const crop = cropState.crop;
+      const cx = full.minX + crop.l * full.w;
+      const cy = full.minY + crop.t * full.h;
+      const cw = (crop.r - crop.l) * full.w;
+      const ch = (crop.b - crop.t) * full.h;
+      ctx.save();
+      ctx.fillStyle = "rgba(15,23,42,0.35)";
+      ctx.fillRect(full.minX, full.minY, full.w, cy - full.minY);
+      ctx.fillRect(full.minX, cy + ch, full.w, full.maxY - (cy + ch));
+      ctx.fillRect(full.minX, cy, cx - full.minX, ch);
+      ctx.fillRect(cx + cw, cy, full.maxX - (cx + cw), ch);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2 / scale;
+      ctx.strokeRect(cx, cy, cw, ch);
+      ctx.fillStyle = "#fff";
+      const hs = 6 / scale;
+      for (const p of cropHandlePoints(full, crop)) {
+        ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+        ctx.strokeStyle = "#3b6fe0";
+        ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+      }
+      ctx.restore();
+    }
+    positionMediaToolbar();
+  }
+
+  function selectionHandlePoints(b, pad) {
+    const x0 = b.minX - pad, y0 = b.minY - pad, x1 = b.maxX + pad, y1 = b.maxY + pad;
+    return [
+      { name: "nw", x: x0, y: y0 },
+      { name: "ne", x: x1, y: y0 },
+      { name: "sw", x: x0, y: y1 },
+      { name: "se", x: x1, y: y1 },
+    ];
+  }
+
+  function selectionRotateHandle(b, pad) {
+    const lift = 26 / Math.max(scale, 0.25);
+    return { name: "rot", x: (b.minX + b.maxX) / 2, y: b.maxY + pad + lift };
+  }
+
+  function cropHandlePoints(full, crop) {
+    const x0 = full.minX + crop.l * full.w;
+    const y0 = full.minY + crop.t * full.h;
+    const x1 = full.minX + crop.r * full.w;
+    const y1 = full.minY + crop.b * full.h;
+    const mx = (x0 + x1) / 2;
+    const my = (y0 + y1) / 2;
+    return [
+      { name: "nw", x: x0, y: y0 },
+      { name: "n", x: mx, y: y0 },
+      { name: "ne", x: x1, y: y0 },
+      { name: "w", x: x0, y: my },
+      { name: "e", x: x1, y: my },
+      { name: "sw", x: x0, y: y1 },
+      { name: "s", x: mx, y: y1 },
+      { name: "se", x: x1, y: y1 },
+    ];
   }
 
   function draw() {
@@ -354,8 +608,12 @@
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     drawGrid();
 
+    for (const stroke of boardStrokes.values()) if (stroke.tool === "image") drawStroke(stroke);
+    for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
+
     // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
+    // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
     syncMarkerLayer();
     markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
     for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
@@ -368,11 +626,13 @@
     ctx.restore();
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
-    for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker") drawStroke(stroke);
-    for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker") drawStroke(stroke);
+    for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
+    for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
     drawLassoAndSelection();
+    positionInkChips();
+    positionScanBoxes();
 
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
@@ -393,8 +653,14 @@
   let penSize = 6;
   let markerSize = 24;
   let eraserSize = 28;
+  let selection = { ids: new Set(), bbox: null };
   let shapeRecognitionEnabled = true;
   let fingerDrawEnabled = false;
+  let mathSolveEnabled = localStorage.getItem("sofianotes-math") !== "0";
+  let eraserReturnEnabled = localStorage.getItem("sofianotes-eraser-return") !== "0";
+  let lastToolBeforeEraser = "pen";
+  let strokeClipboard = [];
+  let lastPointerWorld = null;
 
   const toolConfigs = {
     pen: { label: "Stift", min: 1, max: 45, presets: [3, 8, 20] },
@@ -409,7 +675,9 @@
   const popoverPresets = document.getElementById("popover-presets");
   const popoverPreview = document.getElementById("popover-brush-preview");
   const settingsToggleBtn = document.getElementById("btn-settings-toggle");
+  const settingsBackdrop = document.getElementById("settings-backdrop");
   const settingsPopover = document.getElementById("settings-popover");
+  const settingsCloseBtn = document.getElementById("btn-settings-close");
   const zoomToggleBtn = document.getElementById("btn-zoom-toggle");
   const zoomPopover = document.getElementById("zoom-popover");
   const filenameInput = document.getElementById("canvas-filename");
@@ -477,10 +745,16 @@
     toolPopover.style.top = top + "px";
   }
 
+  function hideSettings() {
+    if (settingsBackdrop) settingsBackdrop.classList.add("hidden");
+  }
+
   function hidePopovers() {
     toolPopover.classList.add("hidden");
-    settingsPopover.classList.add("hidden");
+    hideSettings();
     zoomPopover.classList.add("hidden");
+    hideEraseAllMenu();
+    hidePasteMenu();
   }
 
   function hexToRgba(hex, alpha) {
@@ -493,9 +767,13 @@
   }
 
   function renderToolPopover() {
-    const cfg = toolConfigs[currentTool] || toolConfigs.pen;
-    const size = activeSize();
-    popoverTitle.textContent = cfg.label + " Stärke";
+    const selected = typeof selectionInkStrokes === "function" ? selectionInkStrokes() : [];
+    const usingSel = selected.length > 0;
+    const cfg = usingSel
+      ? toolConfigs[selected[0].tool] || toolConfigs.pen
+      : toolConfigs[currentTool] || toolConfigs.pen;
+    const size = usingSel ? selected[0].size : activeSize();
+    popoverTitle.textContent = usingSel ? "Auswahl Stärke" : cfg.label + " Stärke";
     popoverSizeText.textContent = Math.round(size) + " px";
     sizeSlider.min = String(cfg.min);
     sizeSlider.max = String(cfg.max);
@@ -511,7 +789,7 @@
       const px = 6 + i * 5;
       dot.style.width = px + "px";
       dot.style.height = px + "px";
-      if (currentTool === "marker") dot.style.background = hexToRgba(currentColor, 0.55);
+      if (currentTool === "marker" && !usingSel) dot.style.background = hexToRgba(currentColor, 0.55);
       else if (currentTool === "eraser") dot.style.background = "#94a3b8";
       else dot.style.background = currentColor;
       btn.appendChild(dot);
@@ -521,6 +799,7 @@
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         setActiveSize(preset);
+        restyleSelection({ size: preset });
         renderToolPopover();
         updateEraserCursorVisibility();
       });
@@ -529,37 +808,46 @@
     const previewPx = Math.min(22, Math.max(4, size / 2));
     popoverPreview.style.width = previewPx + "px";
     popoverPreview.style.height = previewPx + "px";
-    if (currentTool === "eraser") {
+    const previewTool = usingSel ? selected[0].tool : currentTool;
+    if (previewTool === "eraser") {
       popoverPreview.style.background = "#e2e8f0";
       popoverPreview.style.border = "1px solid #94a3b8";
-    } else if (currentTool === "marker") {
+    } else if (previewTool === "marker") {
       popoverPreview.style.background = hexToRgba(currentColor, 0.55);
       popoverPreview.style.border = "none";
     } else {
       popoverPreview.style.background = currentColor;
       popoverPreview.style.border = "none";
     }
+    const clearRow = document.getElementById("eraser-clear-row");
+    if (clearRow) clearRow.classList.toggle("hidden", currentTool !== "eraser" || usingSel);
     if (!toolPopover.classList.contains("hidden")) positionToolPopover();
   }
 
   function setTool(tool, { openPopover } = {}) {
     const already = currentTool === tool;
+    if (tool === "eraser" && currentTool !== "eraser") {
+      lastToolBeforeEraser = currentTool || "pen";
+    }
     currentTool = tool;
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === tool);
     });
     updateEraserCursorVisibility();
-    if (tool !== "select") clearSelection();
-    settingsPopover.classList.add("hidden");
+    if (tool === "eraser") clearSelection();
+    hideSettings();
     zoomPopover.classList.add("hidden");
-    if (tool === "select") {
+    if (tool === "select" && selection.ids.size === 0) {
       toolPopover.classList.add("hidden");
       return;
     }
     renderToolPopover();
     if (!openPopover) return;
-    // Erst das Werkzeug wechseln, Menue nur beim zweiten Klick auf dasselbe.
-    if (!already) {
+    if (!already && tool !== "select") {
+      toolPopover.classList.add("hidden");
+      return;
+    }
+    if (tool === "select" && !already) {
       toolPopover.classList.add("hidden");
       return;
     }
@@ -571,9 +859,16 @@
     positionToolPopover();
   }
 
+  function restoreToolAfterEraser({ keepEraser } = {}) {
+    if (keepEraser || !eraserReturnEnabled || currentTool !== "eraser") return;
+    const next = lastToolBeforeEraser && lastToolBeforeEraser !== "eraser" ? lastToolBeforeEraser : "pen";
+    setTool(next);
+  }
+
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
     let ignoreClick = false;
     btn.addEventListener("pointerup", (e) => {
+      if (dockDrag && dockDrag.live) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
       const r = btn.getBoundingClientRect();
       if (e.clientX < r.left - 2 || e.clientX > r.right + 2 || e.clientY < r.top - 2 || e.clientY > r.bottom + 2) return;
@@ -594,6 +889,7 @@
       toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       currentColor = btn.dataset.color;
+      restyleSelection({ color: currentColor });
       renderToolPopover();
     });
   });
@@ -601,13 +897,29 @@
   customColorInput.addEventListener("input", (e) => {
     currentColor = e.target.value;
     toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
+    restyleSelection({ color: currentColor }, "color");
     renderToolPopover();
   });
   sizeSlider.addEventListener("input", () => {
     setActiveSize(sizeSlider.value);
+    restyleSelection({ size: Number(sizeSlider.value) }, "size");
     renderToolPopover();
     updateEraserCursorVisibility();
   });
+  const btnEraseAll = document.getElementById("btn-erase-all");
+  const btnEraseAllHere = document.getElementById("btn-erase-all-here");
+  if (btnEraseAll) {
+    btnEraseAll.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearAllInk();
+    });
+  }
+  if (btnEraseAllHere) {
+    btnEraseAllHere.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearAllInk();
+    });
+  }
 
   shapeToggleEl.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -621,12 +933,56 @@
     fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
   });
 
-  settingsToggleBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
+  const mathToggleEl = document.getElementById("math-toggle");
+  if (mathToggleEl) {
+    mathToggleEl.classList.toggle("active", mathSolveEnabled);
+    mathToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      mathSolveEnabled = !mathSolveEnabled;
+      localStorage.setItem("sofianotes-math", mathSolveEnabled ? "1" : "0");
+      mathToggleEl.classList.toggle("active", mathSolveEnabled);
+      renderInkOverlay();
+    });
+  }
+
+  const eraserReturnToggleEl = document.getElementById("eraser-return-toggle");
+  if (eraserReturnToggleEl) {
+    eraserReturnToggleEl.classList.toggle("active", eraserReturnEnabled);
+    eraserReturnToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      eraserReturnEnabled = !eraserReturnEnabled;
+      localStorage.setItem("sofianotes-eraser-return", eraserReturnEnabled ? "1" : "0");
+      eraserReturnToggleEl.classList.toggle("active", eraserReturnEnabled);
+    });
+  }
+
+  function openSettings() {
     toolPopover.classList.add("hidden");
     zoomPopover.classList.add("hidden");
-    settingsPopover.classList.toggle("hidden");
+    hideEraseAllMenu();
+    hidePasteMenu();
+    if (settingsBackdrop) settingsBackdrop.classList.remove("hidden");
+  }
+
+  settingsToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) hideSettings();
+    else openSettings();
   });
+  if (settingsCloseBtn) {
+    settingsCloseBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideSettings();
+    });
+  }
+  if (settingsBackdrop) {
+    settingsBackdrop.addEventListener("click", (e) => {
+      if (e.target === settingsBackdrop) hideSettings();
+    });
+  }
+  if (settingsPopover) {
+    settingsPopover.addEventListener("click", (e) => e.stopPropagation());
+  }
 
   document.querySelectorAll(".btn-grid-style").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -654,8 +1010,9 @@
   zoomToggleBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     toolPopover.classList.add("hidden");
-    settingsPopover.classList.add("hidden");
+    hideSettings();
     zoomPopover.classList.toggle("hidden");
+    if (!zoomPopover.classList.contains("hidden")) renderPeopleJumpList();
   });
   document.getElementById("btn-zoom-in").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -830,12 +1187,9 @@
   let dockDrag = null;
 
   function armDockDrag(kind, e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop")) return;
     e.preventDefault();
-    e.stopPropagation();
-    hidePopovers();
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch (err) {}
     const el = kind === "dock" ? toolbarEl : undoDock;
     dockDrag = {
       kind,
@@ -851,10 +1205,14 @@
       snap: null,
       timer: setTimeout(() => {
         if (!dockDrag || dockDrag.live) return;
+        hidePopovers();
         const r = liftDock(el, kind);
         dockDrag.live = true;
         dockDrag.grabDX = dockDrag.lastX - r.left;
         dockDrag.grabDY = dockDrag.lastY - r.top;
+        try {
+          el.setPointerCapture(dockDrag.pointerId);
+        } catch (err) {}
         moveDockDrag(dockDrag.lastX, dockDrag.lastY);
       }, DOCK_HOLD_MS),
     };
@@ -896,6 +1254,7 @@
     if (!dockDrag) return;
     clearTimeout(dockDrag.timer);
     const { kind, live, lastX, lastY, el } = dockDrag;
+    if (live) suppressDockClick = true;
     dockDrag = null;
     hideGuides();
     if (!live) return;
@@ -908,14 +1267,17 @@
     positionToolPopover();
   }
 
-  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    armDockDrag("dock", e);
-  });
-  document.getElementById("undo-drag-handle").addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    armDockDrag("undo", e);
-  });
+  let suppressDockClick = false;
+  function blockDockClick(e) {
+    if (!suppressDockClick) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressDockClick = false;
+  }
+  toolbarEl.addEventListener("click", blockDockClick, true);
+  undoDock.addEventListener("click", blockDockClick, true);
+  toolbarEl.addEventListener("pointerdown", (e) => armDockDrag("dock", e));
+  undoDock.addEventListener("pointerdown", (e) => armDockDrag("undo", e));
   window.addEventListener("pointermove", (e) => {
     if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
     dockDrag.lastX = e.clientX;
@@ -944,7 +1306,6 @@
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       setDockPosition(btn.dataset.pos);
-      settingsPopover.classList.add("hidden");
     });
   });
 
@@ -952,8 +1313,16 @@
     if (
       e.target.closest("#toolbar") ||
       e.target.closest("#tool-popover") ||
+      e.target.closest("#settings-popover") ||
+      e.target.closest("#erase-all-menu") ||
+      e.target.closest("#paste-menu") ||
+      e.target.closest("#selection-toolbar") ||
       e.target.closest("#undo-redo-dock") ||
-      e.target.closest("#top-filename-bar")
+      e.target.closest("#top-filename-bar") ||
+      e.target.closest("#who-backdrop") ||
+      e.target.closest("#library-backdrop") ||
+      e.target.closest("#share-backdrop") ||
+      e.target.closest("#move-backdrop")
     ) {
       return;
     }
@@ -970,13 +1339,19 @@
     document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b.dataset.grid === gridStyle));
   }
   if (filenameInput) {
-    const savedName = localStorage.getItem("sofianotes-filename");
-    if (savedName) filenameInput.value = savedName;
     filenameInput.addEventListener("change", () => {
       const v = filenameInput.value.trim() || "Unbenannte Skizze";
       filenameInput.value = v;
-      localStorage.setItem("sofianotes-filename", v);
       document.title = v + " – sofianotes";
+      if (currentBoardId && currentPersonId) {
+        fetch("/api/boards/" + encodeURIComponent(currentBoardId), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, title: v }),
+        }).catch(() => {
+          enqueueOp({ type: "board_rename", personId: currentPersonId, id: currentBoardId, title: v });
+        });
+      }
     });
     filenameInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") filenameInput.blur();
@@ -995,27 +1370,262 @@
   let myClientId = null;
   let myColor = null;
   let reconnectDelay = 1000;
+  let wantWs = false;
+  const PEOPLE = [
+    { id: "simon", name: "Simon" },
+    { id: "franz", name: "Franz" },
+    { id: "jungen", name: "Die Jungen" },
+  ];
+  let currentPersonId = localStorage.getItem("sofianotes-person") || "";
+  let currentBoardId = "";
+  let currentBoardMeta = null;
+  let currentFolderId = null;
+  let libraryCache = null;
+  const whoBackdrop = document.getElementById("who-backdrop");
+  const libraryBackdrop = document.getElementById("library-backdrop");
+  const shareBackdrop = document.getElementById("share-backdrop");
+  const moveBackdrop = document.getElementById("move-backdrop");
+  const whoChip = document.getElementById("btn-who-chip");
+
+  function personName(id) {
+    const p = PEOPLE.find((x) => x.id === id);
+    return p ? p.name : id;
+  }
 
   function wsSend(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+      scheduleSaveBoard();
+      return;
+    }
+    scheduleSaveBoard();
+    if (!currentBoardId || !currentPersonId) return;
+    if (obj.type === "stroke_end" && currentStroke) {
+      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: serializeStroke(currentStroke) });
+    } else if (obj.type === "stroke_move" && obj.stroke) {
+      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: obj.stroke });
+    } else if (obj.type === "erase" && obj.strokeIds) {
+      enqueueOp({ type: "stroke_erase", personId: currentPersonId, boardId: currentBoardId, strokeIds: obj.strokeIds });
+    }
+  }
+
+  function setConnState(mode) {
+    statusEl.classList.toggle("connected", mode === "live");
+    statusEl.classList.toggle("offline", mode === "offline");
+    statusEl.classList.toggle("sync", mode === "sync");
+    statusTextEl.textContent = mode === "live" ? "Live" : mode === "sync" ? "Sync…" : "Offline";
   }
 
   function setConnected(connected) {
-    statusEl.classList.toggle("connected", connected);
-    statusTextEl.textContent = connected ? "Live" : "Verbinde…";
+    setConnState(connected ? "live" : "offline");
+  }
+
+  let saveBoardTimer = null;
+  function scheduleSaveBoard() {
+    if (!currentBoardId || !window.SofiaOffline) return;
+    clearTimeout(saveBoardTimer);
+    saveBoardTimer = setTimeout(() => {
+      const list = Array.from(boardStrokes.values()).map(cloneStroke);
+      SofiaOffline.setStrokes(currentBoardId, list).catch(() => {});
+    }, 80);
+  }
+
+  function applyStrokeList(list) {
+    boardStrokes.clear();
+    for (const s of list || []) {
+      tagShape(s);
+      s.bbox = strokeWorldBBox(s);
+      boardStrokes.set(s.id, s);
+      if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
+    }
+    requestRedraw();
+  }
+
+  async function probeOnline() {
+    try {
+      const r = await fetch("/api/health", { cache: "no-store" });
+      return r.ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function enqueueOp(op) {
+    if (window.SofiaOffline) await SofiaOffline.enqueue(op);
+  }
+
+  async function flushOutbox() {
+    if (!window.SofiaOffline) return true;
+    const entries = await SofiaOffline.outboxEntries();
+    if (!entries.length) return true;
+    setConnState("sync");
+    for (const item of entries) {
+      try {
+        await sendQueuedOp(item.op);
+        await SofiaOffline.outboxDelete(item.key);
+      } catch (err) {
+        setConnState("offline");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function sendQueuedOp(op) {
+    const headers = { "Content-Type": "application/json" };
+    if (op.type === "media") {
+      const r = await fetch("/api/media", { method: "POST", headers, body: JSON.stringify({ id: op.id, image: op.image }) });
+      if (!r.ok) throw new Error("media");
+      return;
+    }
+    if (op.type === "board_create") {
+      const r = await fetch("/api/boards", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, title: op.title, folderId: op.folderId, id: op.id }),
+      });
+      if (!r.ok) throw new Error("board");
+      return;
+    }
+    if (op.type === "board_rename") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.id), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ personId: op.personId, title: op.title }),
+      });
+      if (!r.ok) throw new Error("rename");
+      return;
+    }
+    if (op.type === "board_delete") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.id) + "?person=" + encodeURIComponent(op.personId), { method: "DELETE" });
+      if (!r.ok) throw new Error("delete");
+      return;
+    }
+    if (op.type === "folder_create") {
+      const r = await fetch("/api/folders", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, name: op.name, parentId: op.parentId, id: op.id }),
+      });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "folder_rename") {
+      const r = await fetch("/api/folders/" + encodeURIComponent(op.id), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ personId: op.personId, name: op.name }),
+      });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "folder_move") {
+      const r = await fetch("/api/folders/" + encodeURIComponent(op.id), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ personId: op.personId, parentId: op.parentId }),
+      });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "folder_delete") {
+      const r = await fetch("/api/folders/" + encodeURIComponent(op.id) + "?person=" + encodeURIComponent(op.personId), { method: "DELETE" });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "place") {
+      const r = await fetch("/api/placements", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, boardId: op.boardId, folderId: op.folderId }),
+      });
+      if (!r.ok) throw new Error("place");
+      return;
+    }
+    if (op.type === "share") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/share", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, withPersonId: op.withPersonId }),
+      });
+      if (!r.ok) throw new Error("share");
+      return;
+    }
+    if (op.type === "unshare") {
+      const r = await fetch(
+        "/api/boards/" + encodeURIComponent(op.boardId) + "/share/" + encodeURIComponent(op.withPersonId) + "?person=" + encodeURIComponent(op.personId),
+        { method: "DELETE" }
+      );
+      if (!r.ok) throw new Error("unshare");
+      return;
+    }
+    if (op.type === "stroke_put") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/strokes", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, stroke: op.stroke }),
+      });
+      if (!r.ok) throw new Error("stroke");
+      return;
+    }
+    if (op.type === "stroke_erase") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/erase", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, strokeIds: op.strokeIds }),
+      });
+      if (!r.ok) throw new Error("erase");
+    }
+  }
+
+  async function goOnlineIfPossible() {
+    if (!(await probeOnline())) {
+      setConnState("offline");
+      return false;
+    }
+    const ok = await flushOutbox();
+    if (!ok) return false;
+    if (wantWs && currentBoardId) connectWS();
+    else setConnState("live");
+    return true;
+  }
+
+  function disconnectWS() {
+    wantWs = false;
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
+    }
+    setConnected(false);
   }
 
   function connectWS() {
+    if (!currentPersonId || !currentBoardId) return;
+    wantWs = true;
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const url =
+      `${proto}//${location.host}/ws?person=` +
+      encodeURIComponent(currentPersonId) +
+      "&board=" +
+      encodeURIComponent(currentBoardId);
+    ws = new WebSocket(url);
 
     ws.onopen = () => {
-      setConnected(true);
+      setConnState("live");
       reconnectDelay = 1000;
     };
     ws.onclose = () => {
-      setConnected(false);
-      setTimeout(connectWS, reconnectDelay);
+      if (!wantWs) {
+        setConnState("offline");
+        return;
+      }
+      setConnState("offline");
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      setTimeout(() => {
+        if (wantWs) goOnlineIfPossible();
+      }, reconnectDelay);
       reconnectDelay = Math.min(10000, reconnectDelay * 1.7);
     };
     ws.onerror = () => ws.close();
@@ -1027,7 +1637,9 @@
     if (!s) return;
     remoteInProgress.delete(id);
     if (s.points.length > 0) {
-      s.bbox = makeBBox(s.points);
+      tagShape(s);
+      s.bbox = strokeWorldBBox(s);
+      s.endedAt = performance.now();
       boardStrokes.set(s.id, s);
     }
   }
@@ -1037,19 +1649,30 @@
       case "init": {
         myClientId = msg.clientId;
         myColor = msg.color;
+        if (msg.board) {
+          currentBoardId = msg.board.id;
+          currentBoardMeta = msg.board;
+          if (filenameInput) filenameInput.value = msg.board.title || "Unbenannte Skizze";
+          document.title = (msg.board.title || "sofianotes") + " – sofianotes";
+        }
         boardStrokes.clear();
         for (const s of msg.strokes) {
-          s.bbox = makeBBox(s.points);
+          tagShape(s);
+          s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
+          if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
         }
         requestRedraw();
+        scheduleSaveBoard();
         break;
       }
       case "presence_join":
         ensurePresence(msg.id, msg.color);
+        renderPeopleJumpList();
         break;
       case "presence_leave":
         removePresence(msg.id);
+        renderPeopleJumpList();
         break;
       case "cursor": {
         const p = ensurePresence(msg.id, msg.color);
@@ -1081,7 +1704,10 @@
       }
       case "stroke_replace": {
         const s = remoteInProgress.get(msg.strokeId);
-        if (s) s.points = msg.points;
+        if (s) {
+          s.points = msg.points;
+          if (msg.extra && typeof msg.extra === "object") s.extra = msg.extra;
+        }
         requestRedraw();
         break;
       }
@@ -1096,8 +1722,9 @@
       case "stroke_move": {
         const s = msg.stroke;
         if (s && s.id) {
-          s.bbox = makeBBox(s.points);
+          s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
+          if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
           requestRedraw();
         }
         break;
@@ -1147,8 +1774,52 @@
       p.el.style.left = s.x + "px";
       p.el.style.top = s.y - 14 + "px";
       p.el.style.background = p.color;
-      p.el.textContent = TOOL_LABELS[p.tool] || p.tool;
+      p.el.textContent = (p.label || TOOL_LABELS[p.tool] || p.tool);
     }
+  }
+
+  function jumpToWorld(x, y) {
+    offsetX = window.innerWidth / 2 - x * scale;
+    offsetY = window.innerHeight / 2 - y * scale;
+    requestRedraw();
+  }
+
+  function liveOtherPeople() {
+    const now = performance.now();
+    return Array.from(presence.entries())
+      .filter(([id, p]) => id !== myClientId && now - p.lastSeen <= PRESENCE_TIMEOUT_MS)
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  }
+
+  function renderPeopleJumpList() {
+    const host = document.getElementById("zoom-people");
+    if (!host) return;
+    const people = liveOtherPeople();
+    host.innerHTML = "";
+    if (!people.length) {
+      const empty = document.createElement("div");
+      empty.className = "zoom-people-empty";
+      empty.textContent = "Niemand sonst auf dem Blatt";
+      host.appendChild(empty);
+      return;
+    }
+    people.forEach(([id, p], i) => {
+      p.label = "Person " + (i + 1);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "zoom-person";
+      btn.title = "Zur Person springen";
+      const dot = document.createElement("span");
+      dot.className = "zoom-person-dot";
+      dot.style.background = p.color || "#888";
+      btn.appendChild(dot);
+      btn.appendChild(document.createTextNode(p.label));
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        jumpToWorld(p.x, p.y);
+      });
+      host.appendChild(btn);
+    });
   }
 
   // ---- network buffering (batch outgoing points / erase ids) -----------
@@ -1186,7 +1857,14 @@
   const MAX_UNDO = 100;
 
   function cloneStroke(s) {
-    return { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points.map((p) => ({ ...p })) };
+    const out = { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points.map((p) => ({ ...p })) };
+    if (s.extra) out.extra = JSON.parse(JSON.stringify(s.extra));
+    return out;
+  }
+  function serializeStroke(s) {
+    const out = { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points };
+    if (s.extra) out.extra = s.extra;
+    return out;
   }
   function updateUndoRedoButtons() {
     undoBtn.disabled = undoStack.length === 0;
@@ -1198,10 +1876,121 @@
     redoStack.length = 0;
     updateUndoRedoButtons();
   }
+  const eraseAllMenu = document.getElementById("erase-all-menu");
+  function hideEraseAllMenu() {
+    if (eraseAllMenu) eraseAllMenu.classList.add("hidden");
+  }
+  function showEraseAllMenu(clientX, clientY) {
+    if (!eraseAllMenu || !boardStrokes.size) return;
+    hidePasteMenu();
+    eraseAllMenu.classList.remove("hidden");
+    const w = 188;
+    const h = 52;
+    let left = clientX + 10;
+    let top = clientY + 10;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, clientX - w - 10);
+    if (top + h > window.innerHeight - 8) top = Math.max(8, clientY - h - 10);
+    eraseAllMenu.style.left = left + "px";
+    eraseAllMenu.style.top = top + "px";
+  }
+  const pasteMenu = document.getElementById("paste-menu");
+  let pasteHoldTimer = null;
+  let pasteHoldStart = null;
+  let pasteHoldConsumed = false;
+  let pasteAnchorWorld = null;
+  const PASTE_HOLD_MS = 480;
+  function hidePasteMenu() {
+    if (pasteMenu) pasteMenu.classList.add("hidden");
+  }
+  function placeContextMenu(el, clientX, clientY) {
+    if (!el) return;
+    const w = 188;
+    const h = 52;
+    let left = clientX + 10;
+    let top = clientY + 10;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, clientX - w - 10);
+    if (top + h > window.innerHeight - 8) top = Math.max(8, clientY - h - 10);
+    el.style.left = left + "px";
+    el.style.top = top + "px";
+  }
+  function showPasteMenu(clientX, clientY, world) {
+    if (!pasteMenu || !strokeClipboard.length) return;
+    hideEraseAllMenu();
+    pasteAnchorWorld = world;
+    lastPointerWorld = world;
+    pasteMenu.classList.remove("hidden");
+    placeContextMenu(pasteMenu, clientX, clientY);
+  }
+  function clearPasteHold() {
+    if (pasteHoldTimer) {
+      clearTimeout(pasteHoldTimer);
+      pasteHoldTimer = null;
+    }
+    pasteHoldStart = null;
+  }
+  function boardEmptyAt(world) {
+    if (cropState) return false;
+    if (selection.bbox && pointInBBox(world, selection.bbox, 12 / Math.max(scale, 0.25))) return false;
+    if (typeof pickStrokeAt === "function" && pickStrokeAt(world)) return false;
+    return true;
+  }
+  function firePasteHold() {
+    if (!pasteHoldStart || !strokeClipboard.length) {
+      clearPasteHold();
+      return;
+    }
+    const hold = pasteHoldStart;
+    pasteHoldConsumed = true;
+    if (currentStroke && currentStroke.eraser) currentStroke = null;
+    else if (currentStroke) abortStroke();
+    lassoPoints = null;
+    lassoPointerId = null;
+    if (dragState) cancelSelectionDrag();
+    panState = null;
+    showPasteMenu(hold.clientX, hold.clientY, hold.world);
+    clearPasteHold();
+  }
+  function armPasteHold(e, world) {
+    clearPasteHold();
+    pasteHoldConsumed = false;
+    if (!strokeClipboard.length) return;
+    if (!boardEmptyAt(world)) return;
+    pasteHoldStart = {
+      world,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      pointerId: e.pointerId,
+    };
+    pasteHoldTimer = setTimeout(firePasteHold, PASTE_HOLD_MS);
+  }
+  function notePasteHoldMove(e) {
+    if (!pasteHoldStart || pasteHoldStart.pointerId !== e.pointerId) return;
+    const dist = Math.hypot(e.clientX - pasteHoldStart.clientX, e.clientY - pasteHoldStart.clientY);
+    if (dist > 12) clearPasteHold();
+  }
+  function clearAllInk() {
+    const clones = Array.from(boardStrokes.values()).map(cloneStroke);
+    hideEraseAllMenu();
+    if (!clones.length) return;
+    const ids = clones.map((s) => s.id);
+    for (const id of ids) boardStrokes.delete(id);
+    wsSend({ type: "erase", strokeIds: ids });
+    pushUndo({ type: "erase", strokes: clones });
+    inkGroups = [];
+    scanBoxes = [];
+    dismissedInk.clear();
+    ocrCache.clear();
+    renderInkOverlay();
+    toolPopover.classList.add("hidden");
+    requestRedraw();
+  }
   function putStroke(stroke) {
-    const withBBox = { ...stroke, bbox: makeBBox(stroke.points) };
-    boardStrokes.set(withBBox.id, withBBox);
-    wsSend({ type: "stroke_move", stroke: { id: stroke.id, tool: stroke.tool, color: stroke.color, size: stroke.size, points: stroke.points } });
+    const copy = cloneStroke(stroke);
+    copy.bbox = strokeWorldBBox(copy);
+    copy.endedAt = performance.now();
+    boardStrokes.set(copy.id, copy);
+    if (copy.tool === "image" && copy.extra && copy.extra.mediaId) ensureMedia(copy.extra.mediaId);
+    wsSend({ type: "stroke_move", stroke: serializeStroke(copy) });
   }
   function removeStrokes(ids) {
     for (const id of ids) boardStrokes.delete(id);
@@ -1221,8 +2010,30 @@
         const points = direction === 1 ? m.after : m.before;
         if (s) {
           s.points = points.map((p) => ({ ...p }));
-          s.bbox = makeBBox(s.points);
-          wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+          const extra = direction === 1 ? m.afterExtra : m.beforeExtra;
+          if (extra) s.extra = JSON.parse(JSON.stringify(extra));
+          else if (s.extra && s.extra.rotation != null) {
+            const next = Object.assign({}, s.extra);
+            delete next.rotation;
+            s.extra = Object.keys(next).length ? next : undefined;
+          }
+          const sz = direction === 1 ? m.afterSize : m.beforeSize;
+          if (sz != null && Number.isFinite(sz)) s.size = sz;
+          s.bbox = strokeWorldBBox(s);
+          wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
+        }
+      }
+    } else if (action.type === "add_many") {
+      if (direction === 1) for (const s of action.strokes) putStroke(s);
+      else removeStrokes(action.strokes.map((s) => s.id));
+    } else if (action.type === "style") {
+      for (const c of action.changes) {
+        const s = boardStrokes.get(c.id);
+        const st = direction === 1 ? c.after : c.before;
+        if (s && st) {
+          s.color = st.color;
+          s.size = st.size;
+          wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
         }
       }
     }
@@ -1247,14 +2058,38 @@
   const exportBtn = document.getElementById("export-btn");
   exportBtn.addEventListener("click", () => {
     // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
-    window.location.href = "/api/export.pdf";
+    window.location.href = "/api/export.pdf?board=" + encodeURIComponent(currentBoardId || "");
   });
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
-    if (!meta || e.key.toLowerCase() !== "z") return;
-    e.preventDefault();
-    if (e.shiftKey) redo();
-    else undo();
+    const key = e.key.toLowerCase();
+    const typing = document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA");
+    if (typing) return;
+    if (e.key === "Escape" && settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) {
+      e.preventDefault();
+      hideSettings();
+      return;
+    }
+    if (meta && key === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (meta && key === "c") {
+      e.preventDefault();
+      copySelection();
+      return;
+    }
+    if (meta && key === "x") {
+      e.preventDefault();
+      cutSelection();
+      return;
+    }
+    if (meta && key === "v") {
+      e.preventDefault();
+      pasteClipboard();
+    }
   });
   updateUndoRedoButtons();
 
@@ -1267,10 +2102,14 @@
       holdTimer = null;
     }
   }
+  function isHoldSnapTool(tool) {
+    return tool === "pen" || tool === "marker";
+  }
+
   function armHoldTimer() {
     clearHoldTimer();
     if (!shapeRecognitionEnabled) return;
-    if (!currentStroke || currentStroke.tool !== "pen" || currentStroke.locked) return;
+    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
     holdTimer = setTimeout(tryShapeSnap, HOLD_MS);
   }
 
@@ -1587,7 +2426,7 @@
       const useCircle = aspectDiff < 0.18;
       const rx = useCircle ? meanR : w / 2;
       const ry = useCircle ? meanR : h / 2;
-      return { type: "circle", points: makeEllipsePoints(cx, cy, rx, ry, avgPressure, 96) };
+      return { type: "circle", round: useCircle, points: makeEllipsePoints(cx, cy, rx, ry, avgPressure, 96) };
     }
     if (quad && quad.length === 4) {
       return { type: "rectangle", points: fitOrientedRect(quad, avgPressure) };
@@ -1595,16 +2434,328 @@
     return null;
   }
 
+  function straightenOpenStroke(rawPoints) {
+    if (!rawPoints || rawPoints.length < 4) return null;
+    const start = rawPoints[0];
+    const end = rawPoints[rawPoints.length - 1];
+    const chord = Math.hypot(end.x - start.x, end.y - start.y);
+    if (chord < 28) return null;
+    const bbox = makeBBox(rawPoints);
+    const diagonal = Math.hypot(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY);
+    if (chord < diagonal * 0.38) return null;
+    const avgPressure = rawPoints.reduce((s, p) => s + (p.p || 0.5), 0) / rawPoints.length;
+    return {
+      type: "line",
+      points: [
+        { x: start.x, y: start.y, p: avgPressure },
+        { x: end.x, y: end.y, p: avgPressure },
+      ],
+    };
+  }
+
   function tryShapeSnap() {
     holdTimer = null;
-    if (!currentStroke || currentStroke.tool !== "pen" || currentStroke.locked) return;
-    const detected = detectShape(currentStroke.points);
+    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
+    let detected = detectShape(currentStroke.points);
+    if (!detected && currentStroke.tool === "marker") detected = straightenOpenStroke(currentStroke.points);
     if (!detected) return;
+    const grab = currentStroke.points[currentStroke.points.length - 1];
     currentStroke.points = detected.points;
     currentStroke.unsent = [];
     currentStroke.locked = true;
-    wsSend({ type: "stroke_replace", strokeId: currentStroke.id, points: detected.points });
+    const shapeName = detected.type === "circle" && detected.round === false ? "ellipse" : detected.type;
+    currentStroke.extra = Object.assign({}, currentStroke.extra || {}, { shape: shapeName });
+    currentStroke.shape = shapeName;
+    currentStroke.shapeBase = detected.points.map((p) => ({ x: p.x, y: p.y, p: p.p }));
+    currentStroke.shapeHandle = null;
+    currentStroke.shapeHandleLocked = false;
+    currentStroke.shapeGeom = makeShapeGeom(shapeName, detected.points, grab);
+    wsSend({
+      type: "stroke_replace",
+      strokeId: currentStroke.id,
+      points: detected.points,
+      extra: currentStroke.extra,
+    });
     requestRedraw();
+  }
+
+  function closedRing(pts) {
+    if (!pts || pts.length < 2) return pts || [];
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 1.5) return pts.slice(0, -1);
+    return pts.slice();
+  }
+
+  function uniqueRectCorners(pts) {
+    const ring = closedRing(pts);
+    const p0 = (pts && pts[0] && pts[0].p) || 0.5;
+    const four = ring.length >= 4 && ring.length <= 5 ? ring.slice(0, 4) : null;
+    if (four && four.length === 4) {
+      return orderCornersCcw(four.map((p) => ({ x: p.x, y: p.y, p: p.p == null ? p0 : p.p })));
+    }
+    const b = makeBBox(pts || []);
+    return [
+      { x: b.minX, y: b.minY, p: p0 },
+      { x: b.maxX, y: b.minY, p: p0 },
+      { x: b.maxX, y: b.maxY, p: p0 },
+      { x: b.minX, y: b.maxY, p: p0 },
+    ];
+  }
+
+  function rebuildClosed(corners, pressure) {
+    const p = pressure == null ? 0.5 : pressure;
+    return corners.map((c) => ({ x: c.x, y: c.y, p })).concat([{ x: corners[0].x, y: corners[0].y, p }]);
+  }
+
+  function moveRectCorner(ordered, i, world, pressure) {
+    const opp = ordered[(i + 2) % 4];
+    const prev = ordered[(i + 3) % 4];
+    const next = ordered[(i + 1) % 4];
+    let ax = prev.x - opp.x;
+    let ay = prev.y - opp.y;
+    let bx = next.x - opp.x;
+    let by = next.y - opp.y;
+    const al = Math.hypot(ax, ay) || 1;
+    const bl = Math.hypot(bx, by) || 1;
+    ax /= al;
+    ay /= al;
+    bx /= bl;
+    by /= bl;
+    const dx = world.x - opp.x;
+    const dy = world.y - opp.y;
+    const ua = Math.max(10, dx * ax + dy * ay);
+    const vb = Math.max(10, dx * bx + dy * by);
+    const out = ordered.map((c) => ({ x: c.x, y: c.y, p: pressure }));
+    out[(i + 2) % 4] = { x: opp.x, y: opp.y, p: pressure };
+    out[(i + 3) % 4] = { x: opp.x + ax * ua, y: opp.y + ay * ua, p: pressure };
+    out[(i + 1) % 4] = { x: opp.x + bx * vb, y: opp.y + by * vb, p: pressure };
+    out[i] = { x: opp.x + ax * ua + bx * vb, y: opp.y + ay * ua + by * vb, p: pressure };
+    return rebuildClosed(out, pressure);
+  }
+
+  function moveRectSide(ordered, i, world, pressure) {
+    const a = ordered[i];
+    const b = ordered[(i + 1) % 4];
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    let ex = b.x - a.x;
+    let ey = b.y - a.y;
+    const el = Math.hypot(ex, ey) || 1;
+    ex /= el;
+    ey /= el;
+    let nx = -ey;
+    let ny = ex;
+    const cx = ordered.reduce((s, p) => s + p.x, 0) / 4;
+    const cy = ordered.reduce((s, p) => s + p.y, 0) / 4;
+    if ((mx - cx) * nx + (my - cy) * ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const dist = (world.x - mx) * nx + (world.y - my) * ny;
+    const out = ordered.map((c) => ({ x: c.x, y: c.y, p: pressure }));
+    out[i] = { x: a.x + nx * dist, y: a.y + ny * dist, p: pressure };
+    out[(i + 1) % 4] = { x: b.x + nx * dist, y: b.y + ny * dist, p: pressure };
+    const w = Math.hypot(out[i].x - out[(i + 3) % 4].x, out[i].y - out[(i + 3) % 4].y);
+    const h = Math.hypot(out[i].x - out[(i + 1) % 4].x, out[i].y - out[(i + 1) % 4].y);
+    if (w < 10 || h < 10) return rebuildClosed(ordered, pressure);
+    return rebuildClosed(out, pressure);
+  }
+
+  function ellipseGeomFromPoints(pts) {
+    const b = makeBBox(pts);
+    return {
+      cx: (b.minX + b.maxX) / 2,
+      cy: (b.minY + b.maxY) / 2,
+      rx: Math.max(8, (b.maxX - b.minX) / 2),
+      ry: Math.max(8, (b.maxY - b.minY) / 2),
+    };
+  }
+
+  function inferShape(stroke) {
+    if (!stroke || stroke.tool === "image" || stroke.tool === "text") return null;
+    const tagged = stroke.extra && stroke.extra.shape;
+    if (tagged) return tagged;
+    const pts = stroke.points || [];
+    if (pts.length === 2) return "line";
+    const ring = closedRing(pts);
+    if (pts.length >= 4 && pts.length <= 6) {
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      if (Math.hypot(a.x - b.x, a.y - b.y) < 14) {
+        if (ring.length === 4) return "rectangle";
+        if (ring.length === 3) return "triangle";
+      }
+    }
+    if (looksLikePolygon(pts)) {
+      const n = ring.length;
+      if (n === 4) return "rectangle";
+      if (n === 3) return "triangle";
+    }
+    if (pts.length >= 24) {
+      const g = ellipseGeomFromPoints(pts);
+      let sum = 0;
+      for (const p of pts) {
+        const rx = g.rx || 1;
+        const ry = g.ry || 1;
+        const nx = (p.x - g.cx) / rx;
+        const ny = (p.y - g.cy) / ry;
+        sum += Math.abs(Math.hypot(nx, ny) - 1);
+      }
+      if (sum / pts.length < 0.22) return Math.abs(g.rx - g.ry) / Math.max(g.rx, g.ry) < 0.18 ? "circle" : "ellipse";
+    }
+    return null;
+  }
+
+  function tagShape(stroke) {
+    const shape = inferShape(stroke);
+    if (!shape) return null;
+    stroke.extra = Object.assign({}, stroke.extra || {}, { shape });
+    return shape;
+  }
+
+  function pickLockedHandle(shape, pts, grab) {
+    if (!grab) return { kind: "scale", i: 0 };
+    if (shape === "rectangle") {
+      const corners = uniqueRectCorners(pts);
+      let best = { kind: "corner", i: 0, d: Infinity };
+      for (let i = 0; i < corners.length; i++) {
+        const d = Math.hypot(corners[i].x - grab.x, corners[i].y - grab.y);
+        if (d < best.d) best = { kind: "corner", i, d };
+      }
+      for (let i = 0; i < corners.length; i++) {
+        const a = corners[i];
+        const b = corners[(i + 1) % 4];
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const d = Math.min(Math.hypot(mid.x - grab.x, mid.y - grab.y), distPointToSeg(grab, a, b));
+        if (d < best.d + 24) best = { kind: "side", i, d };
+      }
+      return best;
+    }
+    if (shape === "line") {
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      const da = Math.hypot(a.x - grab.x, a.y - grab.y);
+      const db = Math.hypot(b.x - grab.x, b.y - grab.y);
+      return { kind: "end", i: da <= db ? 0 : pts.length - 1 };
+    }
+    return { kind: "scale", i: 0 };
+  }
+
+  function makeShapeGeom(shape, pts, grab) {
+    const g = ellipseGeomFromPoints(pts);
+    g.grabX = grab ? grab.x : g.cx + g.rx;
+    g.grabY = grab ? grab.y : g.cy;
+    g.grabR = Math.max(8, Math.hypot(g.grabX - g.cx, g.grabY - g.cy));
+    g.base = (pts || []).map((p) => ({ x: p.x, y: p.y, p: p.p }));
+    g.shape = shape;
+    return g;
+  }
+
+  function reshapeLockedStroke(wx, wy) {
+    const s = currentStroke;
+    if (!s || !s.locked || !s.shape) return;
+    const p = (s.points[0] && s.points[0].p) || 0.5;
+    const world = { x: wx, y: wy };
+    if (s.shape === "rectangle") {
+      const base = uniqueRectCorners(s.shapeBase || s.points);
+      if (!s.shapeHandleLocked) {
+        const gx = s.shapeGeom ? s.shapeGeom.grabX : world.x;
+        const gy = s.shapeGeom ? s.shapeGeom.grabY : world.y;
+        if (Math.hypot(wx - gx, wy - gy) < 8) return;
+        s.shapeHandle = pickLockedHandle("rectangle", s.shapeBase || s.points, world);
+        s.shapeHandleLocked = true;
+      }
+      const h = s.shapeHandle || { kind: "corner", i: 0 };
+      s.points = h.kind === "side" ? moveRectSide(base, h.i, world, p) : moveRectCorner(base, h.i, world, p);
+    } else if (s.shape === "circle" || s.shape === "ellipse") {
+      const g = s.shapeGeom || ellipseGeomFromPoints(s.shapeBase || s.points);
+      const d = Math.max(8, Math.hypot(wx - g.cx, wy - g.cy));
+      if (s.shape === "circle") s.points = makeEllipsePoints(g.cx, g.cy, d, d, p, 96);
+      else {
+        const f = d / (g.grabR || 1);
+        s.points = makeEllipsePoints(g.cx, g.cy, Math.max(8, g.rx * f), Math.max(8, g.ry * f), p, 96);
+      }
+    } else if (s.shape === "line") {
+      const pts = (s.shapeBase || s.points).map((pt) => ({ x: pt.x, y: pt.y, p: pt.p }));
+      const i = (s.shapeHandle && s.shapeHandle.i) || pts.length - 1;
+      pts[i] = { x: wx, y: wy, p };
+      s.points = pts;
+    } else if (s.shape === "triangle") {
+      const g = s.shapeGeom;
+      const d = Math.max(8, Math.hypot(wx - g.cx, wy - g.cy));
+      const f = d / (g.grabR || 1);
+      s.points = g.base.map((pt) => ({ x: g.cx + (pt.x - g.cx) * f, y: g.cy + (pt.y - g.cy) * f, p }));
+    }
+    s.bbox = makeBBox(s.points);
+    wsSend({ type: "stroke_replace", strokeId: s.id, points: s.points, extra: s.extra });
+    requestRedraw();
+  }
+
+  function shapeEditKnots(stroke) {
+    const shape = inferShape(stroke);
+    const pts = stroke.points || [];
+    const p0 = pts[0] || { p: 0.5 };
+    if (shape === "rectangle") {
+      const corners = uniqueRectCorners(pts);
+      const knots = corners.map((c, i) => ({ kind: "corner", corner: i, i, x: c.x, y: c.y }));
+      for (let i = 0; i < 4; i++) {
+        const a = corners[i];
+        const b = corners[(i + 1) % 4];
+        knots.push({ kind: "side", side: i, i: 100 + i, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      }
+      return knots;
+    }
+    if (shape === "circle" || shape === "ellipse") {
+      const g = ellipseGeomFromPoints(pts);
+      return [
+        { kind: "radius", axis: "x", i: 0, x: g.cx + g.rx, y: g.cy },
+        { kind: "radius", axis: "y", i: 1, x: g.cx, y: g.cy - g.ry },
+        { kind: "radius", axis: "x", i: 2, x: g.cx - g.rx, y: g.cy },
+        { kind: "radius", axis: "y", i: 3, x: g.cx, y: g.cy + g.ry },
+      ];
+    }
+    if (shape === "triangle") {
+      return closedRing(pts)
+        .slice(0, 3)
+        .map((c, i) => ({ kind: "corner", corner: i, i, x: c.x, y: c.y }));
+    }
+    if (shape === "line" && pts.length >= 2) {
+      const last = pts.length - 1;
+      return [
+        { kind: "end", i: 0, x: pts[0].x, y: pts[0].y },
+        { kind: "end", i: last, x: pts[last].x, y: pts[last].y },
+      ];
+    }
+    return null;
+  }
+
+  function pickShapedStrokeAt(world) {
+    const hit = pickStrokeAt(world);
+    if (hit && inferShape(hit)) return hit;
+    return null;
+  }
+
+  function beginStrokeInteraction(pointerId, world, stroke, clientX, clientY) {
+    selectStrokeIds([stroke.id]);
+    const pad = 10 / scale;
+    const knot = pickEditKnot(world);
+    if (knot) {
+      startPointEdit(pointerId, world, knot);
+      return;
+    }
+    if (selection.bbox) {
+      const handle = pickScaleHandle(world, selection.bbox, pad);
+      if (handle) {
+        startSelectionScale(pointerId, world, handle);
+        return;
+      }
+      if (pickRotateHandle(world, selection.bbox, pad)) {
+        startSelectionRotate(pointerId, world);
+        return;
+      }
+    }
+    pendingShapeDrag = { pointerId, startWorld: world, clientX, clientY, strokeId: stroke.id };
   }
 
   // ---- drawing (pointer handling with palm rejection) -------------------
@@ -1617,14 +2768,152 @@
   // ---- Auswahl-Werkzeug (Lasso markieren + verschieben) -----------------
   let lassoPoints = null;
   let lassoPointerId = null;
-  let selection = { ids: new Set(), bbox: null };
   let dragState = null; // {pointerId, startWorld, snapshot: Map(id -> points[])}
+  let pendingShapeDrag = null;
+
+  function distPointToSeg(p, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1e-8) return Math.hypot(p.x - a.x, p.y - a.y);
+    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  }
+
+  function selectionInkStrokes() {
+    return Array.from(selection.ids)
+      .map((id) => boardStrokes.get(id))
+      .filter((s) => s && (s.tool === "pen" || s.tool === "marker" || s.tool === "text"));
+  }
+
+  function selectedImageStroke() {
+    if (selection.ids.size !== 1) return null;
+    const s = boardStrokes.get(Array.from(selection.ids)[0]);
+    return s && s.tool === "image" ? s : null;
+  }
+
+  function selectStrokeIds(ids) {
+    const present = ids.filter((id) => boardStrokes.get(id));
+    if (!present.length) {
+      clearSelection();
+      return;
+    }
+    for (const id of present) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      const shape = tagShape(s);
+      if (shape === "rectangle" && (s.points || []).length > 6) {
+        const p = (s.points[0] && s.points[0].p) || 0.5;
+        s.points = rebuildClosed(uniqueRectCorners(s.points), p);
+        s.bbox = strokeWorldBBox(s);
+      }
+    }
+    selection = {
+      ids: new Set(present),
+      bbox: unionBBox(present.map((id) => {
+        const s = boardStrokes.get(id);
+        return s && (s.bbox || strokeWorldBBox(s));
+      }).filter(Boolean)),
+    };
+    renderToolPopover();
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  function restyleSelection(patch, mergeKey) {
+    const strokes = selectionInkStrokes();
+    if (!strokes.length) return;
+    const changes = [];
+    for (const s of strokes) {
+      const before = { color: s.color, size: s.size };
+      if (patch.color) s.color = patch.color;
+      if (patch.size != null && Number.isFinite(patch.size)) {
+        const cfg = toolConfigs[s.tool === "text" ? "pen" : s.tool] || toolConfigs.pen;
+        s.size = Math.max(cfg.min, Math.min(cfg.max, patch.size));
+      }
+      if (before.color === s.color && before.size === s.size) continue;
+      changes.push({ id: s.id, before, after: { color: s.color, size: s.size } });
+      wsSend({
+        type: "stroke_move",
+        stroke: serializeStroke(s),
+      });
+    }
+    if (!changes.length) return;
+    const last = undoStack[undoStack.length - 1];
+    const sameIds =
+      last &&
+      last.type === "style" &&
+      last.mergeKey &&
+      last.mergeKey === mergeKey &&
+      last.changes.length === changes.length &&
+      last.changes.every((c, i) => c.id === changes[i].id);
+    if (mergeKey && sameIds) {
+      last.changes.forEach((c, i) => {
+        c.after = changes[i].after;
+      });
+      redoStack.length = 0;
+    } else {
+      pushUndo({ type: "style", changes, mergeKey: mergeKey || null });
+    }
+    requestRedraw();
+  }
+
+  function strokeHitsPoint(stroke, pt, pad) {
+    const r = (stroke.size || 6) / 2 + pad;
+    const b = stroke.bbox || strokeWorldBBox(stroke);
+    if (!pointInBBox(pt, b, r)) return false;
+    if (stroke.tool === "image") {
+      const quad = imageRotatedCorners(stroke);
+      if (quad.length === 4) return pointInPolygon(pt, quad);
+      return true;
+    }
+    if (stroke.tool === "text") return true;
+    const pts = stroke.points || [];
+    if (pts.length === 1) return Math.hypot(pts[0].x - pt.x, pts[0].y - pt.y) <= r;
+    for (let i = 1; i < pts.length; i++) {
+      if (distPointToSeg(pt, pts[i - 1], pts[i]) <= r) return true;
+    }
+    const shape = inferShape(stroke);
+    if (shape === "rectangle" || shape === "triangle") {
+      const poly = shape === "rectangle" ? uniqueRectCorners(pts) : closedRing(pts).slice(0, 3);
+      if (poly.length >= 3 && pointInPolygon(pt, poly)) return true;
+    }
+    if (shape === "circle" || shape === "ellipse") {
+      const g = ellipseGeomFromPoints(pts);
+      const nx = (pt.x - g.cx) / (g.rx || 1);
+      const ny = (pt.y - g.cy) / (g.ry || 1);
+      if (nx * nx + ny * ny <= 1) return true;
+    }
+    return false;
+  }
+
+  function pickStrokeAt(world) {
+    const pad = 12 / Math.max(scale, 0.25);
+    let best = null;
+    let bestD = Infinity;
+    for (const s of boardStrokes.values()) {
+      if (!strokeHitsPoint(s, world, pad)) continue;
+      const b = s.bbox || makeBBox(s.points || []);
+      const cx = (b.minX + b.maxX) / 2;
+      const cy = (b.minY + b.maxY) / 2;
+      const d = Math.hypot(world.x - cx, world.y - cy);
+      if (d < bestD) {
+        best = s;
+        bestD = d;
+      }
+    }
+    return best;
+  }
 
   function clearSelection() {
     selection = { ids: new Set(), bbox: null };
     lassoPoints = null;
     lassoPointerId = null;
     dragState = null;
+    cancelCropMode(true);
+    if (toolPopover && !toolPopover.classList.contains("hidden")) renderToolPopover();
+    syncMediaToolbar();
     requestRedraw();
   }
 
@@ -1642,37 +2931,137 @@
   }
 
   function finalizeLasso() {
-    if (!lassoPoints || lassoPoints.length < 3) {
-      clearSelection();
-      lassoPoints = null;
+    const pts = lassoPoints;
+    lassoPoints = null;
+    const tap = !pts || pts.length < 3 || strokePathLength(pts) < 16 / Math.max(scale, 0.25);
+    if (tap) {
+      const hit = pts && pts[0] ? pickStrokeAt(pts[0]) : null;
+      if (hit) selectStrokeIds([hit.id]);
+      else clearSelection();
       return;
     }
-    const poly = lassoPoints;
     const ids = new Set();
     for (const stroke of boardStrokes.values()) {
+      if (stroke.tool === "image") {
+        const corners = imageRotatedCorners(stroke);
+        const b = stroke.bbox || makeBBox(corners.length ? corners : stroke.points || []);
+        const hits = corners.length
+          ? corners.concat([{ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }])
+          : [
+              { x: b.minX, y: b.minY },
+              { x: b.maxX, y: b.minY },
+              { x: b.minX, y: b.maxY },
+              { x: b.maxX, y: b.maxY },
+              { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+            ];
+        if (hits.some((p) => pointInPolygon(p, pts))) ids.add(stroke.id);
+        continue;
+      }
       for (const p of stroke.points) {
-        if (pointInPolygon(p, poly)) {
+        if (pointInPolygon(p, pts)) {
           ids.add(stroke.id);
           break;
         }
       }
     }
-    lassoPoints = null;
     if (ids.size === 0) {
       clearSelection();
       return;
     }
-    selection = { ids, bbox: unionBBox(Array.from(ids).map((id) => boardStrokes.get(id).bbox)) };
-    requestRedraw();
+    selectStrokeIds(Array.from(ids));
+  }
+
+  function snapshotSelection() {
+    const snapshot = new Map();
+    const extras = new Map();
+    const sizes = new Map();
+    for (const id of selection.ids) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
+      sizes.set(id, s.size);
+      extras.set(id, s.extra ? JSON.parse(JSON.stringify(s.extra)) : null);
+    }
+    return { snapshot, extras, sizes };
   }
 
   function startSelectionDrag(pointerId, world) {
-    const snapshot = new Map();
-    for (const id of selection.ids) {
+    const snap = snapshotSelection();
+    dragState = { pointerId, startWorld: world, kind: "move", ...snap };
+  }
+
+  function startSelectionScale(pointerId, world, corner) {
+    const snap = snapshotSelection();
+    const pad = 10 / scale;
+    const b = selection.bbox;
+    const originMap = {
+      nw: { x: b.maxX + pad, y: b.maxY + pad },
+      ne: { x: b.minX - pad, y: b.maxY + pad },
+      sw: { x: b.maxX + pad, y: b.minY - pad },
+      se: { x: b.minX - pad, y: b.minY - pad },
+    };
+    dragState = {
+      pointerId,
+      startWorld: world,
+      kind: "scale",
+      corner,
+      origin: originMap[corner],
+      ...snap,
+    };
+  }
+
+  function startSelectionRotate(pointerId, world) {
+    const snap = snapshotSelection();
+    const b = selection.bbox;
+    dragState = {
+      pointerId,
+      startWorld: world,
+      kind: "rotate",
+      center: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+      ...snap,
+    };
+  }
+
+  function startPointEdit(pointerId, world, knot) {
+    const snap = snapshotSelection();
+    dragState = {
+      pointerId,
+      startWorld: world,
+      kind: "point",
+      strokeId: knot.strokeId,
+      index: knot.i,
+      knots: knot.knots,
+      knot,
+      ...snap,
+    };
+  }
+
+  function updateSelectionScale(world) {
+    const origin = dragState.origin;
+    const s0x = dragState.startWorld.x - origin.x;
+    const s0y = dragState.startWorld.y - origin.y;
+    const s1x = world.x - origin.x;
+    const s1y = world.y - origin.y;
+    let factor = Math.abs(s0x) > Math.abs(s0y) ? s1x / s0x : s1y / s0y;
+    if (!Number.isFinite(factor)) factor = 1;
+    factor = Math.max(0.08, Math.min(12, factor));
+    const boxes = [];
+    for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
-      if (s) snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p })));
+      if (!s) continue;
+      s.points = pts.map((p) => ({
+        x: origin.x + (p.x - origin.x) * factor,
+        y: origin.y + (p.y - origin.y) * factor,
+        p: p.p,
+        text: p.text,
+      }));
+      const baseSize = dragState.sizes && dragState.sizes.get(id);
+      if (baseSize != null) s.size = Math.max(1, baseSize * factor);
+      s.bbox = strokeWorldBBox(s);
+      boxes.push(s.bbox);
     }
-    dragState = { pointerId, startWorld: world, snapshot };
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
   }
 
   function updateSelectionDrag(world) {
@@ -1682,9 +3071,114 @@
     for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
       if (!s) continue;
-      s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p }));
-      s.bbox = makeBBox(s.points);
+      s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p, text: p.text }));
+      s.bbox = strokeWorldBBox(s);
       boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
+  }
+
+  function updateSelectionRotate(world) {
+    const c = dragState.center;
+    const a0 = Math.atan2(dragState.startWorld.y - c.y, dragState.startWorld.x - c.x);
+    let ang = Math.atan2(world.y - c.y, world.x - c.x) - a0;
+    const step = Math.PI / 12;
+    const snapped = Math.round(ang / step) * step;
+    if (Math.abs(ang - snapped) < (3.5 * Math.PI) / 180) ang = snapped;
+    const boxes = [];
+    for (const [id, pts] of dragState.snapshot) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      if (s.tool === "image" && pts.length >= 2) {
+        const minX = Math.min(pts[0].x, pts[1].x);
+        const minY = Math.min(pts[0].y, pts[1].y);
+        const maxX = Math.max(pts[0].x, pts[1].x);
+        const maxY = Math.max(pts[0].y, pts[1].y);
+        const ocx = (minX + maxX) / 2;
+        const ocy = (minY + maxY) / 2;
+        const nc = rotatePoint({ x: ocx, y: ocy }, c.x, c.y, ang);
+        const dx = nc.x - ocx;
+        const dy = nc.y - ocy;
+        s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p, text: p.text }));
+      } else {
+        s.points = pts.map((p) => rotatePoint(p, c.x, c.y, ang));
+      }
+      const baseExtra = dragState.extras && dragState.extras.get(id);
+      if (s.tool === "image" || s.tool === "text") {
+        const baseRot = baseExtra && Number.isFinite(baseExtra.rotation) ? baseExtra.rotation : 0;
+        s.extra = Object.assign({}, baseExtra || s.extra || {}, { rotation: baseRot + ang });
+      } else if (baseExtra) {
+        s.extra = JSON.parse(JSON.stringify(baseExtra));
+      }
+      s.bbox = strokeWorldBBox(s);
+      boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
+  }
+
+  function updatePointEdit(world) {
+    const dx = world.x - dragState.startWorld.x;
+    const dy = world.y - dragState.startWorld.y;
+    const id = dragState.strokeId;
+    const pts = dragState.snapshot.get(id);
+    const s = boardStrokes.get(id);
+    if (!s || !pts) return;
+    const knot = dragState.knot || { kind: "free", i: dragState.index, knots: dragState.knots };
+    const pressure = (pts[0] && pts[0].p) || 0.5;
+    const shape = inferShape({ ...s, points: pts, extra: s.extra });
+    if (shape === "rectangle" && (knot.kind === "corner" || knot.kind === "side")) {
+      const corners = uniqueRectCorners(pts);
+      s.points =
+        knot.kind === "side"
+          ? moveRectSide(corners, knot.side, world, pressure)
+          : moveRectCorner(corners, knot.corner, world, pressure);
+      s.extra = Object.assign({}, s.extra || {}, { shape: "rectangle" });
+    } else if ((shape === "circle" || shape === "ellipse") && knot.kind === "radius") {
+      const g = ellipseGeomFromPoints(pts);
+      if (shape === "circle") {
+        const r = Math.max(8, Math.hypot(world.x - g.cx, world.y - g.cy));
+        s.points = makeEllipsePoints(g.cx, g.cy, r, r, pressure, 96);
+        s.extra = Object.assign({}, s.extra || {}, { shape: "circle" });
+      } else {
+        let rx = g.rx;
+        let ry = g.ry;
+        if (knot.axis === "x") rx = Math.max(8, Math.abs(world.x - g.cx));
+        else ry = Math.max(8, Math.abs(world.y - g.cy));
+        s.points = makeEllipsePoints(g.cx, g.cy, rx, ry, pressure, 96);
+        s.extra = Object.assign({}, s.extra || {}, { shape: "ellipse" });
+      }
+    } else if (shape === "triangle" && knot.kind === "corner") {
+      const ring = closedRing(pts).slice(0, 3).map((p) => ({ x: p.x, y: p.y, p: pressure }));
+      ring[knot.corner] = { x: world.x, y: world.y, p: pressure };
+      s.points = rebuildClosed(ring, pressure);
+      s.extra = Object.assign({}, s.extra || {}, { shape: "triangle" });
+    } else if (shape === "line" && knot.kind === "end") {
+      const next = pts.map((p) => ({ x: p.x, y: p.y, p: p.p }));
+      next[knot.i] = { x: world.x, y: world.y, p: pressure };
+      s.points = next;
+      s.extra = Object.assign({}, s.extra || {}, { shape: "line" });
+    } else {
+      const k = dragState.index;
+      const knotIdx = dragState.knots || [k];
+      const pos = knotIdx.indexOf(k);
+      const k0 = pos > 0 ? knotIdx[pos - 1] : k;
+      const k1 = pos >= 0 && pos < knotIdx.length - 1 ? knotIdx[pos + 1] : k;
+      s.points = pts.map((p, i) => {
+        let w = 0;
+        if (i === k) w = 1;
+        else if (k !== k0 && i > k0 && i < k) w = (i - k0) / (k - k0);
+        else if (k !== k1 && i > k && i < k1) w = (k1 - i) / (k1 - k);
+        if (w <= 0) return { x: p.x, y: p.y, p: p.p, text: p.text };
+        return { x: p.x + dx * w, y: p.y + dy * w, p: p.p, text: p.text };
+      });
+    }
+    s.bbox = strokeWorldBBox(s);
+    const boxes = [];
+    for (const sid of selection.ids) {
+      const st = boardStrokes.get(sid);
+      if (st && st.bbox) boxes.push(st.bbox);
     }
     selection.bbox = unionBBox(boxes);
     requestRedraw();
@@ -1695,24 +3189,583 @@
     for (const [id, beforePts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
       if (s) {
-        wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
-        moves.push({ id, before: beforePts, after: s.points.map((p) => ({ ...p })) });
+        wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
+        const extra = dragState.extras && dragState.extras.get(id);
+        const beforeSize = dragState.sizes && dragState.sizes.get(id);
+        moves.push({
+          id,
+          before: beforePts,
+          after: s.points.map((p) => ({ ...p })),
+          beforeExtra: extra || null,
+          afterExtra: s.extra ? JSON.parse(JSON.stringify(s.extra)) : null,
+          beforeSize: beforeSize != null ? beforeSize : s.size,
+          afterSize: s.size,
+        });
       }
     }
-    if (moves.length > 0) pushUndo({ type: "move", moves });
+    if (moves.length > 0) {
+      const changed = moves.some((m) => {
+        if (m.before.length !== m.after.length) return true;
+        for (let i = 0; i < m.before.length; i++) {
+          if (Math.hypot(m.before[i].x - m.after[i].x, m.before[i].y - m.after[i].y) > 0.35) return true;
+        }
+        const be = JSON.stringify(m.beforeExtra || null);
+        const ae = JSON.stringify(m.afterExtra || null);
+        if (be !== ae) return true;
+        if (m.beforeSize != null && m.afterSize != null && Math.abs(m.beforeSize - m.afterSize) > 0.05) return true;
+        return false;
+      });
+      if (changed) pushUndo({ type: "move", moves });
+    }
     dragState = null;
   }
   function cancelSelectionDrag() {
     for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
-      if (s) {
-        s.points = pts;
-        s.bbox = makeBBox(pts);
+      if (!s) continue;
+      s.points = pts.map((p) => ({ ...p }));
+      if (dragState.extras && dragState.extras.has(id)) {
+        const ex = dragState.extras.get(id);
+        if (ex) s.extra = JSON.parse(JSON.stringify(ex));
+        else if (s.extra && s.extra.rotation != null) {
+          const next = Object.assign({}, s.extra);
+          delete next.rotation;
+          s.extra = Object.keys(next).length ? next : undefined;
+        }
       }
+      const beforeSize = dragState.sizes && dragState.sizes.get(id);
+      if (beforeSize != null) s.size = beforeSize;
+      s.bbox = strokeWorldBBox(s);
     }
     dragState = null;
     requestRedraw();
   }
+
+  function knotIndicesForStroke(stroke) {
+    const pts = stroke.points || [];
+    if (pts.length < 2) return pts.length === 1 ? [0] : [];
+    if (pts.length <= 16) return pts.map((_, i) => i);
+    const b = stroke.bbox || makeBBox(pts);
+    const diag = Math.max(32, Math.hypot(b.maxX - b.minX, b.maxY - b.minY));
+    const simple = rdpSimplify(pts, Math.max(5, diag * 0.04));
+    const idx = [];
+    const seen = new Set();
+    for (const sp of simple) {
+      let best = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const d = Math.hypot(pts[i].x - sp.x, pts[i].y - sp.y);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      }
+      if (!seen.has(best)) {
+        seen.add(best);
+        idx.push(best);
+      }
+    }
+    if (!seen.has(0)) idx.unshift(0);
+    if (!seen.has(pts.length - 1)) idx.push(pts.length - 1);
+    idx.sort((a, b) => a - b);
+    if (idx.length > 22) {
+      const out = [idx[0]];
+      const step = Math.ceil((idx.length - 2) / 18);
+      for (let i = step; i < idx.length - 1; i += step) out.push(idx[i]);
+      out.push(idx[idx.length - 1]);
+      return out;
+    }
+    return idx;
+  }
+
+  function selectedEditKnots() {
+    const ink = selectedStrokes().filter((s) => s.tool === "pen" || s.tool === "marker");
+    if (!ink.length || ink.length > 10) return [];
+    const out = [];
+    for (const s of ink) {
+      const shaped = shapeEditKnots(s);
+      if (shaped) {
+        tagShape(s);
+        for (const k of shaped) out.push(Object.assign({ strokeId: s.id, knots: [] }, k));
+        continue;
+      }
+      if (s.extra && s.extra.shape) continue;
+      const knots = knotIndicesForStroke(s);
+      for (const i of knots) {
+        const p = s.points[i];
+        if (!p) continue;
+        out.push({ strokeId: s.id, i, x: p.x, y: p.y, knots, kind: "free" });
+      }
+    }
+    return out.length > 80 ? [] : out;
+  }
+
+  function pickEditKnot(world) {
+    const r = 14 / Math.max(scale, 0.25);
+    let best = null;
+    let bestD = r;
+    for (const k of selectedEditKnots()) {
+      const d = Math.hypot(world.x - k.x, world.y - k.y);
+      if (d <= bestD) {
+        best = k;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  function pickScaleHandle(world, bbox, pad) {
+    const r = 14 / Math.max(scale, 0.25);
+    for (const p of selectionHandlePoints(bbox, pad)) {
+      if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
+    }
+    return null;
+  }
+
+  function pickRotateHandle(world, bbox, pad) {
+    if (!bbox) return false;
+    const h = selectionRotateHandle(bbox, pad);
+    const r = 16 / Math.max(scale, 0.25);
+    return Math.hypot(world.x - h.x, world.y - h.y) <= r;
+  }
+
+  function pickCropHandle(world) {
+    if (!cropState || !cropState.full) return null;
+    const r = 16 / Math.max(scale, 0.25);
+    for (const p of cropHandlePoints(cropState.full, cropState.crop)) {
+      if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
+    }
+    return null;
+  }
+
+  function clampCrop(c) {
+    const min = 0.04;
+    let l = Math.max(0, Math.min(1 - min, c.l));
+    let t = Math.max(0, Math.min(1 - min, c.t));
+    let r = Math.max(l + min, Math.min(1, c.r));
+    let b = Math.max(t + min, Math.min(1, c.b));
+    return { l, t, r, b };
+  }
+
+  function updateCropDrag(world) {
+    if (!cropState || !cropState.handle || !cropState.startCrop) return;
+    const full = cropState.full;
+    const start = cropState.startCrop;
+    const dx = (world.x - cropState.startWorld.x) / full.w;
+    const dy = (world.y - cropState.startWorld.y) / full.h;
+    const next = { ...start };
+    const h = cropState.handle;
+    if (h === "move") {
+      const w = start.r - start.l;
+      const ht = start.b - start.t;
+      next.l = start.l + dx;
+      next.t = start.t + dy;
+      next.r = next.l + w;
+      next.b = next.t + ht;
+      if (next.l < 0) {
+        next.r -= next.l;
+        next.l = 0;
+      }
+      if (next.t < 0) {
+        next.b -= next.t;
+        next.t = 0;
+      }
+      if (next.r > 1) {
+        next.l -= next.r - 1;
+        next.r = 1;
+      }
+      if (next.b > 1) {
+        next.t -= next.b - 1;
+        next.b = 1;
+      }
+    } else {
+      if (h.indexOf("w") >= 0) next.l = start.l + dx;
+      if (h.indexOf("e") >= 0) next.r = start.r + dx;
+      if (h.indexOf("n") >= 0) next.t = start.t + dy;
+      if (h.indexOf("s") >= 0) next.b = start.b + dy;
+    }
+    cropState.crop = clampCrop(next);
+  }
+
+  function enterCropMode() {
+    const s = selectedImageStroke();
+    if (!s) return;
+    const full = imageFullRect(s);
+    if (!full) return;
+    cropState = {
+      strokeId: s.id,
+      full,
+      crop: imageCrop(s),
+      before: cloneStroke(s),
+      pointerId: null,
+      handle: null,
+    };
+    setTool("select");
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  function cancelCropMode(silent) {
+    if (!cropState) {
+      if (!silent) syncMediaToolbar();
+      return;
+    }
+    cropState = null;
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  function applyCropMode() {
+    if (!cropState) return;
+    const s = boardStrokes.get(cropState.strokeId);
+    if (!s) {
+      cropState = null;
+      syncMediaToolbar();
+      return;
+    }
+    const full = cropState.full;
+    const crop = clampCrop(cropState.crop);
+    const minX = full.minX + crop.l * full.w;
+    const minY = full.minY + crop.t * full.h;
+    const maxX = full.minX + crop.r * full.w;
+    const maxY = full.minY + crop.b * full.h;
+    const before = cropState.before;
+    s.points = [
+      { x: minX, y: minY, p: 1 },
+      { x: maxX, y: maxY, p: 1 },
+    ];
+    s.extra = s.extra || {};
+    s.extra.crop = crop;
+    s.bbox = strokeWorldBBox(s);
+    selection.bbox = s.bbox;
+    wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
+    pushUndo({
+      type: "move",
+      moves: [
+        {
+          id: s.id,
+          before: before.points.map((p) => ({ ...p })),
+          after: s.points.map((p) => ({ ...p })),
+          beforeExtra: before.extra || null,
+          afterExtra: JSON.parse(JSON.stringify(s.extra)),
+        },
+      ],
+    });
+    cropState = null;
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  function selectedStrokes() {
+    return Array.from(selection.ids)
+      .map((id) => boardStrokes.get(id))
+      .filter(Boolean);
+  }
+
+  function selectedHandwriting() {
+    return selectedStrokes().filter((s) => s.tool === "pen" || s.tool === "marker");
+  }
+
+  function copySelection() {
+    const clones = selectedStrokes().map(cloneStroke);
+    if (!clones.length) return;
+    strokeClipboard = clones;
+    syncSelectionToolbar();
+  }
+
+  function cutSelection() {
+    const clones = selectedStrokes().map(cloneStroke);
+    if (!clones.length) return;
+    strokeClipboard = clones.map(cloneStroke);
+    const ids = clones.map((s) => s.id);
+    removeStrokes(ids);
+    pushUndo({ type: "erase", strokes: clones });
+    clearSelection();
+    requestRedraw();
+  }
+
+  function pasteClipboard() {
+    if (!strokeClipboard.length) return;
+    hidePasteMenu();
+    const boxes = strokeClipboard.map((s) => makeBBox(s.points));
+    const union = unionBBox(boxes);
+    if (!union) return;
+    const target =
+      pasteAnchorWorld || lastPointerWorld || screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+    pasteAnchorWorld = null;
+    const dx = target.x - (union.minX + union.maxX) / 2;
+    const dy = target.y - (union.minY + union.maxY) / 2;
+    const pasted = [];
+    for (const src of strokeClipboard) {
+      const n = cloneStroke(src);
+      n.id = uuid();
+      n.points = n.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
+      n.bbox = makeBBox(n.points);
+      putStroke(n);
+      pasted.push(cloneStroke(n));
+    }
+    if (!pasted.length) return;
+    pushUndo({ type: "add_many", strokes: pasted });
+    setTool("select");
+    selectStrokeIds(pasted.map((s) => s.id));
+    requestRedraw();
+  }
+
+  const mediaToolbar = document.getElementById("selection-toolbar");
+  const importFileInput = document.getElementById("import-file");
+
+  function syncSelectionToolbar() {
+    if (!mediaToolbar) return;
+    const cropping = !!cropState;
+    const hasSel = selection.ids.size > 0 || cropping;
+    if (!hasSel) {
+      mediaToolbar.classList.add("hidden");
+      return;
+    }
+    mediaToolbar.classList.remove("hidden");
+    const img = selectedImageStroke();
+    const pens = selectedHandwriting();
+    const kiBtn = document.getElementById("btn-sel-ki");
+    const copyBtn = document.getElementById("btn-sel-copy");
+    const cutBtn = document.getElementById("btn-sel-cut");
+    const pasteBtn = document.getElementById("btn-sel-paste");
+    const cropBtn = document.getElementById("btn-media-crop");
+    const doneBtn = document.getElementById("btn-media-crop-done");
+    const cancelBtn = document.getElementById("btn-media-crop-cancel");
+    if (kiBtn) kiBtn.classList.toggle("hidden", cropping || pens.length === 0);
+    if (copyBtn) copyBtn.classList.toggle("hidden", cropping || !selection.ids.size);
+    if (cutBtn) cutBtn.classList.toggle("hidden", cropping || !selection.ids.size);
+    if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
+    if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
+    if (doneBtn) doneBtn.classList.toggle("hidden", !cropping);
+    if (cancelBtn) cancelBtn.classList.toggle("hidden", !cropping);
+    positionMediaToolbar();
+  }
+
+  function syncMediaToolbar() {
+    syncSelectionToolbar();
+  }
+
+  function positionMediaToolbar() {
+    if (!mediaToolbar || mediaToolbar.classList.contains("hidden")) return;
+    const s = selectedImageStroke() || (cropState && boardStrokes.get(cropState.strokeId));
+    const b =
+      cropState && cropState.full
+        ? cropState.full
+        : selection.bbox || (s && (s.bbox || imageDestRect(s)));
+    if (!b) return;
+    const top = worldToScreen((b.minX + b.maxX) / 2, b.minY);
+    const bottom = worldToScreen((b.minX + b.maxX) / 2, b.maxY);
+    mediaToolbar.style.left = Math.round(top.x) + "px";
+    const extraLift = cropState ? 0 : 8;
+    if (top.y < 78 + extraLift) {
+      mediaToolbar.style.top = Math.round(bottom.y + (cropState ? 8 : 48)) + "px";
+      mediaToolbar.style.transform = "translate(-50%, 0)";
+    } else {
+      mediaToolbar.style.top = Math.round(top.y - 8 - extraLift) + "px";
+      mediaToolbar.style.transform = "translate(-50%, -100%)";
+    }
+  }
+
+  function bitmapToJpeg(source, maxEdge) {
+    const w = source.width || source.naturalWidth;
+    const h = source.height || source.naturalHeight;
+    const fit = Math.min(1, maxEdge / Math.max(w, h, 1));
+    const cw = Math.max(1, Math.round(w * fit));
+    const ch = Math.max(1, Math.round(h * fit));
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const c = canvas.getContext("2d");
+    c.fillStyle = "#ffffff";
+    c.fillRect(0, 0, cw, ch);
+    c.drawImage(source, 0, 0, cw, ch);
+    return { dataUrl: canvas.toDataURL("image/jpeg", 0.82), w: cw, h: ch };
+  }
+
+  async function uploadJpeg(dataUrl) {
+    const id = uuid();
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      if (window.SofiaOffline) await SofiaOffline.putMedia(id, blob);
+    } catch (err) {
+      /* blob cache optional */
+    }
+    try {
+      const resp = await fetch("/api/media", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, image: dataUrl }),
+      });
+      if (!resp.ok) throw new Error("upload");
+      const data = await resp.json();
+      if (!data || !data.id) throw new Error("upload");
+      return data.id;
+    } catch (err) {
+      await enqueueOp({ type: "media", id, image: dataUrl });
+      return id;
+    }
+  }
+
+  function placeImageStroke(mediaId, w, h, name, origin) {
+    const maxW = Math.min(720, window.innerWidth * 0.62) / scale;
+    const maxH = Math.min(860, window.innerHeight * 0.7) / scale;
+    const fit = Math.min(maxW / w, maxH / h, 1);
+    const dw = w * fit;
+    const dh = h * fit;
+    const id = uuid();
+    const stroke = {
+      id,
+      tool: "image",
+      color: "#000000",
+      size: 1,
+      points: [
+        { x: origin.x, y: origin.y, p: 1 },
+        { x: origin.x + dw, y: origin.y + dh, p: 1 },
+      ],
+      extra: {
+        mediaId,
+        crop: { l: 0, t: 0, r: 1, b: 1 },
+        nw: w,
+        nh: h,
+        name: name || "Bild",
+      },
+    };
+    stroke.bbox = makeBBox(stroke.points);
+    boardStrokes.set(id, stroke);
+    ensureMedia(mediaId);
+    wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
+    pushUndo({ type: "add", stroke: cloneStroke(stroke) });
+    return stroke;
+  }
+
+  async function importImageFile(file, origin) {
+    const bmp = await createImageBitmap(file);
+    const jpeg = bitmapToJpeg(bmp, 1600);
+    if (bmp.close) bmp.close();
+    const mediaId = await uploadJpeg(jpeg.dataUrl);
+    return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
+  }
+
+  async function importPdfFile(file, origin) {
+    if (!window.pdfjsLib) throw new Error("pdfjs");
+    const buf = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+    const n = Math.min(pdf.numPages, 6);
+    const placed = [];
+    let y = origin.y;
+    for (let i = 1; i <= n; i++) {
+      const page = await pdf.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const scalePdf = Math.min(1.5, 1600 / Math.max(base.width, base.height));
+      const vp = page.getViewport({ scale: scalePdf });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(vp.width));
+      canvas.height = Math.max(1, Math.round(vp.height));
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      const jpeg = bitmapToJpeg(canvas, 1600);
+      const mediaId = await uploadJpeg(jpeg.dataUrl);
+      const stroke = placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name + " S." + i, { x: origin.x, y });
+      placed.push(stroke);
+      y = stroke.points[1].y + 28;
+    }
+    return placed;
+  }
+
+  async function importFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const worldOrigin = screenToWorld(window.innerWidth * 0.18, window.innerHeight * 0.16);
+    let x = worldOrigin.x;
+    let y = worldOrigin.y;
+    const ids = [];
+    statusTextEl.textContent = "Importiere…";
+    try {
+      for (const file of files) {
+        const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
+        const origin = { x, y };
+        if (isPdf) {
+          const placed = await importPdfFile(file, origin);
+          placed.forEach((s) => ids.push(s.id));
+          if (placed.length) {
+            y = placed[placed.length - 1].points[1].y + 40;
+          }
+        } else if (/^image\//.test(file.type) || /\.(png|jpe?g|gif|webp|heic)$/i.test(file.name)) {
+          const s = await importImageFile(file, origin);
+          ids.push(s.id);
+          y = s.points[1].y + 40;
+        }
+      }
+      if (ids.length) {
+        setTool("select");
+        selectStrokeIds(ids);
+      }
+    } catch (err) {
+      console.warn("import failed", err);
+      statusTextEl.textContent = "Import fehlgeschlagen";
+      setTimeout(() => setConnected(!!(ws && ws.readyState === 1)), 1800);
+      return;
+    }
+    setConnected(!!(ws && ws.readyState === 1));
+    requestRedraw();
+  }
+
+  document.getElementById("btn-import")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hidePopovers();
+    if (importFileInput) {
+      importFileInput.value = "";
+      importFileInput.click();
+    }
+  });
+  importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
+  window.addEventListener("dragover", (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) e.preventDefault();
+  });
+  window.addEventListener("drop", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    importFiles(e.dataTransfer.files);
+  });
+  document.getElementById("btn-media-crop")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    enterCropMode();
+  });
+  document.getElementById("btn-media-crop-done")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyCropMode();
+  });
+  document.getElementById("btn-media-crop-cancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cancelCropMode();
+  });
+  document.getElementById("btn-sel-ki")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    recognizeSelection();
+  });
+  document.getElementById("btn-sel-copy")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    copySelection();
+  });
+  document.getElementById("btn-sel-cut")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cutSelection();
+  });
+  document.getElementById("btn-sel-paste")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pasteClipboard();
+  });
+  document.getElementById("btn-paste-here")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pasteClipboard();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && cropState) {
+      e.preventDefault();
+      cancelCropMode();
+    }
+  });
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") spacePressed = true;
@@ -1728,6 +3781,7 @@
   }
 
   function startStroke(pointerId, pointerType, wx, wy, pressure) {
+    clearSelection();
     const id = uuid();
     const tool = currentTool === "marker" ? "marker" : "pen";
     const size = activeSize();
@@ -1737,18 +3791,23 @@
       color: currentColor,
       size,
       points: [{ x: wx, y: wy, p: pressure }],
+      ownerId: myClientId,
       unsent: [],
       pointerId,
       pointerType,
       locked: false,
     };
     wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points });
-    if (tool === "pen") armHoldTimer();
+    if (isHoldSnapTool(tool)) armHoldTimer();
     requestRedraw();
   }
 
   function extendStroke(wx, wy, pressure) {
-    if (!currentStroke || currentStroke.locked) return;
+    if (!currentStroke) return;
+    if (currentStroke.locked) {
+      reshapeLockedStroke(wx, wy);
+      return;
+    }
     const last = currentStroke.points[currentStroke.points.length - 1];
     const dist = last ? Math.hypot(wx - last.x, wy - last.y) : 0;
     if (last && dist < MIN_MOVE_WORLD) return;
@@ -1768,7 +3827,7 @@
     const point = { x: wx, y: wy, p: pressure };
     currentStroke.points.push(point);
     currentStroke.unsent.push(point);
-    if (currentStroke.tool === "pen") armHoldTimer();
+    if (isHoldSnapTool(currentStroke.tool)) armHoldTimer();
     requestRedraw();
   }
 
@@ -1808,31 +3867,28 @@
   }
 
   function looksLikeStrikeGesture(pts) {
-    if (pts.length < 4) return false;
-    const pathLength = strokePathLength(pts);
-    if (pathLength < 36) return false;
-    const start = pts[0];
-    const end = pts[pts.length - 1];
-    const chord = Math.hypot(end.x - start.x, end.y - start.y);
-    let maxDev = 0;
-    for (const p of pts) {
-      const d = perpDist(p, start, end);
-      if (d > maxDev) maxDev = d;
-    }
-    const straight = chord > 28 && pathLength > 0 && chord / pathLength > 0.7 && maxDev / pathLength < 0.18;
-    const scribble = countDirectionReversals(pts) >= 2 && pathLength > 48;
-    return straight || scribble;
+    const pointerType = (currentStroke && currentStroke.pointerType) || "pen";
+    return window.SofiaInk && SofiaInk.looksLikeStrikeGesture
+      ? SofiaInk.looksLikeStrikeGesture(pts, pointerType)
+      : false;
   }
 
   function strikeCrossesStroke(poly, stroke) {
     const b = stroke.bbox;
     if (!b) return false;
-    const hitR = Math.max(10, stroke.size * 0.65 + 6);
+    const mouse = currentStroke && currentStroke.pointerType === "mouse";
+    if (stroke.tool === "text" || stroke.tool === "image") {
+      for (const q of poly) {
+        if (q.x >= b.minX && q.x <= b.maxX && q.y >= b.minY && q.y <= b.maxY) return true;
+      }
+      return false;
+    }
+    const hitR = Math.max(mouse ? 8 : 10, stroke.size * 0.65 + (mouse ? 4 : 6));
     const bw = b.maxX - b.minX;
     const bh = b.maxY - b.minY;
     const diag = Math.hypot(bw, bh);
-    const innerPadX = bw * 0.2;
-    const innerPadY = bh * 0.2;
+    const innerPadX = bw * (mouse ? 0.08 : 0.2);
+    const innerPadY = bh * (mouse ? 0.08 : 0.2);
     let hits = 0;
     let interiorHits = 0;
     let firstI = -1;
@@ -1867,6 +3923,7 @@
     }
     if (hits === 0) return false;
     if (diag < 18) return hits >= 1;
+    if (mouse && hits >= 2) return true;
     if (interiorHits === 0) return false;
     return lastI > firstI || hits >= 2;
   }
@@ -1905,11 +3962,16 @@
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
     }
-    wsSend({ type: "stroke_end", strokeId: currentStroke.id });
+    wsSend({ type: "stroke_end", strokeId: currentStroke.id, extra: currentStroke.extra || null });
+    tagShape(currentStroke);
     currentStroke.bbox = makeBBox(currentStroke.points);
+    currentStroke.endedAt = performance.now();
+    const finishedId = currentStroke.id;
+    const selectShape = !!(currentStroke.locked && currentStroke.extra && currentStroke.extra.shape);
     boardStrokes.set(currentStroke.id, currentStroke);
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
     currentStroke = null;
+    if (selectShape) selectStrokeIds([finishedId]);
     requestRedraw();
   }
 
@@ -1919,6 +3981,28 @@
     wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
     currentStroke = null;
     requestRedraw();
+  }
+
+  function eraseHitsStroke(stroke, sx, sy, r) {
+    const b = stroke.bbox || strokeWorldBBox(stroke);
+    if (!b) return false;
+    if (sx < b.minX - r || sx > b.maxX + r || sy < b.minY - r || sy > b.maxY + r) return false;
+    if (stroke.tool === "image") {
+      const quad = imageRotatedCorners(stroke);
+      if (quad.length === 4) return pointInPolygon({ x: sx, y: sy }, quad);
+      return sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY;
+    }
+    if (stroke.tool === "text") {
+      return sx >= b.minX - r && sx <= b.maxX + r && sy >= b.minY - r && sy <= b.maxY + r;
+    }
+    const hitR = r + (stroke.size || 6) / 2;
+    const pts = stroke.points || [];
+    if (pts.length === 0) return false;
+    if (pts.length === 1) return Math.hypot(pts[0].x - sx, pts[0].y - sy) <= hitR;
+    for (let i = 1; i < pts.length; i++) {
+      if (distPointToSeg({ x: sx, y: sy }, pts[i - 1], pts[i]) <= hitR) return true;
+    }
+    return false;
   }
 
   function eraseSegment(x0, y0, x1, y1) {
@@ -1931,17 +4015,9 @@
       const sy = y0 + (y1 - y0) * t;
       for (const stroke of boardStrokes.values()) {
         if (erasedThisGesture.has(stroke.id)) continue;
-        const b = stroke.bbox;
-        if (sx < b.minX - r || sx > b.maxX + r || sy < b.minY - r || sy > b.maxY + r) continue;
-        const hitR = r + stroke.size / 2;
-        for (const p of stroke.points) {
-          const dx = p.x - sx, dy = p.y - sy;
-          if (dx * dx + dy * dy <= hitR * hitR) {
-            erasedThisGesture.add(stroke.id);
-            erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
-            break;
-          }
-        }
+        if (!eraseHitsStroke(stroke, sx, sy, r)) continue;
+        erasedThisGesture.add(stroke.id);
+        erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
       }
     }
     if (erasedThisGesture.size > 0) {
@@ -1971,7 +4047,58 @@
 
   function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
+    lastPointerWorld = world;
+    if (currentTool !== "eraser" && currentTool !== "select") {
+      const shaped = pickShapedStrokeAt(world);
+      if (shaped) {
+        beginStrokeInteraction(e.pointerId, world, shaped, e.clientX, e.clientY);
+        sendCursor(world.x, world.y, currentTool, activeSize());
+        return;
+      }
+    }
     if (currentTool === "select") {
+      if (cropState) {
+        const handle = pickCropHandle(world);
+        if (handle) {
+          cropState.pointerId = e.pointerId;
+          cropState.handle = handle;
+          cropState.startCrop = { ...cropState.crop };
+          cropState.startWorld = world;
+          return;
+        }
+        const full = cropState.full;
+        const crop = cropState.crop;
+        const rect = {
+          minX: full.minX + crop.l * full.w,
+          minY: full.minY + crop.t * full.h,
+          maxX: full.minX + crop.r * full.w,
+          maxY: full.minY + crop.b * full.h,
+        };
+        if (pointInBBox(world, rect, 0)) {
+          cropState.pointerId = e.pointerId;
+          cropState.handle = "move";
+          cropState.startCrop = { ...cropState.crop };
+          cropState.startWorld = world;
+          return;
+        }
+      }
+      if (selection.bbox && !cropState) {
+        const pad = 10 / scale;
+        const knot = pickEditKnot(world);
+        if (knot) {
+          startPointEdit(e.pointerId, world, knot);
+          return;
+        }
+        const handle = pickScaleHandle(world, selection.bbox, pad);
+        if (handle) {
+          startSelectionScale(e.pointerId, world, handle);
+          return;
+        }
+        if (pickRotateHandle(world, selection.bbox, pad)) {
+          startSelectionRotate(e.pointerId, world);
+          return;
+        }
+      }
       if (selection.bbox && pointInBBox(world, selection.bbox, 10 / scale)) {
         startSelectionDrag(e.pointerId, world);
       } else {
@@ -1982,13 +4109,14 @@
     } else if (currentTool === "eraser") {
       erasedThisGesture.clear();
       erasedStrokesThisGesture.clear();
-      currentStroke = { pointerId: e.pointerId, eraser: true, lastX: world.x, lastY: world.y };
+      currentStroke = { pointerId: e.pointerId, eraser: true, lastX: world.x, lastY: world.y, startX: e.clientX, startY: e.clientY };
       eraseSegment(world.x, world.y, world.x, world.y);
       updateEraserCursor(e.clientX, e.clientY);
     } else {
       startStroke(e.pointerId, e.pointerType, world.x, world.y, pointerPressure(e));
     }
     sendCursor(world.x, world.y, currentTool, activeSize());
+    armPasteHold(e, world);
   }
 
   canvas.addEventListener("pointerdown", (e) => {
@@ -2007,6 +4135,7 @@
       if (touchPointers.size === 2) {
         if (currentStroke) abortStroke();
         if (dragState) cancelSelectionDrag();
+        pendingShapeDrag = null;
         lassoPoints = null;
         lassoPointerId = null;
         erasedThisGesture.clear();
@@ -2021,11 +4150,17 @@
         return;
       }
       if (touchPointers.size === 1) {
+        const world = screenToWorld(e.clientX, e.clientY);
+        if (currentTool !== "eraser" && pickShapedStrokeAt(world)) {
+          dispatchPrimaryDown(e);
+          return;
+        }
         if (fingerDrawEnabled && !pinchState) {
           dispatchPrimaryDown(e);
           return;
         }
         if (!pinchState) panState = { lastX: e.clientX, lastY: e.clientY };
+        if (!fingerDrawEnabled) armPasteHold(e, screenToWorld(e.clientX, e.clientY));
       }
       return;
     }
@@ -2040,6 +4175,7 @@
   }, { passive: false });
 
   canvas.addEventListener("pointermove", (e) => {
+    notePasteHoldMove(e);
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
 
     if (e.pointerType === "touch") {
@@ -2057,6 +4193,8 @@
       }
       const isActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
+        (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) ||
+        (cropState && cropState.pointerId === e.pointerId) ||
         lassoPointerId === e.pointerId ||
         (currentStroke && currentStroke.pointerId === e.pointerId);
       if (!isActiveDrawTouch) {
@@ -2080,17 +4218,35 @@
     }
 
     const world = screenToWorld(e.clientX, e.clientY);
+    lastPointerWorld = world;
 
     if (currentTool === "eraser") {
       updateEraserCursor(e.clientX, e.clientY);
     }
 
-    if (dragState && dragState.pointerId === e.pointerId) {
+    if (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) {
+      const moved = Math.hypot(e.clientX - pendingShapeDrag.clientX, e.clientY - pendingShapeDrag.clientY);
+      if (moved > 9) {
+        startSelectionDrag(pendingShapeDrag.pointerId, pendingShapeDrag.startWorld);
+        pendingShapeDrag = null;
+        if (touchPointers.size >= 2) {
+          cancelSelectionDrag();
+          return;
+        }
+        updateSelectionDrag(world);
+      }
+    } else if (cropState && cropState.pointerId === e.pointerId) {
+      updateCropDrag(world);
+      requestRedraw();
+    } else if (dragState && dragState.pointerId === e.pointerId) {
       if (touchPointers.size >= 2) {
         cancelSelectionDrag();
         return;
       }
-      updateSelectionDrag(world);
+      if (dragState.kind === "scale") updateSelectionScale(world);
+      else if (dragState.kind === "rotate") updateSelectionRotate(world);
+      else if (dragState.kind === "point") updatePointEdit(world);
+      else updateSelectionDrag(world);
     } else if (lassoPointerId === e.pointerId && lassoPoints) {
       if (touchPointers.size >= 2) {
         lassoPoints = null;
@@ -2124,7 +4280,31 @@
   });
 
   function endPointer(e) {
+    const consumed = pasteHoldConsumed;
+    clearPasteHold();
     activePointers.delete(e.pointerId);
+
+    if (consumed) {
+      pasteHoldConsumed = false;
+      if (e.pointerType === "touch") {
+        touchPointers.delete(e.pointerId);
+        if (touchPointers.size < 2) pinchState = null;
+        if (touchPointers.size === 0) panState = null;
+      } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
+        panState = null;
+      }
+      if (lassoPointerId === e.pointerId) {
+        lassoPointerId = null;
+        lassoPoints = null;
+      }
+      if (currentStroke && currentStroke.pointerId === e.pointerId) {
+        if (currentStroke.eraser) currentStroke = null;
+        else abortStroke();
+      }
+      if (currentTool === "eraser") eraserCursorEl.style.display = "none";
+      requestRedraw();
+      return;
+    }
 
     if (e.pointerType === "touch") {
       touchPointers.delete(e.pointerId);
@@ -2132,15 +4312,29 @@
       if (touchPointers.size === 0) panState = null;
       const wasActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
+        (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) ||
+        (cropState && cropState.pointerId === e.pointerId) ||
         lassoPointerId === e.pointerId ||
         (currentStroke && currentStroke.pointerId === e.pointerId);
-      if (!wasActiveDrawTouch) return;
+      if (!wasActiveDrawTouch) {
+        if (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) pendingShapeDrag = null;
+        return;
+      }
       // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Abschluss-Logik unten
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       panState = null;
       return;
     }
 
+    if (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) {
+      pendingShapeDrag = null;
+    }
+
+    if (cropState && cropState.pointerId === e.pointerId) {
+      cropState.pointerId = null;
+      cropState.handle = null;
+      return;
+    }
     if (dragState && dragState.pointerId === e.pointerId) {
       finalizeSelectionDrag();
       return;
@@ -2153,6 +4347,7 @@
 
     if (currentStroke && currentStroke.pointerId === e.pointerId) {
       if (currentStroke.eraser) {
+        let keepEraser = false;
         if (pendingErase.size > 0) {
           wsSend({ type: "erase", strokeIds: Array.from(pendingErase) });
           pendingErase.clear();
@@ -2160,8 +4355,17 @@
         if (erasedStrokesThisGesture.size > 0) {
           pushUndo({ type: "erase", strokes: Array.from(erasedStrokesThisGesture.values()) });
           erasedStrokesThisGesture.clear();
+        } else {
+          const tap =
+            currentStroke.startX != null &&
+            Math.hypot(e.clientX - currentStroke.startX, e.clientY - currentStroke.startY) < 18;
+          if (tap && boardStrokes.size) {
+            showEraseAllMenu(e.clientX, e.clientY);
+            keepEraser = true;
+          }
         }
         currentStroke = null;
+        restoreToolAfterEraser({ keepEraser });
       } else {
         endStroke();
       }
@@ -2208,10 +4412,844 @@
     if (sel && sel.rangeCount) sel.removeAllRanges();
   });
 
+  // ---- EMNIST / Cloudflare ink-on recognition overlay ----------------------
+  const inkOverlay = document.getElementById("ink-overlay");
+  let inkGroups = [];
+  let recognizeTimer = null;
+  let recognizeBusy = false;
+  let recognizeAgain = false;
+  let lastRecognizeFocus = null;
+  let cloudOcrEnabled = null;
+  let recognizeAbort = null;
+  const dismissedInk = new Set();
+  const ocrCache = new Map();
+  let scanBoxes = [];
+  let recognizeWide = false;
+  let ocrRemaining = Infinity;
+  const RECOGNIZE_PAUSE_MS = 1600;
+  const CONTEXT_WAIT_MS = 1800;
+  const WIDE_BURST_MS = 8000;
+  const PX_PER_CM = 96 / 2.54;
+
+  fetch("/api/recognize")
+    .then((r) => r.json())
+    .then((d) => {
+      cloudOcrEnabled = !!(d && d.enabled);
+      if (typeof d.remainingNeurons === "number") ocrRemaining = d.remainingNeurons;
+    })
+    .catch(() => {});
+
+  function ensureEmnistLoaded() {
+    if (typeof SofiaInk === "undefined") return;
+    SofiaInk.loadEmnistModel("/models/emnist/model.json");
+    SofiaInk.loadMemory();
+  }
+
+  function recognizeSelection() {
+    const burst = selectedHandwriting();
+    if (!burst.length) return;
+    ensureEmnistLoaded();
+    runRecognize(burst);
+  }
+
+  function positionInkChips() {
+    if (!inkOverlay) return;
+    const chips = inkOverlay.querySelectorAll(".ink-chip");
+    const visible = inkGroups.filter((g) => !scanBoxes.some((b) => boxesOverlapBBox(b.bbox, g.bbox)));
+    chips.forEach((el, i) => {
+      const g = visible[i];
+      if (!g) return;
+      const s = worldToScreen(g.bbox.maxX + 8, g.bbox.minY - 6);
+      el.style.left = Math.round(s.x) + "px";
+      el.style.top = Math.round(s.y) + "px";
+    });
+  }
+
+  function inkGroupKey(g) {
+    return (g.strokeIds || []).slice().sort().join(",");
+  }
+
+  function renderInkCrop(strokes) {
+    const boxes = strokes.map((s) => s.bbox || SofiaInk.bboxOfPoints(s.points || []));
+    const b = unionBBox(boxes);
+    const pad = 18;
+    const w = Math.max(12, b.maxX - b.minX);
+    const h = Math.max(12, b.maxY - b.minY);
+    const scale = Math.min(4, 512 / Math.max(w, h));
+    const cw = Math.max(32, Math.ceil((w + pad * 2) * scale));
+    const ch = Math.max(32, Math.ceil((h + pad * 2) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const c = canvas.getContext("2d");
+    c.fillStyle = "#ffffff";
+    c.fillRect(0, 0, cw, ch);
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.strokeStyle = "#111111";
+    const toX = (x) => (x - b.minX + pad) * scale;
+    const toY = (y) => (y - b.minY + pad) * scale;
+    for (const s of strokes) {
+      const pts = s.points || [];
+      if (!pts.length) continue;
+      c.lineWidth = Math.max(3.2, (s.size || 6) * scale * 0.55);
+      const x0 = toX(pts[0].x);
+      const y0 = toY(pts[0].y);
+      if (pts.length === 1) {
+        c.beginPath();
+        c.fillStyle = "#111111";
+        c.arc(x0, y0, c.lineWidth / 2, 0, Math.PI * 2);
+        c.fill();
+        continue;
+      }
+      c.beginPath();
+      c.moveTo(x0, y0);
+      for (let i = 1; i < pts.length; i++) c.lineTo(toX(pts[i].x), toY(pts[i].y));
+      c.stroke();
+    }
+    return { dataUrl: canvas.toDataURL("image/png"), bbox: b };
+  }
+
+  function mergeInkGroups(local, cloud) {
+    if (!cloud.length) return local;
+    const cloudIds = new Set(cloud.flatMap((g) => g.strokeIds || []));
+    const out = cloud.slice();
+    for (const l of local) {
+      const overlap = (l.strokeIds || []).some((id) => cloudIds.has(id));
+      if (!overlap) out.push(l);
+    }
+    return out;
+  }
+
+  function insertTextStroke(text, x, y, color, size) {
+    const id = uuid();
+    const fontSize = size || 22;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+    const w = ctx.measureText(text).width;
+    ctx.restore();
+    const stroke = {
+      id,
+      tool: "text",
+      color: color || "#0b57d0",
+      size: fontSize,
+      points: [
+        { x, y, p: 1, text },
+        { x: x + w / Math.max(scale, 0.25), y: y - fontSize, p: 1 },
+      ],
+    };
+    stroke.bbox = makeBBox(stroke.points);
+    boardStrokes.set(id, stroke);
+    wsSend({
+      type: "stroke_move",
+      stroke: serializeStroke(stroke),
+    });
+    pushUndo({ type: "add", stroke: cloneStroke(stroke) });
+    requestRedraw();
+  }
+
+  function fillSpelledText(el, text, miss) {
+    el.textContent = "";
+    const spans = miss || [];
+    if (!text) {
+      el.textContent = "?";
+      return;
+    }
+    if (!spans.length) {
+      el.textContent = text;
+      return;
+    }
+    let i = 0;
+    for (const s of spans) {
+      if (s.start > i) el.appendChild(document.createTextNode(text.slice(i, s.start)));
+      const u = document.createElement("span");
+      u.className = "ink-spell-err";
+      u.textContent = text.slice(s.start, s.end);
+      u.title = "Mögliche Rechtschreibung";
+      el.appendChild(u);
+      i = s.end;
+    }
+    if (i < text.length) el.appendChild(document.createTextNode(text.slice(i)));
+  }
+
+  async function attachSpelling(g, ac) {
+    if (!g || !g.text) {
+      if (g) g.misspelled = [];
+      return;
+    }
+    const local = SofiaInk.correctText(g.text);
+    if (local.changes.length) g.text = local.text;
+    g.misspelled = SofiaInk.misspelledSpans(g.text);
+    if (!/[A-Za-zÄÖÜäöüß]{3,}/.test(g.text)) return;
+    try {
+      const resp = await fetch("/api/spell", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: ac && ac.signal,
+        body: JSON.stringify({ text: g.text }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data && data.suggestions && Object.keys(data.suggestions).length) {
+        const hun = SofiaInk.correctText(g.text, data.suggestions);
+        if (hun.changes.length) g.text = hun.text;
+      }
+      const extra = data && data.misspelled ? data.misspelled : [];
+      g.misspelled = SofiaInk.misspelledSpans(g.text, extra);
+    } catch (_err) {
+      /* hunspell optional */
+    }
+  }
+
+  function positionScanBoxes() {
+    if (!inkOverlay) return;
+    const boxes = inkOverlay.querySelectorAll(".ink-scan-box");
+    boxes.forEach((el, i) => {
+      const b = scanBoxes[i];
+      if (!b || !b.bbox) return;
+      const a = worldToScreen(b.bbox.minX, b.bbox.minY);
+      const c = worldToScreen(b.bbox.maxX, b.bbox.maxY);
+      el.style.left = Math.round(Math.min(a.x, c.x) - 8) + "px";
+      el.style.top = Math.round(Math.min(a.y, c.y) - 8) + "px";
+      el.style.width = Math.round(Math.abs(c.x - a.x) + 16) + "px";
+      el.style.height = Math.round(Math.abs(c.y - a.y) + 16) + "px";
+    });
+  }
+
+  function boxesOverlapBBox(a, b) {
+    if (!a || !b) return false;
+    return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
+  }
+
+  function renderInkOverlay() {
+    if (!inkOverlay) return;
+    inkOverlay.innerHTML = "";
+    scanBoxes.forEach((b) => {
+      const el = document.createElement("div");
+      el.className = "ink-scan-box";
+      const label = document.createElement("div");
+      label.className = "ink-scan-label";
+      label.textContent = b.label || "KI liest …";
+      el.appendChild(label);
+      inkOverlay.appendChild(el);
+    });
+    positionScanBoxes();
+    inkGroups.forEach((g) => {
+      if (scanBoxes.some((b) => boxesOverlapBBox(b.bbox, g.bbox))) return;
+      const el = document.createElement("div");
+      el.className = "ink-chip" + (g.result && mathSolveEnabled ? " ink-chip-math" : "");
+      const textBtn = document.createElement("button");
+      textBtn.type = "button";
+      textBtn.className = "ink-chip-text";
+      fillSpelledText(textBtn, g.text || "?", g.misspelled);
+      textBtn.lang = "de";
+      textBtn.title = "Tippen zum Korrigieren — merkt sich deine Schrift";
+      textBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+      textBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const input = document.createElement("input");
+        input.className = "ink-chip-edit";
+        input.value = g.text || "";
+        input.maxLength = 80;
+        el.replaceChild(input, textBtn);
+        input.focus();
+        input.select();
+        const commit = async () => {
+          const next = input.value.trim();
+          if (next && next !== g.text) {
+            if (next.length === g.glyphs.length) {
+              for (let i = 0; i < g.glyphs.length; i++) {
+                const gly = g.glyphs[i];
+                if (gly.pixels) await SofiaInk.rememberGlyph(gly.pixels, next[i]);
+              }
+            }
+            g.text = next;
+            g.result = mathSolveEnabled ? SofiaInk.solveFromBurst(next) : null;
+            g.misspelled = SofiaInk.misspelledSpans(next);
+            attachSpelling(g).then(() => renderInkOverlay());
+          }
+          renderInkOverlay();
+        };
+        input.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") {
+            ev.preventDefault();
+            commit();
+          }
+          if (ev.key === "Escape") renderInkOverlay();
+        });
+        input.addEventListener("blur", commit);
+      });
+      el.appendChild(textBtn);
+      if (g.result && mathSolveEnabled) {
+        const eq = document.createElement("button");
+        eq.type = "button";
+        eq.className = "ink-chip-eq";
+        eq.textContent = "= " + g.result.text;
+        eq.title = "Ergebnis aufs Blatt setzen";
+        eq.addEventListener("pointerdown", (e) => e.stopPropagation());
+        eq.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          insertTextStroke(g.result.text, g.bbox.maxX + 16, g.bbox.maxY, "#0b57d0", Math.max(18, (g.bbox.maxY - g.bbox.minY) * 0.85));
+          dismissedInk.add(inkGroupKey(g));
+          renderInkOverlay();
+        });
+        el.appendChild(eq);
+      }
+      const hide = document.createElement("button");
+      hide.type = "button";
+      hide.className = "ink-chip-hide";
+      hide.textContent = "×";
+      hide.title = "Ausblenden";
+      hide.addEventListener("pointerdown", (e) => e.stopPropagation());
+      hide.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissedInk.add(inkGroupKey(g));
+        renderInkOverlay();
+      });
+      el.appendChild(hide);
+      inkOverlay.appendChild(el);
+    });
+    positionInkChips();
+  }
+
+  function recognizeWordGap() {
+    return Math.max(48, (2 * PX_PER_CM) / Math.max(scale, 0.2));
+  }
+
+  function pruneOcrCache(liveIds) {
+    for (const key of Array.from(ocrCache.keys())) {
+      const ids = key.split(",").filter(Boolean);
+      if (ids.some((id) => !liveIds.has(id))) ocrCache.delete(key);
+    }
+    if (ocrCache.size > 48) {
+      const extra = Array.from(ocrCache.keys()).slice(0, ocrCache.size - 48);
+      for (const k of extra) ocrCache.delete(k);
+    }
+  }
+
+  async function runRecognize(burst) {
+    if (!burst || !burst.length || typeof SofiaInk === "undefined") return;
+    if (recognizeBusy) return;
+    recognizeBusy = true;
+    recognizeAgain = false;
+    recognizeWide = false;
+    if (recognizeAbort) recognizeAbort.abort();
+    const ac = new AbortController();
+    recognizeAbort = ac;
+    const wordGap = recognizeWordGap();
+    let groups = [];
+    try {
+      pruneOcrCache(new Set(burst.map((s) => s.id)));
+      const bbox = unionBBox(burst.map((s) => s.bbox || makeBBox(s.points)));
+      const blocks = bbox ? [{ strokes: burst, bbox }] : [];
+      scanBoxes = bbox ? [{ bbox, label: "KI liest …" }] : [];
+      renderInkOverlay();
+
+      const cloudGroups = [];
+      const canCloud =
+        cloudOcrEnabled !== false &&
+        ocrRemaining > 1 &&
+        recognizeAbort === ac &&
+        !ac.signal.aborted;
+      if (canCloud && burst.length) {
+        const ocrBlock = async (block) => {
+          const strokes = block.strokes;
+          const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
+          if (ocrCache.has(key)) {
+            const hit = ocrCache.get(key);
+            const text = SofiaInk.correctText(hit.text).text;
+            const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
+            return {
+              bbox: block.bbox,
+              glyphs: [],
+              text,
+              math: !!(solved || SofiaInk.looksLikeMath(text)),
+              result: solved,
+              misspelled: SofiaInk.misspelledSpans(text),
+              strokeIds: strokes.map((s) => s.id),
+              source: "cloudflare",
+            };
+          }
+          const crop = renderInkCrop(strokes);
+          const resp = await fetch("/api/recognize", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            signal: ac.signal,
+            body: JSON.stringify({
+              image: crop.dataUrl,
+              preferDigits: mathSolveEnabled,
+            }),
+          });
+          if (resp.status === 429) {
+            ocrRemaining = 0;
+            return null;
+          }
+          if (!resp.ok) return null;
+          const data = await resp.json();
+          if (typeof data.remainingNeurons === "number") ocrRemaining = data.remainingNeurons;
+          if (data && data.error === "not_configured") {
+            cloudOcrEnabled = false;
+            return null;
+          }
+          if (data && data.error === "quota") {
+            ocrRemaining = 0;
+            return null;
+          }
+          if (!data || !data.ok || !data.text) return null;
+          cloudOcrEnabled = true;
+          const text = SofiaInk.correctText(SofiaInk.cleanOcrText(data.text)).text;
+          if (!text) return null;
+          if (SofiaInk.ocrLooksPlausible(text, { strokes: strokes.length })) ocrCache.set(key, { text });
+          const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
+          return {
+            bbox: block.bbox,
+            glyphs: [],
+            text,
+            math: !!(solved || SofiaInk.looksLikeMath(text)),
+            result: solved,
+            misspelled: SofiaInk.misspelledSpans(text),
+            strokeIds: strokes.map((s) => s.id),
+            source: "cloudflare",
+          };
+        };
+        const g = await ocrBlock(blocks[0]).catch(() => null);
+        if (g) cloudGroups.push(g);
+      }
+
+      if (cloudGroups.length) {
+        groups = mergeInkGroups([], cloudGroups);
+      } else {
+        groups = await SofiaInk.recognizeStrokes(burst, {
+          recentOnly: false,
+          preferDigits: mathSolveEnabled,
+          wordGap,
+        });
+        groups = SofiaInk.stitchBlockGroups(groups, blocks);
+      }
+      for (const g of groups) {
+        const fix = SofiaInk.correctText(g.text);
+        if (fix.changes.length) g.text = fix.text;
+        if (!g.misspelled) g.misspelled = SofiaInk.misspelledSpans(g.text);
+      }
+      inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
+      scanBoxes = [];
+      renderInkOverlay();
+    } catch (err) {
+      scanBoxes = [];
+      renderInkOverlay();
+      if (!(err && err.name === "AbortError")) {
+        /* Modelle optional — Board bleibt nutzbar */
+      }
+    }
+
+    if (recognizeAbort === ac && !ac.signal.aborted && inkGroups.length) {
+      await Promise.all(inkGroups.map((g) => attachSpelling(g, ac)));
+      if (recognizeAbort === ac && !ac.signal.aborted) renderInkOverlay();
+    }
+    recognizeBusy = false;
+  }
+
   // ---- boot ------------------------------------------------------
+  function api(path, opts) {
+    return fetch(path, opts).then((r) => {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    });
+  }
+
+  function syncWhoChip() {
+    if (whoChip) whoChip.textContent = personName(currentPersonId) || "Wer?";
+    const libPerson = document.getElementById("library-person");
+    if (libPerson) libPerson.textContent = personName(currentPersonId);
+  }
+
+  function showWho() {
+    whoBackdrop.classList.remove("hidden");
+    libraryBackdrop.classList.add("hidden");
+  }
+
+  function hideWho() {
+    whoBackdrop.classList.add("hidden");
+  }
+
+  function showLibrary() {
+    hideWho();
+    libraryBackdrop.classList.remove("hidden");
+    document.getElementById("btn-library-close").classList.toggle("hidden", !currentBoardId);
+    refreshLibrary();
+  }
+
+  function hideLibrary() {
+    libraryBackdrop.classList.add("hidden");
+  }
+
+  async function refreshLibrary() {
+    if (!currentPersonId) return;
+    const key = "lib:" + currentPersonId + ":" + (currentFolderId || "");
+    const q = currentFolderId ? "&folder=" + encodeURIComponent(currentFolderId) : "";
+    try {
+      libraryCache = await api("/api/library?person=" + encodeURIComponent(currentPersonId) + q);
+      if (window.SofiaOffline) await SofiaOffline.setKv(key, libraryCache);
+    } catch (err) {
+      libraryCache = (window.SofiaOffline && (await SofiaOffline.getKv(key))) || {
+        personId: currentPersonId,
+        folderId: currentFolderId,
+        folders: [],
+        boards: [],
+        crumbs: [],
+        allFolders: [],
+      };
+      setConnState("offline");
+    }
+    const crumbs = document.getElementById("library-crumbs");
+    if (!libraryCache.crumbs || !libraryCache.crumbs.length) crumbs.textContent = "Alle Blätter";
+    else crumbs.textContent = libraryCache.crumbs.map((c) => c.name).join(" › ");
+    const list = document.getElementById("library-list");
+    list.innerHTML = "";
+    for (const folder of libraryCache.folders || []) {
+      list.appendChild(folderCard(folder));
+    }
+    for (const board of libraryCache.boards || []) {
+      list.appendChild(boardCard(board));
+    }
+    if (!(libraryCache.folders || []).length && !(libraryCache.boards || []).length) {
+      const empty = document.createElement("div");
+      empty.className = "library-empty";
+      empty.textContent = "Noch leer. Leg ein Blatt oder einen Ordner an.";
+      list.appendChild(empty);
+    }
+  }
+
+  function iconBtn(name, title, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.title = title;
+    b.innerHTML = `<span class="material-symbols-rounded">${name}</span>`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return b;
+  }
+
+  function folderCard(folder) {
+    const el = document.createElement("div");
+    el.className = "library-item";
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    el.innerHTML = `<span class="material-symbols-rounded">folder</span><strong></strong><span class="meta">Ordner</span>`;
+    el.querySelector("strong").textContent = folder.name;
+    el.addEventListener("click", () => {
+      currentFolderId = folder.id;
+      refreshLibrary();
+    });
+    const row = document.createElement("div");
+    row.className = "row";
+    row.appendChild(iconBtn("edit", "Umbenennen", () => renameFolder(folder)));
+    row.appendChild(iconBtn("drive_file_move", "Verschieben", () => openMove("folder", folder.id)));
+    row.appendChild(iconBtn("delete", "Löschen", () => deleteFolder(folder)));
+    el.appendChild(row);
+    return el;
+  }
+
+  function boardCard(board) {
+    const el = document.createElement("div");
+    el.className = "library-item";
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    const owner = personName(board.ownerId);
+    const meta = board.shared ? "Geteilt von " + owner : "Eigenes Blatt";
+    el.innerHTML = `<span class="material-symbols-rounded">description</span><strong></strong><span class="meta"></span>`;
+    el.querySelector("strong").textContent = board.title;
+    el.querySelector(".meta").textContent = meta;
+    el.addEventListener("click", () => openBoard(board.id, board.title));
+    const row = document.createElement("div");
+    row.className = "row";
+    row.appendChild(iconBtn("drive_file_move", "In Ordner legen", () => openMove("board", board.id)));
+    if (!board.shared) {
+      row.appendChild(iconBtn("share", "Teilen", () => openShare(board)));
+      row.appendChild(iconBtn("delete", "Löschen", () => deleteBoard(board)));
+    }
+    el.appendChild(row);
+    return el;
+  }
+
+  async function openBoard(id, title) {
+    if (currentBoardId && currentBoardId !== id) {
+      boardStrokes.clear();
+      clearSelection();
+      undoStack.length = 0;
+      redoStack.length = 0;
+      updateUndoRedoButtons();
+      disconnectWS();
+    }
+    currentBoardId = id;
+    currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
+    if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
+    hideLibrary();
+    if (window.SofiaOffline) {
+      const local = await SofiaOffline.getStrokes(id);
+      if (local && local.length) applyStrokeList(local);
+    }
+    requestRedraw();
+    wantWs = true;
+    if (await probeOnline()) {
+      await flushOutbox();
+      connectWS();
+    } else {
+      setConnState("offline");
+    }
+  }
+
+  async function createBoard() {
+    const title = "Unbenannte Skizze";
+    try {
+      const created = await api("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, title, folderId: currentFolderId }),
+      });
+      await openBoard(created.board.id, created.board.title);
+    } catch (err) {
+      const id = uuid();
+      await enqueueOp({ type: "board_create", personId: currentPersonId, title, folderId: currentFolderId, id });
+      if (libraryCache) {
+        libraryCache.boards = libraryCache.boards || [];
+        libraryCache.boards.unshift({
+          id,
+          ownerId: currentPersonId,
+          title,
+          folderId: currentFolderId,
+          shared: false,
+          sharedWith: [],
+        });
+        if (window.SofiaOffline) {
+          await SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache);
+        }
+      }
+      await openBoard(id, title);
+    }
+  }
+
+  async function createFolder() {
+    const name = window.prompt("Name für den Ordner", "Ordner");
+    if (name == null) return;
+    try {
+      await api("/api/folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId }),
+      });
+    } catch (err) {
+      const id = uuid();
+      await enqueueOp({ type: "folder_create", personId: currentPersonId, name, parentId: currentFolderId, id });
+      if (libraryCache) {
+        libraryCache.folders = libraryCache.folders || [];
+        libraryCache.folders.push({ id, parentId: currentFolderId, name, sortOrder: 0 });
+        libraryCache.allFolders = libraryCache.allFolders || [];
+        libraryCache.allFolders.push({ id, parentId: currentFolderId, name });
+      }
+    }
+    refreshLibrary();
+  }
+
+  async function renameFolder(folder) {
+    const name = window.prompt("Neuer Name", folder.name);
+    if (name == null) return;
+    try {
+      await api("/api/folders/" + encodeURIComponent(folder.id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, name }),
+      });
+    } catch (err) {
+      await enqueueOp({ type: "folder_rename", personId: currentPersonId, id: folder.id, name });
+    }
+    refreshLibrary();
+  }
+
+  async function deleteFolder(folder) {
+    if (!window.confirm("Ordner löschen? Blätter bleiben, nur der Ordner geht weg.")) return;
+    try {
+      await api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
+        method: "DELETE",
+      });
+    } catch (err) {
+      await enqueueOp({ type: "folder_delete", personId: currentPersonId, id: folder.id });
+    }
+    refreshLibrary();
+  }
+
+  async function deleteBoard(board) {
+    if (!window.confirm("Dieses Blatt wirklich löschen?")) return;
+    try {
+      await api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
+        method: "DELETE",
+      });
+    } catch (err) {
+      await enqueueOp({ type: "board_delete", personId: currentPersonId, id: board.id });
+    }
+    if (currentBoardId === board.id) {
+      currentBoardId = "";
+      boardStrokes.clear();
+      disconnectWS();
+    }
+    refreshLibrary();
+  }
+
+  function openShare(board) {
+    const box = document.getElementById("share-choices");
+    box.innerHTML = "";
+    for (const p of PEOPLE) {
+      if (p.id === currentPersonId) continue;
+      const on = (board.sharedWith || []).includes(p.id);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = on ? "on" : "";
+      b.textContent = on ? "Geteilt mit " + p.name : "Teilen mit " + p.name;
+      b.addEventListener("click", async () => {
+        try {
+          if (on) {
+            await api(
+              "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
+              { method: "DELETE" }
+            );
+          } else {
+            await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
+            });
+          }
+        } catch (err) {
+          await enqueueOp(
+            on
+              ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
+              : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
+          );
+        }
+        shareBackdrop.classList.add("hidden");
+        refreshLibrary();
+      });
+      box.appendChild(b);
+    }
+    shareBackdrop.classList.remove("hidden");
+  }
+
+  function openMove(kind, id) {
+    const box = document.getElementById("move-choices");
+    box.innerHTML = "";
+    const root = document.createElement("button");
+    root.type = "button";
+    root.textContent = "Ganz oben (kein Ordner)";
+    root.addEventListener("click", () => applyMove(kind, id, null));
+    box.appendChild(root);
+    const folders = (libraryCache && libraryCache.allFolders) || [];
+    for (const f of folders) {
+      if (kind === "folder" && f.id === id) continue;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = f.name;
+      b.addEventListener("click", () => applyMove(kind, id, f.id));
+      box.appendChild(b);
+    }
+    moveBackdrop.classList.remove("hidden");
+  }
+
+  async function applyMove(kind, id, folderId) {
+    moveBackdrop.classList.add("hidden");
+    try {
+      if (kind === "board") {
+        await api("/api/placements", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, boardId: id, folderId }),
+        });
+      } else {
+        await api("/api/folders/" + encodeURIComponent(id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, parentId: folderId }),
+        });
+      }
+    } catch (err) {
+      await enqueueOp(
+        kind === "board"
+          ? { type: "place", personId: currentPersonId, boardId: id, folderId }
+          : { type: "folder_move", personId: currentPersonId, id, parentId: folderId }
+      );
+    }
+    refreshLibrary();
+  }
+
+  function pickPerson(id) {
+    currentPersonId = id;
+    localStorage.setItem("sofianotes-person", id);
+    currentFolderId = null;
+    currentBoardId = "";
+    boardStrokes.clear();
+    disconnectWS();
+    syncWhoChip();
+    showLibrary();
+  }
+
+  document.querySelectorAll(".who-btn").forEach((btn) => {
+    btn.addEventListener("click", () => pickPerson(btn.dataset.person));
+  });
+  document.getElementById("btn-who-chip")?.addEventListener("click", showWho);
+  document.getElementById("btn-open-library")?.addEventListener("click", showLibrary);
+  document.getElementById("btn-library-close")?.addEventListener("click", hideLibrary);
+  document.getElementById("btn-library-switch")?.addEventListener("click", showWho);
+  document.getElementById("btn-library-home")?.addEventListener("click", () => {
+    if (currentFolderId && libraryCache && libraryCache.crumbs.length) {
+      const prev = libraryCache.crumbs[libraryCache.crumbs.length - 1];
+      currentFolderId = prev.parentId || null;
+    } else currentFolderId = null;
+    refreshLibrary();
+  });
+  document.getElementById("btn-new-board")?.addEventListener("click", createBoard);
+  document.getElementById("btn-new-folder")?.addEventListener("click", createFolder);
+  document.getElementById("btn-share-board")?.addEventListener("click", async () => {
+    if (!currentBoardId) {
+      showLibrary();
+      return;
+    }
+    const board = currentBoardMeta && currentBoardMeta.id === currentBoardId ? currentBoardMeta : { id: currentBoardId, sharedWith: [], ownerId: currentPersonId };
+    if (board.ownerId && board.ownerId !== currentPersonId) {
+      window.alert("Nur " + personName(board.ownerId) + " kann dieses Blatt teilen.");
+      return;
+    }
+    openShare(board);
+  });
+  document.getElementById("btn-share-close")?.addEventListener("click", () => shareBackdrop.classList.add("hidden"));
+  document.getElementById("btn-move-close")?.addEventListener("click", () => moveBackdrop.classList.add("hidden"));
+  shareBackdrop?.addEventListener("click", (e) => {
+    if (e.target === shareBackdrop) shareBackdrop.classList.add("hidden");
+  });
+  moveBackdrop?.addEventListener("click", (e) => {
+    if (e.target === moveBackdrop) moveBackdrop.classList.add("hidden");
+  });
+
+  window.addEventListener("online", () => {
+    goOnlineIfPossible();
+  });
+  window.addEventListener("offline", () => {
+    setConnState("offline");
+  });
+
   resizeCanvas();
   offsetX = window.innerWidth / 2;
   offsetY = window.innerHeight / 2;
-  connectWS();
+  if (currentPersonId && PEOPLE.some((p) => p.id === currentPersonId)) {
+    hideWho();
+    syncWhoChip();
+    showLibrary();
+  } else {
+    showWho();
+  }
   requestAnimationFrame(tick);
 })();

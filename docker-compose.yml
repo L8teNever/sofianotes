@@ -7,3 +7,7 @@ services:
       - "${BIND_HOST:-127.0.0.1}:${BIND_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
+    environment:
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_OCR_MODEL: ${CLOUDFLARE_OCR_MODEL:-}

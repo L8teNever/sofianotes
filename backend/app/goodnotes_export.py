@@ -26,7 +26,9 @@ from typing import Any, Awaitable, Callable
 from reportlab.lib.colors import Color, HexColor
 from reportlab.pdfgen import canvas as pdf_canvas
 
-from . import db
+from reportlab.lib.utils import ImageReader
+
+from . import db, media
 
 EXPORT_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 GOODNOTES_PATH = EXPORT_DIR / "sofianotes.goodnotes"
@@ -162,13 +164,51 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
         c.line(tx(min_x), ty(y), tx(max_x), ty(y))
         y += GRID
 
-    # Marker first (under ink), then pen.
-    ordered = [s for s in strokes if s.get("tool") == "marker"] + [
-        s for s in strokes if s.get("tool") != "marker"
-    ]
+    def _draw_image(stroke: dict[str, Any]) -> None:
+        extra = stroke.get("extra") or {}
+        media_id = extra.get("mediaId")
+        blob = media.load_bytes(str(media_id or ""))
+        if not blob:
+            return
+        pts = stroke.get("points") or []
+        if len(pts) < 2:
+            return
+        x0 = min(float(pts[0]["x"]), float(pts[1]["x"]))
+        y0 = min(float(pts[0]["y"]), float(pts[1]["y"]))
+        x1 = max(float(pts[0]["x"]), float(pts[1]["x"]))
+        y1 = max(float(pts[0]["y"]), float(pts[1]["y"]))
+        crop = extra.get("crop") or {}
+        left = max(0.0, min(1.0, float(crop.get("l") or 0)))
+        top = max(0.0, min(1.0, float(crop.get("t") or 0)))
+        right = max(left + 0.01, min(1.0, float(crop.get("r") if crop.get("r") is not None else 1)))
+        bottom = max(top + 0.01, min(1.0, float(crop.get("b") if crop.get("b") is not None else 1)))
+        try:
+            reader = ImageReader(io.BytesIO(blob))
+            c.saveState()
+            path = c.beginPath()
+            path.rect(tx(x0), ty(y1), tx(x1) - tx(x0), ty(y0) - ty(y1))
+            c.clipPath(path, stroke=0, fill=0)
+            full_w = (tx(x1) - tx(x0)) / (right - left)
+            full_h = (ty(y0) - ty(y1)) / (bottom - top)
+            ox = tx(x0) - left * full_w
+            oy = ty(y1) - (1.0 - bottom) * full_h
+            c.drawImage(reader, ox, oy, width=full_w, height=full_h, mask="auto")
+            c.restoreState()
+        except Exception:  # noqa: BLE001
+            return
+
+    # Images under marker under ink.
+    ordered = (
+        [s for s in strokes if s.get("tool") == "image"]
+        + [s for s in strokes if s.get("tool") == "marker"]
+        + [s for s in strokes if s.get("tool") not in ("image", "marker")]
+    )
     for stroke in ordered:
         pts = stroke.get("points") or []
         if not pts:
+            continue
+        if stroke.get("tool") == "image":
+            _draw_image(stroke)
             continue
         is_marker = stroke.get("tool") == "marker"
         alpha = 0.38 if is_marker else 1.0
@@ -181,6 +221,13 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
         if len(pts) == 1:
             r = max(0.4, (width * scale) / 2)
             c.circle(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), r, stroke=0, fill=1)
+            continue
+        if stroke.get("tool") == "text":
+            label = str(pts[0].get("text") or "")
+            if label:
+                c.setFillColor(_hex_color(str(stroke.get("color") or "#0b57d0"), 1.0))
+                c.setFont("Helvetica-Bold", max(8.0, width * scale))
+                c.drawString(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), label)
             continue
         path = c.beginPath()
         if _looks_like_polygon(pts):

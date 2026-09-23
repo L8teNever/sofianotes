@@ -8,4 +8,6 @@ data/*.db-shm
 data/*.goodnotes
 data/*.pdf
 data/*.tmp
+data/media/*
+!data/media/.gitkeep
 .env

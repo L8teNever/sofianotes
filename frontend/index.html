@@ -14,12 +14,55 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=add,arrow_back,arrow_downward,arrow_forward,arrow_upward,brush,crop_landscape,crop_square,description,download,drag_indicator,edit,gesture,grain,grid_4x4,hexagon,highlight,palette,redo,remove,reorder,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
-<link rel="stylesheet" href="style.css?v=11" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_landscape,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,gesture,grain,grid_4x4,group,hexagon,highlight,home,ink_eraser,more_vert,note_add,palette,person,redo,remove,reorder,share,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
+<link rel="preload" href="models/emnist/model.json" as="fetch" crossorigin />
+<link rel="preload" href="models/emnist/group1-shard1of1.bin" as="fetch" crossorigin />
+<link rel="stylesheet" href="style.css?v=42" />
 </head>
 <body>
 <canvas id="board"></canvas>
+<div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
+<div id="selection-toolbar" class="selection-toolbar hidden">
+  <button type="button" id="btn-sel-ki" title="Nur die Auswahl mit KI lesen">
+    <span class="material-symbols-rounded">auto_awesome</span>
+    KI
+  </button>
+  <button type="button" id="btn-sel-copy" title="Kopieren">
+    <span class="material-symbols-rounded">content_copy</span>
+  </button>
+  <button type="button" id="btn-sel-cut" title="Ausschneiden">
+    <span class="material-symbols-rounded">content_cut</span>
+  </button>
+  <button type="button" id="btn-sel-paste" class="hidden" title="Einfügen">
+    <span class="material-symbols-rounded">content_paste</span>
+  </button>
+  <button type="button" id="btn-media-crop" class="hidden" title="Zuschneiden">
+    <span class="material-symbols-rounded">crop</span>
+    Zuschneiden
+  </button>
+  <button type="button" id="btn-media-crop-done" class="hidden" title="Zuschnitt übernehmen">
+    <span class="material-symbols-rounded">check</span>
+    Fertig
+  </button>
+  <button type="button" id="btn-media-crop-cancel" class="hidden" title="Abbrechen">
+    <span class="material-symbols-rounded">close</span>
+    Abbrechen
+  </button>
+</div>
+<input id="import-file" type="file" accept="image/*,application/pdf,.pdf" multiple hidden />
+<div id="erase-all-menu" class="erase-all-menu hidden">
+  <button type="button" id="btn-erase-all-here">
+    <span class="material-symbols-rounded">delete_sweep</span>
+    Alles löschen
+  </button>
+</div>
+<div id="paste-menu" class="erase-all-menu paste-menu hidden">
+  <button type="button" id="btn-paste-here">
+    <span class="material-symbols-rounded">content_paste</span>
+    Einfügen
+  </button>
+</div>
 
 <div id="guide-top" class="drag-guide"></div>
 <div id="guide-bottom" class="drag-guide"></div>
@@ -31,10 +74,14 @@
 <div id="guide-br" class="drag-guide guide-corner"></div>
 
 <header id="top-filename-bar">
-  <div class="file-icon">
-    <span class="material-symbols-rounded">description</span>
-  </div>
+  <button type="button" id="btn-open-library" class="file-icon" title="Blätter und Ordner">
+    <span class="material-symbols-rounded">folder</span>
+  </button>
+  <button type="button" id="btn-who-chip" class="who-chip" title="Person wechseln">Simon</button>
   <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" />
+  <button type="button" id="btn-share-board" class="icon-btn" title="Mit Simon, Franz oder den Jungen teilen">
+    <span class="material-symbols-rounded">share</span>
+  </button>
   <div class="bar-divider"></div>
   <div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
   <button id="export-btn" class="icon-btn" title="Als PDF herunterladen (in GoodNotes importieren)">
@@ -42,10 +89,7 @@
   </button>
 </header>
 
-<aside id="undo-redo-dock" class="corner-top-left">
-  <div id="undo-drag-handle" class="m3-press drag-handle" title="Lange drücken, dann in eine Ecke ziehen">
-    <span class="material-symbols-rounded">drag_indicator</span>
-  </div>
+<aside id="undo-redo-dock" class="corner-top-left" title="Lange drücken, dann in eine Ecke ziehen">
   <button id="undo-btn" class="icon-btn" title="Rückgängig (Strg/Cmd+Z)" disabled>
     <span class="material-symbols-rounded">undo</span>
   </button>
@@ -72,15 +116,15 @@
         <button class="btn-zoom-preset" data-zoom="100">100%</button>
         <button class="btn-zoom-preset" data-zoom="150">150%</button>
       </div>
+      <div class="popover-label">Personen</div>
+      <div id="zoom-people" class="zoom-people">
+        <div class="zoom-people-empty">Niemand sonst auf dem Blatt</div>
+      </div>
     </div>
   </div>
 </aside>
 
-<nav id="toolbar" class="dock-bottom">
-  <div id="dock-drag-handle" class="m3-press drag-handle dock-grip" title="Lange drücken, dann an einen Rand ziehen">
-    <span class="material-symbols-rounded">drag_indicator</span>
-  </div>
-
+<nav id="toolbar" class="dock-bottom" title="Lange drücken, dann an einen Rand ziehen">
   <div class="tools-container">
     <div class="tool-wrapper">
       <button class="tool-btn active" data-tool="pen" title="Stift">
@@ -102,6 +146,11 @@
         <span class="material-symbols-rounded">gesture</span>
       </button>
     </div>
+    <div class="tool-wrapper">
+      <button id="btn-import" class="tool-btn" type="button" title="Bild oder PDF importieren">
+        <span class="material-symbols-rounded">add_photo_alternate</span>
+      </button>
+    </div>
 
     <div id="tool-popover" class="tool-popover hidden">
       <div class="popover-head">
@@ -115,6 +164,12 @@
           <span id="popover-brush-preview"></span>
         </div>
         <input id="size-slider" type="range" min="1" max="45" value="6" />
+      </div>
+      <div id="eraser-clear-row" class="eraser-clear-row hidden">
+        <button id="btn-erase-all" type="button" class="erase-all-btn" title="Alles auf dem Blatt löschen">
+          <span class="material-symbols-rounded">delete_sweep</span>
+          Alles löschen
+        </button>
       </div>
     </div>
   </div>
@@ -137,33 +192,134 @@
     <button id="btn-settings-toggle" class="icon-btn" title="Raster &amp; Einstellungen">
       <span class="material-symbols-rounded">tune</span>
     </button>
-    <div id="settings-popover" class="popover hidden">
-      <div class="popover-label">Papier-Raster</div>
-      <div class="grid-style-row">
-        <button class="btn-grid-style active" data-grid="graph"><span class="material-symbols-rounded">grid_4x4</span> Kariert</button>
-        <button class="btn-grid-style" data-grid="dots"><span class="material-symbols-rounded">grain</span> Punkte</button>
-        <button class="btn-grid-style" data-grid="lines"><span class="material-symbols-rounded">reorder</span> Liniert</button>
-        <button class="btn-grid-style" data-grid="blank"><span class="material-symbols-rounded">crop_landscape</span> Blanko</button>
-      </div>
-      <div class="popover-label">Leiste</div>
-      <div class="dock-quick-row">
-        <button class="btn-dock-quick" data-pos="top" title="Oben"><span class="material-symbols-rounded">arrow_upward</span></button>
-        <button class="btn-dock-quick" data-pos="bottom" title="Unten"><span class="material-symbols-rounded">arrow_downward</span></button>
-        <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span></button>
-        <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span></button>
-      </div>
-      <div class="popover-label">Zeichnen</div>
-      <button id="shape-toggle" class="setting-toggle active" title="Formen-Erkennung">
-        <span class="material-symbols-rounded">hexagon</span> Formen erkennen
-      </button>
-      <button id="finger-draw-toggle" class="setting-toggle" title="Mit dem Finger zeichnen">
-        <span class="material-symbols-rounded">touch_app</span> Finger zeichnet
-      </button>
-    </div>
   </div>
 </nav>
 
-<script src="app.js?v=11"></script>
+<div id="settings-backdrop" class="settings-backdrop hidden">
+  <div id="settings-popover" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-modal-head">
+      <h2 id="settings-title">Einstellungen</h2>
+      <button type="button" id="btn-settings-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+    <div class="popover-label">Papier-Raster</div>
+    <div class="grid-style-row">
+      <button class="btn-grid-style active" data-grid="graph"><span class="material-symbols-rounded">grid_4x4</span> Kariert</button>
+      <button class="btn-grid-style" data-grid="dots"><span class="material-symbols-rounded">grain</span> Punkte</button>
+      <button class="btn-grid-style" data-grid="lines"><span class="material-symbols-rounded">reorder</span> Liniert</button>
+      <button class="btn-grid-style" data-grid="blank"><span class="material-symbols-rounded">crop_landscape</span> Blanko</button>
+    </div>
+    <div class="popover-label">Leiste</div>
+    <div class="dock-quick-row">
+      <button class="btn-dock-quick" data-pos="top" title="Oben"><span class="material-symbols-rounded">arrow_upward</span></button>
+      <button class="btn-dock-quick" data-pos="bottom" title="Unten"><span class="material-symbols-rounded">arrow_downward</span></button>
+      <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span></button>
+      <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span></button>
+    </div>
+    <div class="popover-label">Zeichnen</div>
+    <button id="shape-toggle" class="setting-toggle active" title="Formen-Erkennung">
+      <span class="material-symbols-rounded">hexagon</span> Formen erkennen
+    </button>
+    <button id="math-toggle" class="setting-toggle active" title="Rechnungen automatisch lösen">
+      <span class="material-symbols-rounded">calculate</span> Rechnungen lösen
+    </button>
+    <button id="finger-draw-toggle" class="setting-toggle" title="Mit dem Finger zeichnen">
+      <span class="material-symbols-rounded">touch_app</span> Finger zeichnet
+    </button>
+    <button id="eraser-return-toggle" class="setting-toggle active" title="Nach dem Radieren wieder den Stift davor nehmen">
+      <span class="material-symbols-rounded">ink_eraser</span> Nach Radieren zurück zum Stift
+    </button>
+  </div>
+</div>
+
+<div id="who-backdrop" class="who-backdrop">
+  <div class="who-card">
+    <h1>Wer bist du?</h1>
+    <p>Einfach antippen. Kein Login.</p>
+    <div class="who-grid">
+      <button type="button" class="who-btn" data-person="simon">
+        <span class="material-symbols-rounded">person</span>
+        Simon
+      </button>
+      <button type="button" class="who-btn" data-person="franz">
+        <span class="material-symbols-rounded">person</span>
+        Franz
+      </button>
+      <button type="button" class="who-btn" data-person="jungen">
+        <span class="material-symbols-rounded">group</span>
+        Die Jungen
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="library-backdrop" class="library-backdrop hidden">
+  <div class="library-sheet">
+    <div class="library-head">
+      <button type="button" id="btn-library-home" class="icon-btn" title="Zum Anfang">
+        <span class="material-symbols-rounded">home</span>
+      </button>
+      <div>
+        <div id="library-person" class="library-person">Simon</div>
+        <div id="library-crumbs" class="library-crumbs">Alle Blätter</div>
+      </div>
+      <button type="button" id="btn-library-switch" class="text-btn">Wechseln</button>
+      <button type="button" id="btn-library-close" class="icon-btn hidden" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+    <div class="library-actions">
+      <button type="button" id="btn-new-board">
+        <span class="material-symbols-rounded">note_add</span>
+        Neues Blatt
+      </button>
+      <button type="button" id="btn-new-folder">
+        <span class="material-symbols-rounded">create_new_folder</span>
+        Neuer Ordner
+      </button>
+    </div>
+    <div id="library-list" class="library-list"></div>
+  </div>
+</div>
+
+<div id="share-backdrop" class="settings-backdrop hidden">
+  <div class="settings-modal" role="dialog" aria-modal="true">
+    <div class="settings-modal-head">
+      <h2>Teilen</h2>
+      <button type="button" id="btn-share-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+    <p class="share-hint">Das Blatt erscheint bei der anderen Person in ihrer Bibliothek. Sie kann es in einen eigenen Ordner legen.</p>
+    <div id="share-choices" class="share-choices"></div>
+  </div>
+</div>
+
+<div id="move-backdrop" class="settings-backdrop hidden">
+  <div class="settings-modal" role="dialog" aria-modal="true">
+    <div class="settings-modal-head">
+      <h2>Ordner</h2>
+      <button type="button" id="btn-move-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+    <div id="move-choices" class="share-choices"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="de-words.js?v=42"></script>
+<script src="ink-recognize.js?v=42"></script>
+<script src="offline.js?v=42"></script>
+<script src="app.js?v=42"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
