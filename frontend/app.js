@@ -564,8 +564,9 @@
   let selection = { ids: new Set(), bbox: null };
   let shapeRecognitionEnabled = true;
   let fingerDrawEnabled = false;
-  let recognizeEnabled = localStorage.getItem("sofianotes-recognize") !== "0";
   let mathSolveEnabled = localStorage.getItem("sofianotes-math") !== "0";
+  let strokeClipboard = [];
+  let lastPointerWorld = null;
 
   const toolConfigs = {
     pen: { label: "Stift", min: 1, max: 45, presets: [3, 8, 20] },
@@ -821,21 +822,7 @@
     fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
   });
 
-  const recognizeToggleEl = document.getElementById("recognize-toggle");
   const mathToggleEl = document.getElementById("math-toggle");
-  const kiToggleBtn = document.getElementById("btn-ki-toggle");
-  function syncKiButtons() {
-    if (kiToggleBtn) kiToggleBtn.classList.toggle("active", recognizeEnabled);
-    if (recognizeToggleEl) recognizeToggleEl.classList.toggle("active", recognizeEnabled);
-    if (mathToggleEl) mathToggleEl.classList.toggle("ki-off", !recognizeEnabled);
-  }
-  syncKiButtons();
-  function onKiToggleClick(e) {
-    e.stopPropagation();
-    applyKiEnabled(!recognizeEnabled);
-  }
-  if (recognizeToggleEl) recognizeToggleEl.addEventListener("click", onKiToggleClick);
-  if (kiToggleBtn) kiToggleBtn.addEventListener("click", onKiToggleClick);
   if (mathToggleEl) {
     mathToggleEl.classList.toggle("active", mathSolveEnabled);
     mathToggleEl.addEventListener("click", (e) => {
@@ -843,8 +830,7 @@
       mathSolveEnabled = !mathSolveEnabled;
       localStorage.setItem("sofianotes-math", mathSolveEnabled ? "1" : "0");
       mathToggleEl.classList.toggle("active", mathSolveEnabled);
-      if (recognizeEnabled) scheduleRecognize();
-      else renderInkOverlay();
+      renderInkOverlay();
     });
   }
 
@@ -1342,7 +1328,6 @@
           remoteInProgress.delete(id);
         }
         requestRedraw();
-        scheduleRecognize();
         break;
     }
   }
@@ -1542,9 +1527,14 @@
           s.bbox = makeBBox(s.points);
           const extra = direction === 1 ? m.afterExtra : m.beforeExtra;
           if (extra) s.extra = JSON.parse(JSON.stringify(extra));
+          const sz = direction === 1 ? m.afterSize : m.beforeSize;
+          if (sz != null && Number.isFinite(sz)) s.size = sz;
           wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
         }
       }
+    } else if (action.type === "add_many") {
+      if (direction === 1) for (const s of action.strokes) putStroke(s);
+      else removeStrokes(action.strokes.map((s) => s.id));
     } else if (action.type === "style") {
       for (const c of action.changes) {
         const s = boardStrokes.get(c.id);
@@ -1557,7 +1547,6 @@
       }
     }
     requestRedraw();
-    scheduleRecognize();
   }
   function undo() {
     if (undoStack.length === 0) return;
@@ -1582,10 +1571,29 @@
   });
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
-    if (!meta || e.key.toLowerCase() !== "z") return;
-    e.preventDefault();
-    if (e.shiftKey) redo();
-    else undo();
+    const key = e.key.toLowerCase();
+    const typing = document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA");
+    if (typing) return;
+    if (meta && key === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if (meta && key === "c") {
+      e.preventDefault();
+      copySelection();
+      return;
+    }
+    if (meta && key === "x") {
+      e.preventDefault();
+      cutSelection();
+      return;
+    }
+    if (meta && key === "v") {
+      e.preventDefault();
+      pasteClipboard();
+    }
   });
   updateUndoRedoButtons();
 
@@ -2120,20 +2128,26 @@
 
   function startSelectionDrag(pointerId, world) {
     const snapshot = new Map();
+    const sizes = new Map();
     for (const id of selection.ids) {
       const s = boardStrokes.get(id);
-      if (s) snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
+      if (s) {
+        snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
+        sizes.set(id, s.size);
+      }
     }
-    dragState = { pointerId, startWorld: world, snapshot, kind: "move" };
+    dragState = { pointerId, startWorld: world, snapshot, sizes, kind: "move" };
   }
 
   function startSelectionScale(pointerId, world, corner) {
     const snapshot = new Map();
     const extras = new Map();
+    const sizes = new Map();
     for (const id of selection.ids) {
       const s = boardStrokes.get(id);
       if (!s) continue;
       snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
+      sizes.set(id, s.size);
       if (s.extra) extras.set(id, JSON.parse(JSON.stringify(s.extra)));
     }
     const pad = 10 / scale;
@@ -2149,6 +2163,7 @@
       startWorld: world,
       snapshot,
       extras,
+      sizes,
       kind: "scale",
       corner,
       origin: originMap[corner],
@@ -2174,6 +2189,8 @@
         p: p.p,
         text: p.text,
       }));
+      const baseSize = dragState.sizes && dragState.sizes.get(id);
+      if (baseSize != null) s.size = Math.max(1, baseSize * factor);
       s.bbox = makeBBox(s.points);
       boxes.push(s.bbox);
     }
@@ -2203,12 +2220,15 @@
       if (s) {
         wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
         const extra = dragState.extras && dragState.extras.get(id);
+        const beforeSize = dragState.sizes && dragState.sizes.get(id);
         moves.push({
           id,
           before: beforePts,
           after: s.points.map((p) => ({ ...p })),
           beforeExtra: extra || null,
           afterExtra: s.extra ? JSON.parse(JSON.stringify(s.extra)) : null,
+          beforeSize: beforeSize != null ? beforeSize : s.size,
+          afterSize: s.size,
         });
       }
     }
@@ -2362,31 +2382,100 @@
     requestRedraw();
   }
 
-  const mediaToolbar = document.getElementById("media-toolbar");
+  function selectedStrokes() {
+    return Array.from(selection.ids)
+      .map((id) => boardStrokes.get(id))
+      .filter(Boolean);
+  }
+
+  function selectedHandwriting() {
+    return selectedStrokes().filter((s) => s.tool === "pen" || s.tool === "marker");
+  }
+
+  function copySelection() {
+    const clones = selectedStrokes().map(cloneStroke);
+    if (!clones.length) return;
+    strokeClipboard = clones;
+    syncSelectionToolbar();
+  }
+
+  function cutSelection() {
+    const clones = selectedStrokes().map(cloneStroke);
+    if (!clones.length) return;
+    strokeClipboard = clones.map(cloneStroke);
+    const ids = clones.map((s) => s.id);
+    removeStrokes(ids);
+    pushUndo({ type: "erase", strokes: clones });
+    clearSelection();
+    requestRedraw();
+  }
+
+  function pasteClipboard() {
+    if (!strokeClipboard.length) return;
+    const boxes = strokeClipboard.map((s) => makeBBox(s.points));
+    const union = unionBBox(boxes);
+    if (!union) return;
+    const target = lastPointerWorld || screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+    const dx = target.x - (union.minX + union.maxX) / 2;
+    const dy = target.y - (union.minY + union.maxY) / 2;
+    const pasted = [];
+    for (const src of strokeClipboard) {
+      const n = cloneStroke(src);
+      n.id = uuid();
+      n.points = n.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
+      n.bbox = makeBBox(n.points);
+      putStroke(n);
+      pasted.push(cloneStroke(n));
+    }
+    if (!pasted.length) return;
+    pushUndo({ type: "add_many", strokes: pasted });
+    setTool("select");
+    selectStrokeIds(pasted.map((s) => s.id));
+    requestRedraw();
+  }
+
+  const mediaToolbar = document.getElementById("selection-toolbar");
   const importFileInput = document.getElementById("import-file");
 
-  function syncMediaToolbar() {
+  function syncSelectionToolbar() {
     if (!mediaToolbar) return;
-    const img = selectedImageStroke();
     const cropping = !!cropState;
-    if (!img && !cropping) {
+    const hasSel = selection.ids.size > 0 || cropping;
+    if (!hasSel) {
       mediaToolbar.classList.add("hidden");
       return;
     }
     mediaToolbar.classList.remove("hidden");
+    const img = selectedImageStroke();
+    const pens = selectedHandwriting();
+    const kiBtn = document.getElementById("btn-sel-ki");
+    const copyBtn = document.getElementById("btn-sel-copy");
+    const cutBtn = document.getElementById("btn-sel-cut");
+    const pasteBtn = document.getElementById("btn-sel-paste");
     const cropBtn = document.getElementById("btn-media-crop");
     const doneBtn = document.getElementById("btn-media-crop-done");
     const cancelBtn = document.getElementById("btn-media-crop-cancel");
-    if (cropBtn) cropBtn.classList.toggle("hidden", cropping);
+    if (kiBtn) kiBtn.classList.toggle("hidden", cropping || pens.length === 0);
+    if (copyBtn) copyBtn.classList.toggle("hidden", cropping || !selection.ids.size);
+    if (cutBtn) cutBtn.classList.toggle("hidden", cropping || !selection.ids.size);
+    if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
+    if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
     if (doneBtn) doneBtn.classList.toggle("hidden", !cropping);
     if (cancelBtn) cancelBtn.classList.toggle("hidden", !cropping);
     positionMediaToolbar();
   }
 
+  function syncMediaToolbar() {
+    syncSelectionToolbar();
+  }
+
   function positionMediaToolbar() {
     if (!mediaToolbar || mediaToolbar.classList.contains("hidden")) return;
     const s = selectedImageStroke() || (cropState && boardStrokes.get(cropState.strokeId));
-    const b = cropState && cropState.full ? cropState.full : s && (s.bbox || imageDestRect(s));
+    const b =
+      cropState && cropState.full
+        ? cropState.full
+        : selection.bbox || (s && (s.bbox || imageDestRect(s)));
     if (!b) return;
     const top = worldToScreen((b.minX + b.maxX) / 2, b.minY);
     const bottom = worldToScreen((b.minX + b.maxX) / 2, b.maxY);
@@ -2560,6 +2649,22 @@
   document.getElementById("btn-media-crop-cancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     cancelCropMode();
+  });
+  document.getElementById("btn-sel-ki")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    recognizeSelection();
+  });
+  document.getElementById("btn-sel-copy")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    copySelection();
+  });
+  document.getElementById("btn-sel-cut")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cutSelection();
+  });
+  document.getElementById("btn-sel-paste")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pasteClipboard();
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && cropState) {
@@ -2752,7 +2857,6 @@
         pushUndo({ type: "erase", strokes: clones });
         currentStroke = null;
         requestRedraw();
-        scheduleRecognize();
         return;
       }
     }
@@ -2765,11 +2869,8 @@
     currentStroke.endedAt = performance.now();
     boardStrokes.set(currentStroke.id, currentStroke);
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
-    const finishedId = currentStroke.id;
     currentStroke = null;
-    selectStrokeIds([finishedId]);
     requestRedraw();
-    scheduleRecognize(finishedId);
   }
 
   function abortStroke() {
@@ -2837,6 +2938,7 @@
 
   function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
+    lastPointerWorld = world;
     if (currentTool === "select") {
       if (cropState) {
         const handle = pickCropHandle(world);
@@ -2980,6 +3082,7 @@
     }
 
     const world = screenToWorld(e.clientX, e.clientY);
+    lastPointerWorld = world;
 
     if (currentTool === "eraser") {
       updateEraserCursor(e.clientX, e.clientY);
@@ -3150,26 +3253,17 @@
     })
     .catch(() => {});
 
-  function applyKiEnabled(on) {
-    recognizeEnabled = !!on;
-    localStorage.setItem("sofianotes-recognize", recognizeEnabled ? "1" : "0");
-    syncKiButtons();
-    clearTimeout(recognizeTimer);
-    recognizeTimer = null;
-    recognizeAgain = false;
-    recognizeWide = false;
-    if (recognizeAbort) {
-      recognizeAbort.abort();
-      recognizeAbort = null;
-    }
-    recognizeBusy = false;
-    if (!recognizeEnabled) {
-      inkGroups = [];
-      scanBoxes = [];
-      renderInkOverlay();
-      return;
-    }
-    scheduleRecognize(null, 200);
+  function ensureEmnistLoaded() {
+    if (typeof SofiaInk === "undefined") return;
+    SofiaInk.loadEmnistModel("/models/emnist/model.json");
+    SofiaInk.loadMemory();
+  }
+
+  function recognizeSelection() {
+    const burst = selectedHandwriting();
+    if (!burst.length) return;
+    ensureEmnistLoaded();
+    runRecognize(burst);
   }
 
   function positionInkChips() {
@@ -3345,7 +3439,6 @@
   function renderInkOverlay() {
     if (!inkOverlay) return;
     inkOverlay.innerHTML = "";
-    if (!recognizeEnabled) return;
     scanBoxes.forEach((b) => {
       const el = document.createElement("div");
       el.className = "ink-scan-box";
@@ -3452,61 +3545,31 @@
     }
   }
 
-  function scheduleRecognize(focusId, delayMs) {
-    if (typeof SofiaInk === "undefined") return;
-    if (focusId) lastRecognizeFocus = focusId;
-    clearTimeout(recognizeTimer);
-    recognizeTimer = setTimeout(runRecognize, delayMs == null ? RECOGNIZE_PAUSE_MS : delayMs);
-  }
-
-  async function runRecognize() {
-    if (!recognizeEnabled || currentStroke) {
-      if (recognizeEnabled && currentStroke) recognizeAgain = true;
-      return;
-    }
-    if (typeof SofiaInk === "undefined") return;
-    if (recognizeBusy) {
-      recognizeAgain = true;
-      return;
-    }
+  async function runRecognize(burst) {
+    if (!burst || !burst.length || typeof SofiaInk === "undefined") return;
+    if (recognizeBusy) return;
     recognizeBusy = true;
     recognizeAgain = false;
+    recognizeWide = false;
     if (recognizeAbort) recognizeAbort.abort();
     const ac = new AbortController();
     recognizeAbort = ac;
     const wordGap = recognizeWordGap();
-    const now = performance.now();
-    let all = [];
-    let burst = [];
     let groups = [];
     try {
-      all = Array.from(boardStrokes.values());
-      pruneOcrCache(new Set(all.map((s) => s.id)));
-      const pauseMs = recognizeWide ? WIDE_BURST_MS : RECOGNIZE_PAUSE_MS;
-      const pad = recognizeWide ? 80 : 36;
-      const mine = all.filter(
-        (s) => s.ownerId === myClientId || s.id === lastRecognizeFocus
-      );
-      burst = SofiaInk.writingBurst(mine.length ? mine : all, { pauseMs, now });
-      if (!burst.length && lastRecognizeFocus) {
-        const focus = all.find((s) => s.id === lastRecognizeFocus);
-        if (focus) burst = [focus];
-      }
-      const region = burst.length ? SofiaInk.contextRegion(all, burst, pad) : { strokes: [], bbox: null };
-      const blocks = region.bbox
-        ? [{ strokes: region.strokes, bbox: region.bbox }]
-        : [];
-      scanBoxes = region.bbox ? [{ bbox: region.bbox, label: "KI liest …" }] : [];
+      pruneOcrCache(new Set(burst.map((s) => s.id)));
+      const bbox = unionBBox(burst.map((s) => s.bbox || makeBBox(s.points)));
+      const blocks = bbox ? [{ strokes: burst, bbox }] : [];
+      scanBoxes = bbox ? [{ bbox, label: "KI liest …" }] : [];
       renderInkOverlay();
 
       const cloudGroups = [];
       const canCloud =
-        burst.length &&
         cloudOcrEnabled !== false &&
         ocrRemaining > 1 &&
         recognizeAbort === ac &&
         !ac.signal.aborted;
-      if (canCloud && region.strokes.length) {
+      if (canCloud && burst.length) {
         const ocrBlock = async (block) => {
           const strokes = block.strokes;
           const key = inkGroupKey({ strokeIds: strokes.map((s) => s.id) });
@@ -3573,22 +3636,11 @@
 
       if (cloudGroups.length) {
         groups = mergeInkGroups([], cloudGroups);
-        const cloudIds = new Set(cloudGroups.flatMap((g) => g.strokeIds || []));
-        const leftover = burst.filter((s) => !cloudIds.has(s.id));
-        if (leftover.length) {
-          let local = await SofiaInk.recognizeStrokes(leftover, {
-            recentOnly: false,
-            preferDigits: mathSolveEnabled,
-            wordGap,
-          });
-          local = SofiaInk.stitchBlockGroups(local, blocks);
-          groups = mergeInkGroups(local, cloudGroups);
-        }
-      } else if (burst.length) {
+      } else {
         groups = await SofiaInk.recognizeStrokes(burst, {
           recentOnly: false,
           preferDigits: mathSolveEnabled,
-            wordGap,
+          wordGap,
         });
         groups = SofiaInk.stitchBlockGroups(groups, blocks);
       }
@@ -3597,33 +3649,9 @@
         if (fix.changes.length) g.text = fix.text;
         if (!g.misspelled) g.misspelled = SofiaInk.misspelledSpans(g.text);
       }
-      const plausible = groups.filter((g) =>
-        SofiaInk.ocrLooksPlausible(g.text, { strokes: (g.strokeIds || []).length })
-      );
-      const dubious = groups.filter(
-        (g) => !SofiaInk.ocrLooksPlausible(g.text, { strokes: (g.strokeIds || []).length })
-      );
-      const emptyRead = burst.length && !groups.length;
-      const shown = recognizeWide || !dubious.length ? groups : plausible;
-      inkGroups = shown.filter((g) => !dismissedInk.has(inkGroupKey(g)));
-      const live = new Set(shown.map(inkGroupKey));
-      for (const key of Array.from(dismissedInk)) {
-        if (!live.has(key)) dismissedInk.delete(key);
-      }
-      if (!recognizeWide && (dubious.length || emptyRead)) {
-        recognizeWide = true;
-        scanBoxes = region.bbox
-          ? [{ bbox: region.bbox, label: "Wartet …" }]
-          : (dubious.length ? dubious : blocks).map((g) => ({
-              bbox: g.bbox,
-              label: "Wartet …",
-            }));
-        renderInkOverlay();
-      } else {
-        recognizeWide = false;
-        scanBoxes = [];
-        renderInkOverlay();
-      }
+      inkGroups = groups.filter((g) => !dismissedInk.has(inkGroupKey(g)));
+      scanBoxes = [];
+      renderInkOverlay();
     } catch (err) {
       scanBoxes = [];
       renderInkOverlay();
@@ -3637,14 +3665,6 @@
       if (recognizeAbort === ac && !ac.signal.aborted) renderInkOverlay();
     }
     recognizeBusy = false;
-    if (!recognizeEnabled) return;
-    if (recognizeAgain) scheduleRecognize(lastRecognizeFocus, RECOGNIZE_PAUSE_MS);
-    else if (recognizeWide) scheduleRecognize(lastRecognizeFocus, CONTEXT_WAIT_MS);
-  }
-
-  if (recognizeEnabled && window.SofiaInk) {
-    SofiaInk.loadEmnistModel("/models/emnist/model.json");
-    SofiaInk.loadMemory();
   }
 
   // ---- boot ------------------------------------------------------

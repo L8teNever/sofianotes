@@ -774,7 +774,8 @@ button {
 }
 .erase-all-menu.hidden { display: none; }
 
-.media-toolbar {
+.media-toolbar,
+.selection-toolbar {
   position: fixed;
   z-index: 88;
   display: flex;
@@ -787,8 +788,10 @@ button {
   box-shadow: var(--shadow);
   pointer-events: auto;
 }
-.media-toolbar.hidden { display: none; }
-.media-toolbar button {
+.media-toolbar.hidden,
+.selection-toolbar.hidden { display: none; }
+.media-toolbar button,
+.selection-toolbar button {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -799,8 +802,14 @@ button {
   color: #174ea6;
   background: #e8f0fe;
 }
-.media-toolbar button .material-symbols-rounded { font-size: 18px; }
-.media-toolbar button.hidden { display: none; }
+.media-toolbar button .material-symbols-rounded,
+.selection-toolbar button .material-symbols-rounded { font-size: 18px; }
+.media-toolbar button.hidden,
+.selection-toolbar button.hidden { display: none; }
+.selection-toolbar #btn-sel-ki {
+  background: #0b57d0;
+  color: #fff;
+}
 
 .drag-guide {
   position: fixed;
