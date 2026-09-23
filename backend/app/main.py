@@ -267,15 +267,15 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     entry["points"] = new_points
                     if extra is not None:
                         entry["extra"] = extra
-                await manager.broadcast(
-                    {
-                        "type": "stroke_replace",
-                        "id": client.id,
-                        "strokeId": stroke_id,
-                        "points": new_points,
-                    },
-                    exclude=websocket,
-                )
+                payload = {
+                    "type": "stroke_replace",
+                    "id": client.id,
+                    "strokeId": stroke_id,
+                    "points": new_points,
+                }
+                if extra is not None:
+                    payload["extra"] = extra
+                await manager.broadcast(payload, exclude=websocket)
 
             elif msg_type == "stroke_move":
                 stroke = msg.get("stroke")

@@ -276,7 +276,13 @@
       c.restore();
       return;
     }
-    if (looksLikePolygon(pts)) {
+    const taggedShape = stroke.extra && stroke.extra.shape;
+    if (
+      taggedShape === "rectangle" ||
+      taggedShape === "triangle" ||
+      taggedShape === "line" ||
+      looksLikePolygon(pts)
+    ) {
       drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false);
       return;
     }
@@ -1379,6 +1385,7 @@
     if (!s) return;
     remoteInProgress.delete(id);
     if (s.points.length > 0) {
+      tagShape(s);
       s.bbox = strokeWorldBBox(s);
       s.endedAt = performance.now();
       boardStrokes.set(s.id, s);
@@ -1392,6 +1399,7 @@
         myColor = msg.color;
         boardStrokes.clear();
         for (const s of msg.strokes) {
+          tagShape(s);
           s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
           if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
@@ -1437,7 +1445,10 @@
       }
       case "stroke_replace": {
         const s = remoteInProgress.get(msg.strokeId);
-        if (s) s.points = msg.points;
+        if (s) {
+          s.points = msg.points;
+          if (msg.extra && typeof msg.extra === "object") s.extra = msg.extra;
+        }
         requestRedraw();
         break;
       }
@@ -2197,7 +2208,8 @@
     currentStroke.extra = Object.assign({}, currentStroke.extra || {}, { shape: shapeName });
     currentStroke.shape = shapeName;
     currentStroke.shapeBase = detected.points.map((p) => ({ x: p.x, y: p.y, p: p.p }));
-    currentStroke.shapeHandle = pickLockedHandle(shapeName, detected.points, grab);
+    currentStroke.shapeHandle = null;
+    currentStroke.shapeHandleLocked = false;
     currentStroke.shapeGeom = makeShapeGeom(shapeName, detected.points, grab);
     wsSend({
       type: "stroke_replace",
@@ -2218,8 +2230,18 @@
 
   function uniqueRectCorners(pts) {
     const ring = closedRing(pts);
-    const four = ring.length >= 4 ? ring.slice(0, 4) : ring;
-    return orderCornersCcw(four.map((p) => ({ x: p.x, y: p.y, p: p.p })));
+    const p0 = (pts && pts[0] && pts[0].p) || 0.5;
+    const four = ring.length >= 4 && ring.length <= 5 ? ring.slice(0, 4) : null;
+    if (four && four.length === 4) {
+      return orderCornersCcw(four.map((p) => ({ x: p.x, y: p.y, p: p.p == null ? p0 : p.p })));
+    }
+    const b = makeBBox(pts || []);
+    return [
+      { x: b.minX, y: b.minY, p: p0 },
+      { x: b.maxX, y: b.minY, p: p0 },
+      { x: b.maxX, y: b.maxY, p: p0 },
+      { x: b.minX, y: b.maxY, p: p0 },
+    ];
   }
 
   function rebuildClosed(corners, pressure) {
@@ -2297,12 +2319,21 @@
     if (tagged) return tagged;
     const pts = stroke.points || [];
     if (pts.length === 2) return "line";
+    const ring = closedRing(pts);
+    if (pts.length >= 4 && pts.length <= 6) {
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      if (Math.hypot(a.x - b.x, a.y - b.y) < 14) {
+        if (ring.length === 4) return "rectangle";
+        if (ring.length === 3) return "triangle";
+      }
+    }
     if (looksLikePolygon(pts)) {
-      const n = closedRing(pts).length;
+      const n = ring.length;
       if (n === 4) return "rectangle";
       if (n === 3) return "triangle";
     }
-    if (pts.length >= 48) {
+    if (pts.length >= 24) {
       const g = ellipseGeomFromPoints(pts);
       let sum = 0;
       for (const p of pts) {
@@ -2312,9 +2343,16 @@
         const ny = (p.y - g.cy) / ry;
         sum += Math.abs(Math.hypot(nx, ny) - 1);
       }
-      if (sum / pts.length < 0.18) return Math.abs(g.rx - g.ry) / Math.max(g.rx, g.ry) < 0.18 ? "circle" : "ellipse";
+      if (sum / pts.length < 0.22) return Math.abs(g.rx - g.ry) / Math.max(g.rx, g.ry) < 0.18 ? "circle" : "ellipse";
     }
     return null;
+  }
+
+  function tagShape(stroke) {
+    const shape = inferShape(stroke);
+    if (!shape) return null;
+    stroke.extra = Object.assign({}, stroke.extra || {}, { shape });
+    return shape;
   }
 
   function pickLockedHandle(shape, pts, grab) {
@@ -2329,8 +2367,9 @@
       for (let i = 0; i < corners.length; i++) {
         const a = corners[i];
         const b = corners[(i + 1) % 4];
-        const d = Math.hypot((a.x + b.x) / 2 - grab.x, (a.y + b.y) / 2 - grab.y);
-        if (d < best.d - 6) best = { kind: "side", i, d };
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const d = Math.min(Math.hypot(mid.x - grab.x, mid.y - grab.y), distPointToSeg(grab, a, b));
+        if (d < best.d + 24) best = { kind: "side", i, d };
       }
       return best;
     }
@@ -2361,6 +2400,13 @@
     const world = { x: wx, y: wy };
     if (s.shape === "rectangle") {
       const base = uniqueRectCorners(s.shapeBase || s.points);
+      if (!s.shapeHandleLocked) {
+        const gx = s.shapeGeom ? s.shapeGeom.grabX : world.x;
+        const gy = s.shapeGeom ? s.shapeGeom.grabY : world.y;
+        if (Math.hypot(wx - gx, wy - gy) < 8) return;
+        s.shapeHandle = pickLockedHandle("rectangle", s.shapeBase || s.points, world);
+        s.shapeHandleLocked = true;
+      }
       const h = s.shapeHandle || { kind: "corner", i: 0 };
       s.points = h.kind === "side" ? moveRectSide(base, h.i, world, p) : moveRectCorner(base, h.i, world, p);
     } else if (s.shape === "circle" || s.shape === "ellipse") {
@@ -2494,6 +2540,16 @@
       clearSelection();
       return;
     }
+    for (const id of present) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      const shape = tagShape(s);
+      if (shape === "rectangle" && (s.points || []).length > 6) {
+        const p = (s.points[0] && s.points[0].p) || 0.5;
+        s.points = rebuildClosed(uniqueRectCorners(s.points), p);
+        s.bbox = strokeWorldBBox(s);
+      }
+    }
     selection = {
       ids: new Set(present),
       bbox: unionBBox(present.map((id) => {
@@ -2558,6 +2614,17 @@
     if (pts.length === 1) return Math.hypot(pts[0].x - pt.x, pts[0].y - pt.y) <= r;
     for (let i = 1; i < pts.length; i++) {
       if (distPointToSeg(pt, pts[i - 1], pts[i]) <= r) return true;
+    }
+    const shape = inferShape(stroke);
+    if (shape === "rectangle" || shape === "triangle") {
+      const poly = shape === "rectangle" ? uniqueRectCorners(pts) : closedRing(pts).slice(0, 3);
+      if (poly.length >= 3 && pointInPolygon(pt, poly)) return true;
+    }
+    if (shape === "circle" || shape === "ellipse") {
+      const g = ellipseGeomFromPoints(pts);
+      const nx = (pt.x - g.cx) / (g.rx || 1);
+      const ny = (pt.y - g.cy) / (g.ry || 1);
+      if (nx * nx + ny * ny <= 1) return true;
     }
     return false;
   }
@@ -2959,9 +3026,11 @@
     for (const s of ink) {
       const shaped = shapeEditKnots(s);
       if (shaped) {
+        tagShape(s);
         for (const k of shaped) out.push(Object.assign({ strokeId: s.id, knots: [] }, k));
         continue;
       }
+      if (s.extra && s.extra.shape) continue;
       const knots = knotIndicesForStroke(s);
       for (const i of knots) {
         const p = s.points[i];
@@ -3623,11 +3692,15 @@
       currentStroke.unsent = [];
     }
     wsSend({ type: "stroke_end", strokeId: currentStroke.id, extra: currentStroke.extra || null });
+    tagShape(currentStroke);
     currentStroke.bbox = makeBBox(currentStroke.points);
     currentStroke.endedAt = performance.now();
+    const finishedId = currentStroke.id;
+    const selectShape = !!(currentStroke.locked && currentStroke.extra && currentStroke.extra.shape);
     boardStrokes.set(currentStroke.id, currentStroke);
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
     currentStroke = null;
+    if (selectShape) selectStrokeIds([finishedId]);
     requestRedraw();
   }
 
