@@ -505,9 +505,9 @@
         ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
       }
       const rot = selectionRotateHandle(b, pad);
-      const midTop = { x: (b.minX + b.maxX) / 2, y: b.minY - pad };
+      const midBottom = { x: (b.minX + b.maxX) / 2, y: b.maxY + pad };
       ctx.beginPath();
-      ctx.moveTo(midTop.x, midTop.y);
+      ctx.moveTo(midBottom.x, midBottom.y);
       ctx.lineTo(rot.x, rot.y);
       ctx.stroke();
       ctx.beginPath();
@@ -571,7 +571,7 @@
 
   function selectionRotateHandle(b, pad) {
     const lift = 26 / Math.max(scale, 0.25);
-    return { name: "rot", x: (b.minX + b.maxX) / 2, y: b.minY - pad - lift };
+    return { name: "rot", x: (b.minX + b.maxX) / 2, y: b.maxY + pad + lift };
   }
 
   function cropHandlePoints(full, crop) {
@@ -3298,9 +3298,9 @@
     const top = worldToScreen((b.minX + b.maxX) / 2, b.minY);
     const bottom = worldToScreen((b.minX + b.maxX) / 2, b.maxY);
     mediaToolbar.style.left = Math.round(top.x) + "px";
-    const extraLift = cropState ? 0 : 34;
+    const extraLift = cropState ? 0 : 8;
     if (top.y < 78 + extraLift) {
-      mediaToolbar.style.top = Math.round(bottom.y + 8) + "px";
+      mediaToolbar.style.top = Math.round(bottom.y + (cropState ? 8 : 48)) + "px";
       mediaToolbar.style.transform = "translate(-50%, 0)";
     } else {
       mediaToolbar.style.top = Math.round(top.y - 8 - extraLift) + "px";
