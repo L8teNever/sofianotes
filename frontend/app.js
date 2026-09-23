@@ -1748,10 +1748,14 @@
       holdTimer = null;
     }
   }
+  function isHoldSnapTool(tool) {
+    return tool === "pen" || tool === "marker";
+  }
+
   function armHoldTimer() {
     clearHoldTimer();
     if (!shapeRecognitionEnabled) return;
-    if (!currentStroke || currentStroke.tool !== "pen" || currentStroke.locked) return;
+    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
     holdTimer = setTimeout(tryShapeSnap, HOLD_MS);
   }
 
@@ -2076,10 +2080,34 @@
     return null;
   }
 
+  function straightenOpenStroke(rawPoints) {
+    if (!rawPoints || rawPoints.length < 4) return null;
+    const start = rawPoints[0];
+    const end = rawPoints[rawPoints.length - 1];
+    const chord = Math.hypot(end.x - start.x, end.y - start.y);
+    if (chord < 28) return null;
+    let pathLength = 0;
+    for (let i = 1; i < rawPoints.length; i++) {
+      pathLength += Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
+    }
+    const bbox = makeBBox(rawPoints);
+    const diagonal = Math.hypot(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY);
+    if (chord < diagonal * 0.38) return null;
+    const avgPressure = rawPoints.reduce((s, p) => s + (p.p || 0.5), 0) / rawPoints.length;
+    return {
+      type: "line",
+      points: [
+        { x: start.x, y: start.y, p: avgPressure },
+        { x: end.x, y: end.y, p: avgPressure },
+      ],
+    };
+  }
+
   function tryShapeSnap() {
     holdTimer = null;
-    if (!currentStroke || currentStroke.tool !== "pen" || currentStroke.locked) return;
-    const detected = detectShape(currentStroke.points);
+    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
+    let detected = detectShape(currentStroke.points);
+    if (!detected && currentStroke.tool === "marker") detected = straightenOpenStroke(currentStroke.points);
     if (!detected) return;
     currentStroke.points = detected.points;
     currentStroke.unsent = [];
@@ -2853,7 +2881,7 @@
       locked: false,
     };
     wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points });
-    if (tool === "pen") armHoldTimer();
+    if (isHoldSnapTool(tool)) armHoldTimer();
     requestRedraw();
   }
 
@@ -2878,7 +2906,7 @@
     const point = { x: wx, y: wy, p: pressure };
     currentStroke.points.push(point);
     currentStroke.unsent.push(point);
-    if (currentStroke.tool === "pen") armHoldTimer();
+    if (isHoldSnapTool(currentStroke.tool)) armHoldTimer();
     requestRedraw();
   }
 
