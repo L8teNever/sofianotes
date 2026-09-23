@@ -1370,6 +1370,7 @@
   let currentPersonId = localStorage.getItem("sofianotes-person") || "";
   let currentBoardId = "";
   let currentBoardMeta = null;
+  let currentFolderId = null;
   let libraryCache = null;
   const whoBackdrop = document.getElementById("who-backdrop");
   const libraryBackdrop = document.getElementById("library-backdrop");
