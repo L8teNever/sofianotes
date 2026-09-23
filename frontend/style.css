@@ -506,14 +506,6 @@ button {
   flex-direction: column;
 }
 
-.dock-grip {
-  width: 40px;
-  height: 40px;
-  border-radius: 16px;
-  background: #f1f3f4;
-}
-.dock-grip:hover { color: var(--accent); background: #e8f0fe; }
-
 .tools-container {
   display: flex;
   align-items: center;

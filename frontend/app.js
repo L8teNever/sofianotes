@@ -759,6 +759,7 @@
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
     let ignoreClick = false;
     btn.addEventListener("pointerup", (e) => {
+      if (dockDrag && dockDrag.live) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
       const r = btn.getBoundingClientRect();
       if (e.clientX < r.left - 2 || e.clientX > r.right + 2 || e.clientY < r.top - 2 || e.clientY > r.bottom + 2) return;
@@ -1045,12 +1046,9 @@
   let dockDrag = null;
 
   function armDockDrag(kind, e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (e.target.closest("input, textarea, .popover, .tool-popover")) return;
     e.preventDefault();
-    e.stopPropagation();
-    hidePopovers();
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch (err) {}
     const el = kind === "dock" ? toolbarEl : undoDock;
     dockDrag = {
       kind,
@@ -1066,10 +1064,14 @@
       snap: null,
       timer: setTimeout(() => {
         if (!dockDrag || dockDrag.live) return;
+        hidePopovers();
         const r = liftDock(el, kind);
         dockDrag.live = true;
         dockDrag.grabDX = dockDrag.lastX - r.left;
         dockDrag.grabDY = dockDrag.lastY - r.top;
+        try {
+          el.setPointerCapture(dockDrag.pointerId);
+        } catch (err) {}
         moveDockDrag(dockDrag.lastX, dockDrag.lastY);
       }, DOCK_HOLD_MS),
     };
@@ -1111,6 +1113,7 @@
     if (!dockDrag) return;
     clearTimeout(dockDrag.timer);
     const { kind, live, lastX, lastY, el } = dockDrag;
+    if (live) suppressDockClick = true;
     dockDrag = null;
     hideGuides();
     if (!live) return;
@@ -1123,14 +1126,17 @@
     positionToolPopover();
   }
 
-  document.getElementById("dock-drag-handle").addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    armDockDrag("dock", e);
-  });
-  document.getElementById("undo-drag-handle").addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    armDockDrag("undo", e);
-  });
+  let suppressDockClick = false;
+  function blockDockClick(e) {
+    if (!suppressDockClick) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressDockClick = false;
+  }
+  toolbarEl.addEventListener("click", blockDockClick, true);
+  undoDock.addEventListener("click", blockDockClick, true);
+  toolbarEl.addEventListener("pointerdown", (e) => armDockDrag("dock", e));
+  undoDock.addEventListener("pointerdown", (e) => armDockDrag("undo", e));
   window.addEventListener("pointermove", (e) => {
     if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
     dockDrag.lastX = e.clientX;

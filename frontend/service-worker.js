@@ -1,11 +1,11 @@
-const CACHE_NAME = "sofianotes-v32";
+const CACHE_NAME = "sofianotes-v33";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/style.css?v=32",
-  "/de-words.js?v=32",
-  "/ink-recognize.js?v=32",
-  "/app.js?v=32",
+  "/style.css?v=33",
+  "/de-words.js?v=33",
+  "/ink-recognize.js?v=33",
+  "/app.js?v=33",
   "/manifest.json",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
