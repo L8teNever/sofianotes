@@ -135,7 +135,7 @@ async def create_board(request: Request) -> dict:
     person = str(body.get("personId") or "")
     title = str(body.get("title") or "Unbenannte Skizze")
     folder = body.get("folderId") or None
-    board = await db.create_board(person, title, folder)
+    board = await db.create_board(person, title, folder, body.get("id") or None)
     if board is None:
         raise HTTPException(status_code=400, detail="unknown person")
     return {"ok": True, "board": board}
@@ -185,7 +185,7 @@ async def create_folder(request: Request) -> dict:
     person = str(body.get("personId") or "")
     name = str(body.get("name") or "Ordner")
     parent = body.get("parentId") or None
-    folder = await db.create_folder(person, name, parent)
+    folder = await db.create_folder(person, name, parent, body.get("id") or None)
     if folder is None:
         raise HTTPException(status_code=400, detail="unknown person")
     return {"ok": True, "folder": folder}
@@ -247,8 +247,9 @@ async def upload_media(request: Request) -> dict:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="json object required")
     data = body.get("image") or body.get("data") or ""
+    want_id = body.get("id")
     try:
-        saved = media.save_data_uri(str(data))
+        saved = media.save_data_uri(str(data), str(want_id) if want_id else None)
     except ValueError as exc:
         code = str(exc)
         if code == "too_large":
@@ -267,6 +268,41 @@ async def get_media(media_id: str) -> Response:
         media_type="image/jpeg",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
+
+
+@app.get("/api/boards/{board_id}/snapshot")
+async def board_snapshot(board_id: str, person: str) -> dict:
+    if not await db.can_access(person, board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    board = await db.get_board(board_id)
+    strokes = await db.load_all(board_id)
+    return {"ok": True, "board": board, "strokes": strokes}
+
+
+@app.post("/api/boards/{board_id}/strokes")
+async def upsert_stroke(board_id: str, request: Request) -> dict:
+    body = await _json_body(request)
+    person = str(body.get("personId") or "")
+    if not await db.can_access(person, board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    stroke = body.get("stroke")
+    if not isinstance(stroke, dict) or not stroke.get("id"):
+        raise HTTPException(status_code=400, detail="stroke required")
+    stroke["board_id"] = board_id
+    await db.insert_stroke(stroke)
+    return {"ok": True}
+
+
+@app.post("/api/boards/{board_id}/erase")
+async def erase_board_strokes(board_id: str, request: Request) -> dict:
+    body = await _json_body(request)
+    person = str(body.get("personId") or "")
+    if not await db.can_access(person, board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    stroke_ids = [s for s in body.get("strokeIds", []) if s]
+    if stroke_ids:
+        await db.delete_strokes(stroke_ids)
+    return {"ok": True}
 
 
 @app.get("/api/export.goodnotes")

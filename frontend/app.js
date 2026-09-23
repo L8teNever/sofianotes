@@ -300,6 +300,13 @@
     img.decoding = "async";
     img.onload = () => requestRedraw();
     img.src = "/api/media/" + encodeURIComponent(mediaId);
+    img.onerror = () => {
+      if (!window.SofiaOffline) return;
+      SofiaOffline.getMedia(mediaId).then((blob) => {
+        if (!blob) return;
+        img.src = URL.createObjectURL(blob);
+      });
+    };
     mediaImages.set(mediaId, img);
     return img;
   }
@@ -1341,7 +1348,9 @@
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ personId: currentPersonId, title: v }),
-        }).catch(() => {});
+        }).catch(() => {
+          enqueueOp({ type: "board_rename", personId: currentPersonId, id: currentBoardId, title: v });
+        });
       }
     });
     filenameInput.addEventListener("keydown", (e) => {
@@ -1384,12 +1393,201 @@
   }
 
   function wsSend(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(obj));
+      scheduleSaveBoard();
+      return;
+    }
+    scheduleSaveBoard();
+    if (!currentBoardId || !currentPersonId) return;
+    if (obj.type === "stroke_end" && currentStroke) {
+      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: serializeStroke(currentStroke) });
+    } else if (obj.type === "stroke_move" && obj.stroke) {
+      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: obj.stroke });
+    } else if (obj.type === "erase" && obj.strokeIds) {
+      enqueueOp({ type: "stroke_erase", personId: currentPersonId, boardId: currentBoardId, strokeIds: obj.strokeIds });
+    }
+  }
+
+  function setConnState(mode) {
+    statusEl.classList.toggle("connected", mode === "live");
+    statusEl.classList.toggle("offline", mode === "offline");
+    statusEl.classList.toggle("sync", mode === "sync");
+    statusTextEl.textContent = mode === "live" ? "Live" : mode === "sync" ? "Sync…" : "Offline";
   }
 
   function setConnected(connected) {
-    statusEl.classList.toggle("connected", connected);
-    statusTextEl.textContent = connected ? "Live" : "Verbinde…";
+    setConnState(connected ? "live" : "offline");
+  }
+
+  let saveBoardTimer = null;
+  function scheduleSaveBoard() {
+    if (!currentBoardId || !window.SofiaOffline) return;
+    clearTimeout(saveBoardTimer);
+    saveBoardTimer = setTimeout(() => {
+      const list = Array.from(boardStrokes.values()).map(cloneStroke);
+      SofiaOffline.setStrokes(currentBoardId, list).catch(() => {});
+    }, 80);
+  }
+
+  function applyStrokeList(list) {
+    boardStrokes.clear();
+    for (const s of list || []) {
+      tagShape(s);
+      s.bbox = strokeWorldBBox(s);
+      boardStrokes.set(s.id, s);
+      if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
+    }
+    requestRedraw();
+  }
+
+  async function probeOnline() {
+    try {
+      const r = await fetch("/api/health", { cache: "no-store" });
+      return r.ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function enqueueOp(op) {
+    if (window.SofiaOffline) await SofiaOffline.enqueue(op);
+  }
+
+  async function flushOutbox() {
+    if (!window.SofiaOffline) return true;
+    const entries = await SofiaOffline.outboxEntries();
+    if (!entries.length) return true;
+    setConnState("sync");
+    for (const item of entries) {
+      try {
+        await sendQueuedOp(item.op);
+        await SofiaOffline.outboxDelete(item.key);
+      } catch (err) {
+        setConnState("offline");
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function sendQueuedOp(op) {
+    const headers = { "Content-Type": "application/json" };
+    if (op.type === "media") {
+      const r = await fetch("/api/media", { method: "POST", headers, body: JSON.stringify({ id: op.id, image: op.image }) });
+      if (!r.ok) throw new Error("media");
+      return;
+    }
+    if (op.type === "board_create") {
+      const r = await fetch("/api/boards", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, title: op.title, folderId: op.folderId, id: op.id }),
+      });
+      if (!r.ok) throw new Error("board");
+      return;
+    }
+    if (op.type === "board_rename") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.id), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ personId: op.personId, title: op.title }),
+      });
+      if (!r.ok) throw new Error("rename");
+      return;
+    }
+    if (op.type === "board_delete") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.id) + "?person=" + encodeURIComponent(op.personId), { method: "DELETE" });
+      if (!r.ok) throw new Error("delete");
+      return;
+    }
+    if (op.type === "folder_create") {
+      const r = await fetch("/api/folders", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, name: op.name, parentId: op.parentId, id: op.id }),
+      });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "folder_rename") {
+      const r = await fetch("/api/folders/" + encodeURIComponent(op.id), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ personId: op.personId, name: op.name }),
+      });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "folder_move") {
+      const r = await fetch("/api/folders/" + encodeURIComponent(op.id), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ personId: op.personId, parentId: op.parentId }),
+      });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "folder_delete") {
+      const r = await fetch("/api/folders/" + encodeURIComponent(op.id) + "?person=" + encodeURIComponent(op.personId), { method: "DELETE" });
+      if (!r.ok) throw new Error("folder");
+      return;
+    }
+    if (op.type === "place") {
+      const r = await fetch("/api/placements", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, boardId: op.boardId, folderId: op.folderId }),
+      });
+      if (!r.ok) throw new Error("place");
+      return;
+    }
+    if (op.type === "share") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/share", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, withPersonId: op.withPersonId }),
+      });
+      if (!r.ok) throw new Error("share");
+      return;
+    }
+    if (op.type === "unshare") {
+      const r = await fetch(
+        "/api/boards/" + encodeURIComponent(op.boardId) + "/share/" + encodeURIComponent(op.withPersonId) + "?person=" + encodeURIComponent(op.personId),
+        { method: "DELETE" }
+      );
+      if (!r.ok) throw new Error("unshare");
+      return;
+    }
+    if (op.type === "stroke_put") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/strokes", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, stroke: op.stroke }),
+      });
+      if (!r.ok) throw new Error("stroke");
+      return;
+    }
+    if (op.type === "stroke_erase") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/erase", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ personId: op.personId, strokeIds: op.strokeIds }),
+      });
+      if (!r.ok) throw new Error("erase");
+    }
+  }
+
+  async function goOnlineIfPossible() {
+    if (!(await probeOnline())) {
+      setConnState("offline");
+      return false;
+    }
+    const ok = await flushOutbox();
+    if (!ok) return false;
+    if (wantWs && currentBoardId) connectWS();
+    else setConnState("live");
+    return true;
   }
 
   function disconnectWS() {
@@ -1405,6 +1603,7 @@
   function connectWS() {
     if (!currentPersonId || !currentBoardId) return;
     wantWs = true;
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url =
       `${proto}//${location.host}/ws?person=` +
@@ -1414,13 +1613,19 @@
     ws = new WebSocket(url);
 
     ws.onopen = () => {
-      setConnected(true);
+      setConnState("live");
       reconnectDelay = 1000;
     };
     ws.onclose = () => {
-      setConnected(false);
-      if (!wantWs) return;
-      setTimeout(connectWS, reconnectDelay);
+      if (!wantWs) {
+        setConnState("offline");
+        return;
+      }
+      setConnState("offline");
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      setTimeout(() => {
+        if (wantWs) goOnlineIfPossible();
+      }, reconnectDelay);
       reconnectDelay = Math.min(10000, reconnectDelay * 1.7);
     };
     ws.onerror = () => ws.close();
@@ -1458,6 +1663,7 @@
           if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
         }
         requestRedraw();
+        scheduleSaveBoard();
         break;
       }
       case "presence_join":
@@ -3378,15 +3584,27 @@
   }
 
   async function uploadJpeg(dataUrl) {
-    const resp = await fetch("/api/media", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ image: dataUrl }),
-    });
-    if (!resp.ok) throw new Error("upload");
-    const data = await resp.json();
-    if (!data || !data.id) throw new Error("upload");
-    return data.id;
+    const id = uuid();
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      if (window.SofiaOffline) await SofiaOffline.putMedia(id, blob);
+    } catch (err) {
+      /* blob cache optional */
+    }
+    try {
+      const resp = await fetch("/api/media", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, image: dataUrl }),
+      });
+      if (!resp.ok) throw new Error("upload");
+      const data = await resp.json();
+      if (!data || !data.id) throw new Error("upload");
+      return data.id;
+    } catch (err) {
+      await enqueueOp({ type: "media", id, image: dataUrl });
+      return id;
+    }
   }
 
   function placeImageStroke(mediaId, w, h, name, origin) {
@@ -4671,20 +4889,34 @@
 
   async function refreshLibrary() {
     if (!currentPersonId) return;
+    const key = "lib:" + currentPersonId + ":" + (currentFolderId || "");
     const q = currentFolderId ? "&folder=" + encodeURIComponent(currentFolderId) : "";
-    libraryCache = await api("/api/library?person=" + encodeURIComponent(currentPersonId) + q);
+    try {
+      libraryCache = await api("/api/library?person=" + encodeURIComponent(currentPersonId) + q);
+      if (window.SofiaOffline) await SofiaOffline.setKv(key, libraryCache);
+    } catch (err) {
+      libraryCache = (window.SofiaOffline && (await SofiaOffline.getKv(key))) || {
+        personId: currentPersonId,
+        folderId: currentFolderId,
+        folders: [],
+        boards: [],
+        crumbs: [],
+        allFolders: [],
+      };
+      setConnState("offline");
+    }
     const crumbs = document.getElementById("library-crumbs");
-    if (!libraryCache.crumbs.length) crumbs.textContent = "Alle Blätter";
+    if (!libraryCache.crumbs || !libraryCache.crumbs.length) crumbs.textContent = "Alle Blätter";
     else crumbs.textContent = libraryCache.crumbs.map((c) => c.name).join(" › ");
     const list = document.getElementById("library-list");
     list.innerHTML = "";
-    for (const folder of libraryCache.folders) {
+    for (const folder of libraryCache.folders || []) {
       list.appendChild(folderCard(folder));
     }
-    for (const board of libraryCache.boards) {
+    for (const board of libraryCache.boards || []) {
       list.appendChild(boardCard(board));
     }
-    if (!libraryCache.folders.length && !libraryCache.boards.length) {
+    if (!(libraryCache.folders || []).length && !(libraryCache.boards || []).length) {
       const empty = document.createElement("div");
       empty.className = "library-empty";
       empty.textContent = "Noch leer. Leg ein Blatt oder einen Ordner an.";
@@ -4759,54 +4991,108 @@
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
     hideLibrary();
-    connectWS();
+    if (window.SofiaOffline) {
+      const local = await SofiaOffline.getStrokes(id);
+      if (local && local.length) applyStrokeList(local);
+    }
     requestRedraw();
+    wantWs = true;
+    if (await probeOnline()) {
+      await flushOutbox();
+      connectWS();
+    } else {
+      setConnState("offline");
+    }
   }
 
   async function createBoard() {
-    const created = await api("/api/boards", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personId: currentPersonId, title: "Unbenannte Skizze", folderId: currentFolderId }),
-    });
-    await openBoard(created.board.id, created.board.title);
+    const title = "Unbenannte Skizze";
+    try {
+      const created = await api("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, title, folderId: currentFolderId }),
+      });
+      await openBoard(created.board.id, created.board.title);
+    } catch (err) {
+      const id = uuid();
+      await enqueueOp({ type: "board_create", personId: currentPersonId, title, folderId: currentFolderId, id });
+      if (libraryCache) {
+        libraryCache.boards = libraryCache.boards || [];
+        libraryCache.boards.unshift({
+          id,
+          ownerId: currentPersonId,
+          title,
+          folderId: currentFolderId,
+          shared: false,
+          sharedWith: [],
+        });
+        if (window.SofiaOffline) {
+          await SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache);
+        }
+      }
+      await openBoard(id, title);
+    }
   }
 
   async function createFolder() {
     const name = window.prompt("Name für den Ordner", "Ordner");
     if (name == null) return;
-    await api("/api/folders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId }),
-    });
+    try {
+      await api("/api/folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId }),
+      });
+    } catch (err) {
+      const id = uuid();
+      await enqueueOp({ type: "folder_create", personId: currentPersonId, name, parentId: currentFolderId, id });
+      if (libraryCache) {
+        libraryCache.folders = libraryCache.folders || [];
+        libraryCache.folders.push({ id, parentId: currentFolderId, name, sortOrder: 0 });
+        libraryCache.allFolders = libraryCache.allFolders || [];
+        libraryCache.allFolders.push({ id, parentId: currentFolderId, name });
+      }
+    }
     refreshLibrary();
   }
 
   async function renameFolder(folder) {
     const name = window.prompt("Neuer Name", folder.name);
     if (name == null) return;
-    await api("/api/folders/" + encodeURIComponent(folder.id), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personId: currentPersonId, name }),
-    });
+    try {
+      await api("/api/folders/" + encodeURIComponent(folder.id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, name }),
+      });
+    } catch (err) {
+      await enqueueOp({ type: "folder_rename", personId: currentPersonId, id: folder.id, name });
+    }
     refreshLibrary();
   }
 
   async function deleteFolder(folder) {
     if (!window.confirm("Ordner löschen? Blätter bleiben, nur der Ordner geht weg.")) return;
-    await api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
-      method: "DELETE",
-    });
+    try {
+      await api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
+        method: "DELETE",
+      });
+    } catch (err) {
+      await enqueueOp({ type: "folder_delete", personId: currentPersonId, id: folder.id });
+    }
     refreshLibrary();
   }
 
   async function deleteBoard(board) {
     if (!window.confirm("Dieses Blatt wirklich löschen?")) return;
-    await api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
-      method: "DELETE",
-    });
+    try {
+      await api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
+        method: "DELETE",
+      });
+    } catch (err) {
+      await enqueueOp({ type: "board_delete", personId: currentPersonId, id: board.id });
+    }
     if (currentBoardId === board.id) {
       currentBoardId = "";
       boardStrokes.clear();
@@ -4826,17 +5112,25 @@
       b.className = on ? "on" : "";
       b.textContent = on ? "Geteilt mit " + p.name : "Teilen mit " + p.name;
       b.addEventListener("click", async () => {
-        if (on) {
-          await api(
-            "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
-            { method: "DELETE" }
+        try {
+          if (on) {
+            await api(
+              "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
+              { method: "DELETE" }
+            );
+          } else {
+            await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
+            });
+          }
+        } catch (err) {
+          await enqueueOp(
+            on
+              ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
+              : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
           );
-        } else {
-          await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
-          });
         }
         shareBackdrop.classList.add("hidden");
         refreshLibrary();
@@ -4868,18 +5162,26 @@
 
   async function applyMove(kind, id, folderId) {
     moveBackdrop.classList.add("hidden");
-    if (kind === "board") {
-      await api("/api/placements", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, boardId: id, folderId }),
-      });
-    } else {
-      await api("/api/folders/" + encodeURIComponent(id), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, parentId: folderId }),
-      });
+    try {
+      if (kind === "board") {
+        await api("/api/placements", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, boardId: id, folderId }),
+        });
+      } else {
+        await api("/api/folders/" + encodeURIComponent(id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, parentId: folderId }),
+        });
+      }
+    } catch (err) {
+      await enqueueOp(
+        kind === "board"
+          ? { type: "place", personId: currentPersonId, boardId: id, folderId }
+          : { type: "folder_move", personId: currentPersonId, id, parentId: folderId }
+      );
     }
     refreshLibrary();
   }
@@ -4930,6 +5232,13 @@
   });
   moveBackdrop?.addEventListener("click", (e) => {
     if (e.target === moveBackdrop) moveBackdrop.classList.add("hidden");
+  });
+
+  window.addEventListener("online", () => {
+    goOnlineIfPossible();
+  });
+  window.addEventListener("offline", () => {
+    setConnState("offline");
   });
 
   resizeCanvas();

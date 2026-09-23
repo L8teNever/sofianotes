@@ -401,10 +401,13 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     return {"personId": person_id, "folderId": folder_id, "folders": folders, "boards": boards, "crumbs": crumbs, "allFolders": all_folders}
 
 
-def _create_board_sync(person_id: str, title: str, folder_id: str | None) -> dict[str, Any]:
+def _create_board_sync(person_id: str, title: str, folder_id: str | None, board_id: str | None = None) -> dict[str, Any]:
     now = time.time()
-    board_id = str(uuid.uuid4())
+    board_id = board_id or str(uuid.uuid4())
     title = (title or "").strip() or "Unbenannte Skizze"
+    existing = _board_row(board_id)
+    if existing:
+        return existing
     _conn.execute(
         "INSERT INTO boards (id, owner_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         (board_id, person_id, title, now, now),
@@ -416,7 +419,6 @@ def _create_board_sync(person_id: str, title: str, folder_id: str | None) -> dic
     _conn.commit()
     board = _board_row(board_id)
     board["shared"] = False
-    board["sharedWith"] = []
     board["folderId"] = folder_id
     return board
 
@@ -468,9 +470,12 @@ def _unshare_sync(person_id: str, board_id: str, with_person: str) -> bool:
     return True
 
 
-def _create_folder_sync(person_id: str, name: str, parent_id: str | None) -> dict[str, Any]:
+def _create_folder_sync(person_id: str, name: str, parent_id: str | None, folder_id: str | None = None) -> dict[str, Any]:
     name = (name or "").strip() or "Ordner"
-    folder_id = str(uuid.uuid4())
+    folder_id = folder_id or str(uuid.uuid4())
+    row = _conn.execute("SELECT id, parent_id, name, sort_order FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    if row:
+        return {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3]}
     if parent_id:
         row = _conn.execute(
             "SELECT 1 FROM folders WHERE id = ? AND person_id = ?",
@@ -609,11 +614,13 @@ async def library(person_id: str, folder_id: str | None) -> dict[str, Any] | Non
         return await asyncio.get_event_loop().run_in_executor(None, _library_sync, person_id, folder_id)
 
 
-async def create_board(person_id: str, title: str, folder_id: str | None) -> dict[str, Any] | None:
+async def create_board(person_id: str, title: str, folder_id: str | None, board_id: str | None = None) -> dict[str, Any] | None:
     if not valid_person(person_id):
         return None
     async with _lock:
-        return await asyncio.get_event_loop().run_in_executor(None, _create_board_sync, person_id, title, folder_id)
+        return await asyncio.get_event_loop().run_in_executor(
+            None, _create_board_sync, person_id, title, folder_id, board_id
+        )
 
 
 async def rename_board(person_id: str, board_id: str, title: str) -> dict[str, Any] | None:
@@ -636,11 +643,13 @@ async def unshare_board(person_id: str, board_id: str, with_person: str) -> bool
         return await asyncio.get_event_loop().run_in_executor(None, _unshare_sync, person_id, board_id, with_person)
 
 
-async def create_folder(person_id: str, name: str, parent_id: str | None) -> dict[str, Any] | None:
+async def create_folder(person_id: str, name: str, parent_id: str | None, folder_id: str | None = None) -> dict[str, Any] | None:
     if not valid_person(person_id):
         return None
     async with _lock:
-        return await asyncio.get_event_loop().run_in_executor(None, _create_folder_sync, person_id, name, parent_id)
+        return await asyncio.get_event_loop().run_in_executor(
+            None, _create_folder_sync, person_id, name, parent_id, folder_id
+        )
 
 
 async def rename_folder(person_id: str, folder_id: str, name: str) -> dict[str, Any] | None:

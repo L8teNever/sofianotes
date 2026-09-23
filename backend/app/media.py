@@ -28,7 +28,7 @@ def path_for(media_id: str) -> Path:
     return _ensure_dir() / f"{media_id}.jpg"
 
 
-def save_data_uri(data_uri: str) -> dict:
+def save_data_uri(data_uri: str, media_id: str | None = None) -> dict:
     raw = (data_uri or "").strip()
     match = _DATA_URI.match(raw)
     if not match:
@@ -41,7 +41,11 @@ def save_data_uri(data_uri: str) -> dict:
         raise ValueError("too_large" if blob else "jpeg_data_uri")
     if blob[:2] != b"\xff\xd8":
         raise ValueError("jpeg_data_uri")
-    media_id = str(uuid.uuid4())
+    if media_id:
+        if not valid_id(media_id):
+            raise ValueError("jpeg_data_uri")
+    else:
+        media_id = str(uuid.uuid4())
     path_for(media_id).write_bytes(blob)
     return {"id": media_id, "bytes": len(blob)}
 

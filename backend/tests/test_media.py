@@ -47,7 +47,15 @@ class MediaStoreTests(unittest.TestCase):
         self.assertEqual(blob[:2], b"\xff\xd8")
         self.assertEqual(blob[-2:], b"\xff\xd9")
 
-    def test_rejects_png_uri(self):
+    def test_keeps_client_media_id(self):
+        import base64
+        import uuid
+
+        uri = "data:image/jpeg;base64," + base64.b64encode(_tiny_jpeg()).decode("ascii")
+        mid = str(uuid.uuid4())
+        saved = media.save_data_uri(uri, mid)
+        self.assertEqual(saved["id"], mid)
+        self.assertEqual(media.load_bytes(mid)[:2], b"\xff\xd8")
         with self.assertRaises(ValueError):
             media.save_data_uri("data:image/png;base64,aaaa")
 

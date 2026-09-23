@@ -65,6 +65,26 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(run(db.can_access("simon", a["id"])))
         self.assertFalse(run(db.can_access("franz", a["id"])))
 
+    def test_client_ids_and_upsert(self):
+        bid = "11111111-1111-4111-8111-111111111111"
+        board = run(db.create_board("simon", "Offline", None, bid))
+        self.assertEqual(board["id"], bid)
+        again = run(db.create_board("simon", "Offline", None, bid))
+        self.assertEqual(again["id"], bid)
+        run(
+            db.insert_stroke(
+                {
+                    "id": "off1",
+                    "tool": "pen",
+                    "color": "#000",
+                    "size": 3,
+                    "points": [{"x": 0, "y": 0, "p": 1}],
+                    "board_id": bid,
+                }
+            )
+        )
+        self.assertEqual(len(run(db.load_all(bid))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

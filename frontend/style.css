@@ -292,8 +292,10 @@ button {
   border-radius: 50%;
   background: #c0392b;
 }
-#status.connected .dot { background: #1e8e3e; }
-#status.connected #status-text { color: #1e8e3e; }
+#status.offline .dot { background: #80868b; }
+#status.offline #status-text { color: #5f6368; }
+#status.sync .dot { background: #f9ab00; }
+#status.sync #status-text { color: #b06000; }
 
 /* ---- undo/zoom dock ---- */
 #undo-redo-dock {
