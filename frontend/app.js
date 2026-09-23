@@ -654,6 +654,7 @@
     settingsPopover.classList.add("hidden");
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
+    hidePasteMenu();
   }
 
   function hexToRgba(hex, alpha) {
@@ -1167,6 +1168,8 @@
       e.target.closest("#toolbar") ||
       e.target.closest("#tool-popover") ||
       e.target.closest("#erase-all-menu") ||
+      e.target.closest("#paste-menu") ||
+      e.target.closest("#selection-toolbar") ||
       e.target.closest("#undo-redo-dock") ||
       e.target.closest("#top-filename-bar")
     ) {
@@ -1475,6 +1478,7 @@
   }
   function showEraseAllMenu(clientX, clientY) {
     if (!eraseAllMenu || !boardStrokes.size) return;
+    hidePasteMenu();
     eraseAllMenu.classList.remove("hidden");
     const w = 188;
     const h = 52;
@@ -1484,6 +1488,81 @@
     if (top + h > window.innerHeight - 8) top = Math.max(8, clientY - h - 10);
     eraseAllMenu.style.left = left + "px";
     eraseAllMenu.style.top = top + "px";
+  }
+  const pasteMenu = document.getElementById("paste-menu");
+  let pasteHoldTimer = null;
+  let pasteHoldStart = null;
+  let pasteHoldConsumed = false;
+  let pasteAnchorWorld = null;
+  const PASTE_HOLD_MS = 480;
+  function hidePasteMenu() {
+    if (pasteMenu) pasteMenu.classList.add("hidden");
+  }
+  function placeContextMenu(el, clientX, clientY) {
+    if (!el) return;
+    const w = 188;
+    const h = 52;
+    let left = clientX + 10;
+    let top = clientY + 10;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, clientX - w - 10);
+    if (top + h > window.innerHeight - 8) top = Math.max(8, clientY - h - 10);
+    el.style.left = left + "px";
+    el.style.top = top + "px";
+  }
+  function showPasteMenu(clientX, clientY, world) {
+    if (!pasteMenu || !strokeClipboard.length) return;
+    hideEraseAllMenu();
+    pasteAnchorWorld = world;
+    lastPointerWorld = world;
+    pasteMenu.classList.remove("hidden");
+    placeContextMenu(pasteMenu, clientX, clientY);
+  }
+  function clearPasteHold() {
+    if (pasteHoldTimer) {
+      clearTimeout(pasteHoldTimer);
+      pasteHoldTimer = null;
+    }
+    pasteHoldStart = null;
+  }
+  function boardEmptyAt(world) {
+    if (cropState) return false;
+    if (selection.bbox && pointInBBox(world, selection.bbox, 12 / Math.max(scale, 0.25))) return false;
+    if (typeof pickStrokeAt === "function" && pickStrokeAt(world)) return false;
+    return true;
+  }
+  function firePasteHold() {
+    if (!pasteHoldStart || !strokeClipboard.length) {
+      clearPasteHold();
+      return;
+    }
+    const hold = pasteHoldStart;
+    pasteHoldConsumed = true;
+    if (currentStroke && currentStroke.eraser) currentStroke = null;
+    else if (currentStroke) abortStroke();
+    lassoPoints = null;
+    lassoPointerId = null;
+    if (dragState) cancelSelectionDrag();
+    panState = null;
+    showPasteMenu(hold.clientX, hold.clientY, hold.world);
+    clearPasteHold();
+  }
+  function armPasteHold(e, world) {
+    clearPasteHold();
+    pasteHoldConsumed = false;
+    if (!strokeClipboard.length) return;
+    if (!boardEmptyAt(world)) return;
+    pasteHoldStart = {
+      world,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      pointerId: e.pointerId,
+    };
+    pasteHoldTimer = setTimeout(firePasteHold, PASTE_HOLD_MS);
+  }
+  function notePasteHoldMove(e) {
+    if (!pasteHoldStart || pasteHoldStart.pointerId !== e.pointerId) return;
+    const dist = Math.hypot(e.clientX - pasteHoldStart.clientX, e.clientY - pasteHoldStart.clientY);
+    if (dist > 12) clearPasteHold();
   }
   function clearAllInk() {
     const clones = Array.from(boardStrokes.values()).map(cloneStroke);
@@ -2412,10 +2491,13 @@
 
   function pasteClipboard() {
     if (!strokeClipboard.length) return;
+    hidePasteMenu();
     const boxes = strokeClipboard.map((s) => makeBBox(s.points));
     const union = unionBBox(boxes);
     if (!union) return;
-    const target = lastPointerWorld || screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+    const target =
+      pasteAnchorWorld || lastPointerWorld || screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+    pasteAnchorWorld = null;
     const dx = target.x - (union.minX + union.maxX) / 2;
     const dy = target.y - (union.minY + union.maxY) / 2;
     const pasted = [];
@@ -2663,6 +2745,10 @@
     cutSelection();
   });
   document.getElementById("btn-sel-paste")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    pasteClipboard();
+  });
+  document.getElementById("btn-paste-here")?.addEventListener("click", (e) => {
     e.stopPropagation();
     pasteClipboard();
   });
@@ -2990,6 +3076,7 @@
       startStroke(e.pointerId, e.pointerType, world.x, world.y, pointerPressure(e));
     }
     sendCursor(world.x, world.y, currentTool, activeSize());
+    armPasteHold(e, world);
   }
 
   canvas.addEventListener("pointerdown", (e) => {
@@ -3027,6 +3114,7 @@
           return;
         }
         if (!pinchState) panState = { lastX: e.clientX, lastY: e.clientY };
+        if (!fingerDrawEnabled) armPasteHold(e, screenToWorld(e.clientX, e.clientY));
       }
       return;
     }
@@ -3041,6 +3129,7 @@
   }, { passive: false });
 
   canvas.addEventListener("pointermove", (e) => {
+    notePasteHoldMove(e);
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
 
     if (e.pointerType === "touch") {
@@ -3131,7 +3220,31 @@
   });
 
   function endPointer(e) {
+    const consumed = pasteHoldConsumed;
+    clearPasteHold();
     activePointers.delete(e.pointerId);
+
+    if (consumed) {
+      pasteHoldConsumed = false;
+      if (e.pointerType === "touch") {
+        touchPointers.delete(e.pointerId);
+        if (touchPointers.size < 2) pinchState = null;
+        if (touchPointers.size === 0) panState = null;
+      } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
+        panState = null;
+      }
+      if (lassoPointerId === e.pointerId) {
+        lassoPointerId = null;
+        lassoPoints = null;
+      }
+      if (currentStroke && currentStroke.pointerId === e.pointerId) {
+        if (currentStroke.eraser) currentStroke = null;
+        else abortStroke();
+      }
+      if (currentTool === "eraser") eraserCursorEl.style.display = "none";
+      requestRedraw();
+      return;
+    }
 
     if (e.pointerType === "touch") {
       touchPointers.delete(e.pointerId);

@@ -773,6 +773,14 @@ button {
   backdrop-filter: blur(16px);
 }
 .erase-all-menu.hidden { display: none; }
+.paste-menu button {
+  border-color: #c5d4f5;
+  background: #e8f0fe;
+  color: #174ea6;
+}
+.paste-menu button:hover {
+  background: #d3e3fd;
+}
 
 .media-toolbar,
 .selection-toolbar {
