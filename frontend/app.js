@@ -568,6 +568,8 @@
   let shapeRecognitionEnabled = true;
   let fingerDrawEnabled = false;
   let mathSolveEnabled = localStorage.getItem("sofianotes-math") !== "0";
+  let eraserReturnEnabled = localStorage.getItem("sofianotes-eraser-return") !== "0";
+  let lastToolBeforeEraser = "pen";
   let strokeClipboard = [];
   let lastPointerWorld = null;
 
@@ -584,7 +586,9 @@
   const popoverPresets = document.getElementById("popover-presets");
   const popoverPreview = document.getElementById("popover-brush-preview");
   const settingsToggleBtn = document.getElementById("btn-settings-toggle");
+  const settingsBackdrop = document.getElementById("settings-backdrop");
   const settingsPopover = document.getElementById("settings-popover");
+  const settingsCloseBtn = document.getElementById("btn-settings-close");
   const zoomToggleBtn = document.getElementById("btn-zoom-toggle");
   const zoomPopover = document.getElementById("zoom-popover");
   const filenameInput = document.getElementById("canvas-filename");
@@ -652,9 +656,13 @@
     toolPopover.style.top = top + "px";
   }
 
+  function hideSettings() {
+    if (settingsBackdrop) settingsBackdrop.classList.add("hidden");
+  }
+
   function hidePopovers() {
     toolPopover.classList.add("hidden");
-    settingsPopover.classList.add("hidden");
+    hideSettings();
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
@@ -729,13 +737,16 @@
 
   function setTool(tool, { openPopover } = {}) {
     const already = currentTool === tool;
+    if (tool === "eraser" && currentTool !== "eraser") {
+      lastToolBeforeEraser = currentTool || "pen";
+    }
     currentTool = tool;
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === tool);
     });
     updateEraserCursorVisibility();
     if (tool === "eraser") clearSelection();
-    settingsPopover.classList.add("hidden");
+    hideSettings();
     zoomPopover.classList.add("hidden");
     if (tool === "select" && selection.ids.size === 0) {
       toolPopover.classList.add("hidden");
@@ -757,6 +768,12 @@
     }
     toolPopover.classList.remove("hidden");
     positionToolPopover();
+  }
+
+  function restoreToolAfterEraser({ keepEraser } = {}) {
+    if (keepEraser || !eraserReturnEnabled || currentTool !== "eraser") return;
+    const next = lastToolBeforeEraser && lastToolBeforeEraser !== "eraser" ? lastToolBeforeEraser : "pen";
+    setTool(next);
   }
 
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
@@ -839,12 +856,44 @@
     });
   }
 
-  settingsToggleBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
+  const eraserReturnToggleEl = document.getElementById("eraser-return-toggle");
+  if (eraserReturnToggleEl) {
+    eraserReturnToggleEl.classList.toggle("active", eraserReturnEnabled);
+    eraserReturnToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      eraserReturnEnabled = !eraserReturnEnabled;
+      localStorage.setItem("sofianotes-eraser-return", eraserReturnEnabled ? "1" : "0");
+      eraserReturnToggleEl.classList.toggle("active", eraserReturnEnabled);
+    });
+  }
+
+  function openSettings() {
     toolPopover.classList.add("hidden");
     zoomPopover.classList.add("hidden");
-    settingsPopover.classList.toggle("hidden");
+    hideEraseAllMenu();
+    hidePasteMenu();
+    if (settingsBackdrop) settingsBackdrop.classList.remove("hidden");
+  }
+
+  settingsToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) hideSettings();
+    else openSettings();
   });
+  if (settingsCloseBtn) {
+    settingsCloseBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideSettings();
+    });
+  }
+  if (settingsBackdrop) {
+    settingsBackdrop.addEventListener("click", (e) => {
+      if (e.target === settingsBackdrop) hideSettings();
+    });
+  }
+  if (settingsPopover) {
+    settingsPopover.addEventListener("click", (e) => e.stopPropagation());
+  }
 
   document.querySelectorAll(".btn-grid-style").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -872,7 +921,7 @@
   zoomToggleBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     toolPopover.classList.add("hidden");
-    settingsPopover.classList.add("hidden");
+    hideSettings();
     zoomPopover.classList.toggle("hidden");
     if (!zoomPopover.classList.contains("hidden")) renderPeopleJumpList();
   });
@@ -1050,7 +1099,7 @@
 
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (e.target.closest("input, textarea, .popover, .tool-popover")) return;
+    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop")) return;
     e.preventDefault();
     const el = kind === "dock" ? toolbarEl : undoDock;
     dockDrag = {
@@ -1168,7 +1217,6 @@
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       setDockPosition(btn.dataset.pos);
-      settingsPopover.classList.add("hidden");
     });
   });
 
@@ -1176,6 +1224,7 @@
     if (
       e.target.closest("#toolbar") ||
       e.target.closest("#tool-popover") ||
+      e.target.closest("#settings-popover") ||
       e.target.closest("#erase-all-menu") ||
       e.target.closest("#paste-menu") ||
       e.target.closest("#selection-toolbar") ||
@@ -1662,6 +1711,11 @@
     const key = e.key.toLowerCase();
     const typing = document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA");
     if (typing) return;
+    if (e.key === "Escape" && settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) {
+      e.preventDefault();
+      hideSettings();
+      return;
+    }
     if (meta && key === "z") {
       e.preventDefault();
       if (e.shiftKey) redo();
@@ -3288,6 +3342,7 @@
 
     if (currentStroke && currentStroke.pointerId === e.pointerId) {
       if (currentStroke.eraser) {
+        let keepEraser = false;
         if (pendingErase.size > 0) {
           wsSend({ type: "erase", strokeIds: Array.from(pendingErase) });
           pendingErase.clear();
@@ -3299,9 +3354,13 @@
           const tap =
             currentStroke.startX != null &&
             Math.hypot(e.clientX - currentStroke.startX, e.clientY - currentStroke.startY) < 18;
-          if (tap && boardStrokes.size) showEraseAllMenu(e.clientX, e.clientY);
+          if (tap && boardStrokes.size) {
+            showEraseAllMenu(e.clientX, e.clientY);
+            keepEraser = true;
+          }
         }
         currentStroke = null;
+        restoreToolAfterEraser({ keepEraser });
       } else {
         endStroke();
       }

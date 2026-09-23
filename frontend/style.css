@@ -598,11 +598,46 @@ button {
 
 .settings-wrap { position: relative; flex: 0 0 auto; }
 
-#settings-popover { width: 230px; }
-.dock-bottom #settings-popover { bottom: calc(100% + 12px); right: 0; left: auto; }
-.dock-top #settings-popover { top: calc(100% + 12px); bottom: auto; right: 0; }
-.dock-left #settings-popover { left: calc(100% + 12px); top: 50%; transform: translateY(-50%); }
-.dock-right #settings-popover { right: calc(100% + 12px); left: auto; top: 50%; transform: translateY(-50%); }
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(32, 33, 36, 0.42);
+  backdrop-filter: blur(8px);
+}
+.settings-backdrop.hidden { display: none; }
+.settings-modal {
+  width: min(400px, 100%);
+  max-height: min(86vh, 680px);
+  overflow: auto;
+  padding: 18px 18px 16px;
+  border-radius: 28px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.22);
+}
+.settings-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.settings-modal-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #202124;
+}
+.settings-modal-head .icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+}
 
 .grid-style-row {
   display: grid;
