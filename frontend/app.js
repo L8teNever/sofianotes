@@ -252,7 +252,10 @@
       c.font = `600 ${Math.max(14, stroke.size || 22)}px Inter, sans-serif`;
       c.textBaseline = "alphabetic";
       c.textAlign = "left";
-      c.fillText(label, pts[0].x, pts[0].y);
+      c.translate(pts[0].x, pts[0].y);
+      const rot = strokeRotation(stroke);
+      if (rot) c.rotate(rot);
+      c.fillText(label, 0, 0);
       c.restore();
       return;
     }
@@ -325,6 +328,44 @@
     return { minX, minY, maxX: minX + fw, maxY: minY + fh, w: fw, h: fh };
   }
 
+  function rotatePoint(p, cx, cy, ang) {
+    const cos = Math.cos(ang);
+    const sin = Math.sin(ang);
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos, p: p.p, text: p.text };
+  }
+
+  function strokeRotation(stroke) {
+    const r = stroke && stroke.extra && stroke.extra.rotation;
+    return Number.isFinite(r) ? r : 0;
+  }
+
+  function imageRotatedCorners(stroke) {
+    const dest = imageDestRect(stroke);
+    if (!dest) return [];
+    const cx = dest.minX + dest.w / 2;
+    const cy = dest.minY + dest.h / 2;
+    const rot = strokeRotation(stroke);
+    const pts = [
+      { x: dest.minX, y: dest.minY },
+      { x: dest.maxX, y: dest.minY },
+      { x: dest.maxX, y: dest.maxY },
+      { x: dest.minX, y: dest.maxY },
+    ];
+    if (!rot) return pts;
+    return pts.map((p) => rotatePoint(p, cx, cy, rot));
+  }
+
+  function strokeWorldBBox(stroke) {
+    if (!stroke) return null;
+    if (stroke.tool === "image") {
+      const corners = imageRotatedCorners(stroke);
+      if (corners.length) return makeBBox(corners);
+    }
+    return makeBBox(stroke.points || []);
+  }
+
   function drawImageStroke(c, stroke) {
     const dest = imageDestRect(stroke);
     if (!dest || dest.w < 1 || dest.h < 1) return;
@@ -359,7 +400,12 @@
       const ch = (crop.b - crop.t) * rect.h;
       c.drawImage(img, sx, sy, sw, sh, cx, cy, cw, ch);
     } else {
-      c.drawImage(img, sx, sy, sw, sh, dest.minX, dest.minY, dest.w, dest.h);
+      const rot = strokeRotation(stroke);
+      const cx = dest.minX + dest.w / 2;
+      const cy = dest.minY + dest.h / 2;
+      c.translate(cx, cy);
+      if (rot) c.rotate(rot);
+      c.drawImage(img, sx, sy, sw, sh, -dest.w / 2, -dest.h / 2, dest.w, dest.h);
     }
     c.restore();
   }
@@ -452,6 +498,31 @@
         ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
         ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
       }
+      const rot = selectionRotateHandle(b, pad);
+      const midTop = { x: (b.minX + b.maxX) / 2, y: b.minY - pad };
+      ctx.beginPath();
+      ctx.moveTo(midTop.x, midTop.y);
+      ctx.lineTo(rot.x, rot.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(rot.x, rot.y, 7 / scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#3b6fe0";
+      ctx.beginPath();
+      ctx.arc(rot.x, rot.y, 2.2 / scale, 0, Math.PI * 2);
+      ctx.fill();
+      const knots = selectedEditKnots();
+      const kr = 4.5 / scale;
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#0b57d0";
+      ctx.lineWidth = 1.6 / scale;
+      for (const k of knots) {
+        ctx.beginPath();
+        ctx.arc(k.x, k.y, kr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
       ctx.restore();
     }
     if (cropState && cropState.full) {
@@ -490,6 +561,11 @@
       { name: "sw", x: x0, y: y1 },
       { name: "se", x: x1, y: y1 },
     ];
+  }
+
+  function selectionRotateHandle(b, pad) {
+    const lift = 26 / Math.max(scale, 0.25);
+    return { name: "rot", x: (b.minX + b.maxX) / 2, y: b.minY - pad - lift };
   }
 
   function cropHandlePoints(full, crop) {
@@ -1303,7 +1379,7 @@
     if (!s) return;
     remoteInProgress.delete(id);
     if (s.points.length > 0) {
-      s.bbox = makeBBox(s.points);
+      s.bbox = strokeWorldBBox(s);
       s.endedAt = performance.now();
       boardStrokes.set(s.id, s);
     }
@@ -1316,7 +1392,7 @@
         myColor = msg.color;
         boardStrokes.clear();
         for (const s of msg.strokes) {
-          s.bbox = makeBBox(s.points);
+          s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
           if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
         }
@@ -1376,7 +1452,7 @@
       case "stroke_move": {
         const s = msg.stroke;
         if (s && s.id) {
-          s.bbox = makeBBox(s.points);
+          s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
           if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
           requestRedraw();
@@ -1639,7 +1715,7 @@
     requestRedraw();
   }
   function putStroke(stroke) {
-    const withBBox = { ...stroke, bbox: makeBBox(stroke.points), endedAt: performance.now() };
+    const withBBox = { ...stroke, bbox: strokeWorldBBox(stroke), endedAt: performance.now() };
     boardStrokes.set(withBBox.id, withBBox);
     wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
   }
@@ -1661,11 +1737,16 @@
         const points = direction === 1 ? m.after : m.before;
         if (s) {
           s.points = points.map((p) => ({ ...p }));
-          s.bbox = makeBBox(s.points);
           const extra = direction === 1 ? m.afterExtra : m.beforeExtra;
           if (extra) s.extra = JSON.parse(JSON.stringify(extra));
+          else if (s.extra && s.extra.rotation != null) {
+            const next = Object.assign({}, s.extra);
+            delete next.rotation;
+            s.extra = Object.keys(next).length ? next : undefined;
+          }
           const sz = direction === 1 ? m.afterSize : m.beforeSize;
           if (sz != null && Number.isFinite(sz)) s.size = sz;
+          s.bbox = strokeWorldBBox(s);
           wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
         }
       }
@@ -2086,10 +2167,6 @@
     const end = rawPoints[rawPoints.length - 1];
     const chord = Math.hypot(end.x - start.x, end.y - start.y);
     if (chord < 28) return null;
-    let pathLength = 0;
-    for (let i = 1; i < rawPoints.length; i++) {
-      pathLength += Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
-    }
     const bbox = makeBBox(rawPoints);
     const diagonal = Math.hypot(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY);
     if (chord < diagonal * 0.38) return null;
@@ -2158,7 +2235,10 @@
     }
     selection = {
       ids: new Set(present),
-      bbox: unionBBox(present.map((id) => boardStrokes.get(id).bbox)),
+      bbox: unionBBox(present.map((id) => {
+        const s = boardStrokes.get(id);
+        return s && (s.bbox || strokeWorldBBox(s));
+      }).filter(Boolean)),
     };
     renderToolPopover();
     syncMediaToolbar();
@@ -2205,9 +2285,14 @@
 
   function strokeHitsPoint(stroke, pt, pad) {
     const r = (stroke.size || 6) / 2 + pad;
-    const b = stroke.bbox || makeBBox(stroke.points || []);
+    const b = stroke.bbox || strokeWorldBBox(stroke);
     if (!pointInBBox(pt, b, r)) return false;
-    if (stroke.tool === "text" || stroke.tool === "image") return true;
+    if (stroke.tool === "image") {
+      const quad = imageRotatedCorners(stroke);
+      if (quad.length === 4) return pointInPolygon(pt, quad);
+      return true;
+    }
+    if (stroke.tool === "text") return true;
     const pts = stroke.points || [];
     if (pts.length === 1) return Math.hypot(pts[0].x - pt.x, pts[0].y - pt.y) <= r;
     for (let i = 1; i < pts.length; i++) {
@@ -2271,15 +2356,18 @@
     const ids = new Set();
     for (const stroke of boardStrokes.values()) {
       if (stroke.tool === "image") {
-        const b = stroke.bbox || makeBBox(stroke.points || []);
-        const corners = [
-          { x: b.minX, y: b.minY },
-          { x: b.maxX, y: b.minY },
-          { x: b.minX, y: b.maxY },
-          { x: b.maxX, y: b.maxY },
-          { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
-        ];
-        if (corners.some((p) => pointInPolygon(p, pts))) ids.add(stroke.id);
+        const corners = imageRotatedCorners(stroke);
+        const b = stroke.bbox || makeBBox(corners.length ? corners : stroke.points || []);
+        const hits = corners.length
+          ? corners.concat([{ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }])
+          : [
+              { x: b.minX, y: b.minY },
+              { x: b.maxX, y: b.minY },
+              { x: b.minX, y: b.maxY },
+              { x: b.maxX, y: b.maxY },
+              { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+            ];
+        if (hits.some((p) => pointInPolygon(p, pts))) ids.add(stroke.id);
         continue;
       }
       for (const p of stroke.points) {
@@ -2296,20 +2384,7 @@
     selectStrokeIds(Array.from(ids));
   }
 
-  function startSelectionDrag(pointerId, world) {
-    const snapshot = new Map();
-    const sizes = new Map();
-    for (const id of selection.ids) {
-      const s = boardStrokes.get(id);
-      if (s) {
-        snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
-        sizes.set(id, s.size);
-      }
-    }
-    dragState = { pointerId, startWorld: world, snapshot, sizes, kind: "move" };
-  }
-
-  function startSelectionScale(pointerId, world, corner) {
+  function snapshotSelection() {
     const snapshot = new Map();
     const extras = new Map();
     const sizes = new Map();
@@ -2318,8 +2393,18 @@
       if (!s) continue;
       snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
       sizes.set(id, s.size);
-      if (s.extra) extras.set(id, JSON.parse(JSON.stringify(s.extra)));
+      extras.set(id, s.extra ? JSON.parse(JSON.stringify(s.extra)) : null);
     }
+    return { snapshot, extras, sizes };
+  }
+
+  function startSelectionDrag(pointerId, world) {
+    const snap = snapshotSelection();
+    dragState = { pointerId, startWorld: world, kind: "move", ...snap };
+  }
+
+  function startSelectionScale(pointerId, world, corner) {
+    const snap = snapshotSelection();
     const pad = 10 / scale;
     const b = selection.bbox;
     const originMap = {
@@ -2331,12 +2416,35 @@
     dragState = {
       pointerId,
       startWorld: world,
-      snapshot,
-      extras,
-      sizes,
       kind: "scale",
       corner,
       origin: originMap[corner],
+      ...snap,
+    };
+  }
+
+  function startSelectionRotate(pointerId, world) {
+    const snap = snapshotSelection();
+    const b = selection.bbox;
+    dragState = {
+      pointerId,
+      startWorld: world,
+      kind: "rotate",
+      center: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+      ...snap,
+    };
+  }
+
+  function startPointEdit(pointerId, world, knot) {
+    const snap = snapshotSelection();
+    dragState = {
+      pointerId,
+      startWorld: world,
+      kind: "point",
+      strokeId: knot.strokeId,
+      index: knot.i,
+      knots: knot.knots,
+      ...snap,
     };
   }
 
@@ -2361,7 +2469,7 @@
       }));
       const baseSize = dragState.sizes && dragState.sizes.get(id);
       if (baseSize != null) s.size = Math.max(1, baseSize * factor);
-      s.bbox = makeBBox(s.points);
+      s.bbox = strokeWorldBBox(s);
       boxes.push(s.bbox);
     }
     selection.bbox = unionBBox(boxes);
@@ -2376,8 +2484,77 @@
       const s = boardStrokes.get(id);
       if (!s) continue;
       s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p, text: p.text }));
-      s.bbox = makeBBox(s.points);
+      s.bbox = strokeWorldBBox(s);
       boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
+  }
+
+  function updateSelectionRotate(world) {
+    const c = dragState.center;
+    const a0 = Math.atan2(dragState.startWorld.y - c.y, dragState.startWorld.x - c.x);
+    let ang = Math.atan2(world.y - c.y, world.x - c.x) - a0;
+    const step = Math.PI / 12;
+    const snapped = Math.round(ang / step) * step;
+    if (Math.abs(ang - snapped) < (3.5 * Math.PI) / 180) ang = snapped;
+    const boxes = [];
+    for (const [id, pts] of dragState.snapshot) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      if (s.tool === "image" && pts.length >= 2) {
+        const minX = Math.min(pts[0].x, pts[1].x);
+        const minY = Math.min(pts[0].y, pts[1].y);
+        const maxX = Math.max(pts[0].x, pts[1].x);
+        const maxY = Math.max(pts[0].y, pts[1].y);
+        const ocx = (minX + maxX) / 2;
+        const ocy = (minY + maxY) / 2;
+        const nc = rotatePoint({ x: ocx, y: ocy }, c.x, c.y, ang);
+        const dx = nc.x - ocx;
+        const dy = nc.y - ocy;
+        s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p, text: p.text }));
+      } else {
+        s.points = pts.map((p) => rotatePoint(p, c.x, c.y, ang));
+      }
+      const baseExtra = dragState.extras && dragState.extras.get(id);
+      if (s.tool === "image" || s.tool === "text") {
+        const baseRot = baseExtra && Number.isFinite(baseExtra.rotation) ? baseExtra.rotation : 0;
+        s.extra = Object.assign({}, baseExtra || s.extra || {}, { rotation: baseRot + ang });
+      } else if (baseExtra) {
+        s.extra = JSON.parse(JSON.stringify(baseExtra));
+      }
+      s.bbox = strokeWorldBBox(s);
+      boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
+  }
+
+  function updatePointEdit(world) {
+    const dx = world.x - dragState.startWorld.x;
+    const dy = world.y - dragState.startWorld.y;
+    const id = dragState.strokeId;
+    const k = dragState.index;
+    const knotIdx = dragState.knots || [k];
+    const pts = dragState.snapshot.get(id);
+    const s = boardStrokes.get(id);
+    if (!s || !pts) return;
+    const pos = knotIdx.indexOf(k);
+    const k0 = pos > 0 ? knotIdx[pos - 1] : k;
+    const k1 = pos >= 0 && pos < knotIdx.length - 1 ? knotIdx[pos + 1] : k;
+    s.points = pts.map((p, i) => {
+      let w = 0;
+      if (i === k) w = 1;
+      else if (k !== k0 && i > k0 && i < k) w = (i - k0) / (k - k0);
+      else if (k !== k1 && i > k && i < k1) w = (k1 - i) / (k1 - k);
+      if (w <= 0) return { x: p.x, y: p.y, p: p.p, text: p.text };
+      return { x: p.x + dx * w, y: p.y + dy * w, p: p.p, text: p.text };
+    });
+    s.bbox = strokeWorldBBox(s);
+    const boxes = [];
+    for (const sid of selection.ids) {
+      const st = boardStrokes.get(sid);
+      if (st && st.bbox) boxes.push(st.bbox);
     }
     selection.bbox = unionBBox(boxes);
     requestRedraw();
@@ -2408,13 +2585,89 @@
   function cancelSelectionDrag() {
     for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
-      if (s) {
-        s.points = pts;
-        s.bbox = makeBBox(pts);
+      if (!s) continue;
+      s.points = pts.map((p) => ({ ...p }));
+      if (dragState.extras && dragState.extras.has(id)) {
+        const ex = dragState.extras.get(id);
+        if (ex) s.extra = JSON.parse(JSON.stringify(ex));
+        else if (s.extra && s.extra.rotation != null) {
+          const next = Object.assign({}, s.extra);
+          delete next.rotation;
+          s.extra = Object.keys(next).length ? next : undefined;
+        }
       }
+      const beforeSize = dragState.sizes && dragState.sizes.get(id);
+      if (beforeSize != null) s.size = beforeSize;
+      s.bbox = strokeWorldBBox(s);
     }
     dragState = null;
     requestRedraw();
+  }
+
+  function knotIndicesForStroke(stroke) {
+    const pts = stroke.points || [];
+    if (pts.length < 2) return pts.length === 1 ? [0] : [];
+    if (pts.length <= 16) return pts.map((_, i) => i);
+    const b = stroke.bbox || makeBBox(pts);
+    const diag = Math.max(32, Math.hypot(b.maxX - b.minX, b.maxY - b.minY));
+    const simple = rdpSimplify(pts, Math.max(5, diag * 0.04));
+    const idx = [];
+    const seen = new Set();
+    for (const sp of simple) {
+      let best = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const d = Math.hypot(pts[i].x - sp.x, pts[i].y - sp.y);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      }
+      if (!seen.has(best)) {
+        seen.add(best);
+        idx.push(best);
+      }
+    }
+    if (!seen.has(0)) idx.unshift(0);
+    if (!seen.has(pts.length - 1)) idx.push(pts.length - 1);
+    idx.sort((a, b) => a - b);
+    if (idx.length > 22) {
+      const out = [idx[0]];
+      const step = Math.ceil((idx.length - 2) / 18);
+      for (let i = step; i < idx.length - 1; i += step) out.push(idx[i]);
+      out.push(idx[idx.length - 1]);
+      return out;
+    }
+    return idx;
+  }
+
+  function selectedEditKnots() {
+    const ink = selectedStrokes().filter((s) => s.tool === "pen" || s.tool === "marker");
+    if (!ink.length || ink.length > 10) return [];
+    const out = [];
+    for (const s of ink) {
+      const knots = knotIndicesForStroke(s);
+      for (const i of knots) {
+        const p = s.points[i];
+        if (!p) continue;
+        out.push({ strokeId: s.id, i, x: p.x, y: p.y, knots });
+      }
+    }
+    return out.length > 80 ? [] : out;
+  }
+
+  function pickEditKnot(world) {
+    const r = 14 / Math.max(scale, 0.25);
+    let best = null;
+    let bestD = r;
+    for (const k of selectedEditKnots()) {
+      const d = Math.hypot(world.x - k.x, world.y - k.y);
+      if (d <= bestD) {
+        best = k;
+        bestD = d;
+      }
+    }
+    return best;
   }
 
   function pickScaleHandle(world, bbox, pad) {
@@ -2423,6 +2676,13 @@
       if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
     }
     return null;
+  }
+
+  function pickRotateHandle(world, bbox, pad) {
+    if (!bbox) return false;
+    const h = selectionRotateHandle(bbox, pad);
+    const r = 16 / Math.max(scale, 0.25);
+    return Math.hypot(world.x - h.x, world.y - h.y) <= r;
   }
 
   function pickCropHandle(world) {
@@ -2532,7 +2792,7 @@
     ];
     s.extra = s.extra || {};
     s.extra.crop = crop;
-    s.bbox = makeBBox(s.points);
+    s.bbox = strokeWorldBBox(s);
     selection.bbox = s.bbox;
     wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
     pushUndo({
@@ -2653,11 +2913,12 @@
     const top = worldToScreen((b.minX + b.maxX) / 2, b.minY);
     const bottom = worldToScreen((b.minX + b.maxX) / 2, b.maxY);
     mediaToolbar.style.left = Math.round(top.x) + "px";
-    if (top.y < 78) {
+    const extraLift = cropState ? 0 : 34;
+    if (top.y < 78 + extraLift) {
       mediaToolbar.style.top = Math.round(bottom.y + 8) + "px";
       mediaToolbar.style.transform = "translate(-50%, 0)";
     } else {
-      mediaToolbar.style.top = Math.round(top.y - 8) + "px";
+      mediaToolbar.style.top = Math.round(top.y - 8 - extraLift) + "px";
       mediaToolbar.style.transform = "translate(-50%, -100%)";
     }
   }
@@ -3142,11 +3403,20 @@
           return;
         }
       }
-      if (selection.bbox) {
+      if (selection.bbox && !cropState) {
         const pad = 10 / scale;
+        const knot = pickEditKnot(world);
+        if (knot) {
+          startPointEdit(e.pointerId, world, knot);
+          return;
+        }
         const handle = pickScaleHandle(world, selection.bbox, pad);
         if (handle) {
           startSelectionScale(e.pointerId, world, handle);
+          return;
+        }
+        if (pickRotateHandle(world, selection.bbox, pad)) {
+          startSelectionRotate(e.pointerId, world);
           return;
         }
       }
@@ -3277,6 +3547,8 @@
         return;
       }
       if (dragState.kind === "scale") updateSelectionScale(world);
+      else if (dragState.kind === "rotate") updateSelectionRotate(world);
+      else if (dragState.kind === "point") updatePointEdit(world);
       else updateSelectionDrag(world);
     } else if (lassoPointerId === e.pointerId && lassoPoints) {
       if (touchPointers.size >= 2) {
