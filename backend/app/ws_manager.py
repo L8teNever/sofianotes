@@ -21,6 +21,8 @@ class ClientState:
     id: str
     color: str
     websocket: WebSocket
+    person_id: str | None = None
+    board_id: str | None = None
     in_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -42,10 +44,17 @@ class ConnectionManager:
     def get(self, websocket: WebSocket) -> ClientState | None:
         return self._clients.get(websocket)
 
-    async def broadcast(self, message: dict[str, Any], exclude: WebSocket | None = None) -> None:
+    async def broadcast(
+        self,
+        message: dict[str, Any],
+        exclude: WebSocket | None = None,
+        board_id: str | None = None,
+    ) -> None:
         dead: list[WebSocket] = []
-        for ws in list(self._clients.keys()):
+        for ws, state in list(self._clients.items()):
             if ws is exclude:
+                continue
+            if board_id and state.board_id != board_id:
                 continue
             try:
                 await ws.send_json(message)

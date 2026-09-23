@@ -1311,7 +1311,11 @@
       e.target.closest("#paste-menu") ||
       e.target.closest("#selection-toolbar") ||
       e.target.closest("#undo-redo-dock") ||
-      e.target.closest("#top-filename-bar")
+      e.target.closest("#top-filename-bar") ||
+      e.target.closest("#who-backdrop") ||
+      e.target.closest("#library-backdrop") ||
+      e.target.closest("#share-backdrop") ||
+      e.target.closest("#move-backdrop")
     ) {
       return;
     }
@@ -1328,13 +1332,17 @@
     document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b.dataset.grid === gridStyle));
   }
   if (filenameInput) {
-    const savedName = localStorage.getItem("sofianotes-filename");
-    if (savedName) filenameInput.value = savedName;
     filenameInput.addEventListener("change", () => {
       const v = filenameInput.value.trim() || "Unbenannte Skizze";
       filenameInput.value = v;
-      localStorage.setItem("sofianotes-filename", v);
       document.title = v + " – sofianotes";
+      if (currentBoardId && currentPersonId) {
+        fetch("/api/boards/" + encodeURIComponent(currentBoardId), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, title: v }),
+        }).catch(() => {});
+      }
     });
     filenameInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") filenameInput.blur();
@@ -1353,6 +1361,26 @@
   let myClientId = null;
   let myColor = null;
   let reconnectDelay = 1000;
+  let wantWs = false;
+  const PEOPLE = [
+    { id: "simon", name: "Simon" },
+    { id: "franz", name: "Franz" },
+    { id: "jungen", name: "Die Jungen" },
+  ];
+  let currentPersonId = localStorage.getItem("sofianotes-person") || "";
+  let currentBoardId = "";
+  let currentBoardMeta = null;
+  let libraryCache = null;
+  const whoBackdrop = document.getElementById("who-backdrop");
+  const libraryBackdrop = document.getElementById("library-backdrop");
+  const shareBackdrop = document.getElementById("share-backdrop");
+  const moveBackdrop = document.getElementById("move-backdrop");
+  const whoChip = document.getElementById("btn-who-chip");
+
+  function personName(id) {
+    const p = PEOPLE.find((x) => x.id === id);
+    return p ? p.name : id;
+  }
 
   function wsSend(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -1363,9 +1391,26 @@
     statusTextEl.textContent = connected ? "Live" : "Verbinde…";
   }
 
+  function disconnectWS() {
+    wantWs = false;
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
+    }
+    setConnected(false);
+  }
+
   function connectWS() {
+    if (!currentPersonId || !currentBoardId) return;
+    wantWs = true;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const url =
+      `${proto}//${location.host}/ws?person=` +
+      encodeURIComponent(currentPersonId) +
+      "&board=" +
+      encodeURIComponent(currentBoardId);
+    ws = new WebSocket(url);
 
     ws.onopen = () => {
       setConnected(true);
@@ -1373,6 +1418,7 @@
     };
     ws.onclose = () => {
       setConnected(false);
+      if (!wantWs) return;
       setTimeout(connectWS, reconnectDelay);
       reconnectDelay = Math.min(10000, reconnectDelay * 1.7);
     };
@@ -1397,6 +1443,12 @@
       case "init": {
         myClientId = msg.clientId;
         myColor = msg.color;
+        if (msg.board) {
+          currentBoardId = msg.board.id;
+          currentBoardMeta = msg.board;
+          if (filenameInput) filenameInput.value = msg.board.title || "Unbenannte Skizze";
+          document.title = (msg.board.title || "sofianotes") + " – sofianotes";
+        }
         boardStrokes.clear();
         for (const s of msg.strokes) {
           tagShape(s);
@@ -1799,7 +1851,7 @@
   const exportBtn = document.getElementById("export-btn");
   exportBtn.addEventListener("click", () => {
     // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
-    window.location.href = "/api/export.pdf";
+    window.location.href = "/api/export.pdf?board=" + encodeURIComponent(currentBoardId || "");
   });
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
@@ -4583,9 +4635,311 @@
   }
 
   // ---- boot ------------------------------------------------------
+  function api(path, opts) {
+    return fetch(path, opts).then((r) => {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    });
+  }
+
+  function syncWhoChip() {
+    if (whoChip) whoChip.textContent = personName(currentPersonId) || "Wer?";
+    const libPerson = document.getElementById("library-person");
+    if (libPerson) libPerson.textContent = personName(currentPersonId);
+  }
+
+  function showWho() {
+    whoBackdrop.classList.remove("hidden");
+    libraryBackdrop.classList.add("hidden");
+  }
+
+  function hideWho() {
+    whoBackdrop.classList.add("hidden");
+  }
+
+  function showLibrary() {
+    hideWho();
+    libraryBackdrop.classList.remove("hidden");
+    document.getElementById("btn-library-close").classList.toggle("hidden", !currentBoardId);
+    refreshLibrary();
+  }
+
+  function hideLibrary() {
+    libraryBackdrop.classList.add("hidden");
+  }
+
+  async function refreshLibrary() {
+    if (!currentPersonId) return;
+    const q = currentFolderId ? "&folder=" + encodeURIComponent(currentFolderId) : "";
+    libraryCache = await api("/api/library?person=" + encodeURIComponent(currentPersonId) + q);
+    const crumbs = document.getElementById("library-crumbs");
+    if (!libraryCache.crumbs.length) crumbs.textContent = "Alle Blätter";
+    else crumbs.textContent = libraryCache.crumbs.map((c) => c.name).join(" › ");
+    const list = document.getElementById("library-list");
+    list.innerHTML = "";
+    for (const folder of libraryCache.folders) {
+      list.appendChild(folderCard(folder));
+    }
+    for (const board of libraryCache.boards) {
+      list.appendChild(boardCard(board));
+    }
+    if (!libraryCache.folders.length && !libraryCache.boards.length) {
+      const empty = document.createElement("div");
+      empty.className = "library-empty";
+      empty.textContent = "Noch leer. Leg ein Blatt oder einen Ordner an.";
+      list.appendChild(empty);
+    }
+  }
+
+  function iconBtn(name, title, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.title = title;
+    b.innerHTML = `<span class="material-symbols-rounded">${name}</span>`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return b;
+  }
+
+  function folderCard(folder) {
+    const el = document.createElement("div");
+    el.className = "library-item";
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    el.innerHTML = `<span class="material-symbols-rounded">folder</span><strong></strong><span class="meta">Ordner</span>`;
+    el.querySelector("strong").textContent = folder.name;
+    el.addEventListener("click", () => {
+      currentFolderId = folder.id;
+      refreshLibrary();
+    });
+    const row = document.createElement("div");
+    row.className = "row";
+    row.appendChild(iconBtn("edit", "Umbenennen", () => renameFolder(folder)));
+    row.appendChild(iconBtn("drive_file_move", "Verschieben", () => openMove("folder", folder.id)));
+    row.appendChild(iconBtn("delete", "Löschen", () => deleteFolder(folder)));
+    el.appendChild(row);
+    return el;
+  }
+
+  function boardCard(board) {
+    const el = document.createElement("div");
+    el.className = "library-item";
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    const owner = personName(board.ownerId);
+    const meta = board.shared ? "Geteilt von " + owner : "Eigenes Blatt";
+    el.innerHTML = `<span class="material-symbols-rounded">description</span><strong></strong><span class="meta"></span>`;
+    el.querySelector("strong").textContent = board.title;
+    el.querySelector(".meta").textContent = meta;
+    el.addEventListener("click", () => openBoard(board.id, board.title));
+    const row = document.createElement("div");
+    row.className = "row";
+    row.appendChild(iconBtn("drive_file_move", "In Ordner legen", () => openMove("board", board.id)));
+    if (!board.shared) {
+      row.appendChild(iconBtn("share", "Teilen", () => openShare(board)));
+      row.appendChild(iconBtn("delete", "Löschen", () => deleteBoard(board)));
+    }
+    el.appendChild(row);
+    return el;
+  }
+
+  async function openBoard(id, title) {
+    if (currentBoardId && currentBoardId !== id) {
+      boardStrokes.clear();
+      clearSelection();
+      undoStack.length = 0;
+      redoStack.length = 0;
+      updateUndoRedoButtons();
+      disconnectWS();
+    }
+    currentBoardId = id;
+    currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
+    if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
+    hideLibrary();
+    connectWS();
+    requestRedraw();
+  }
+
+  async function createBoard() {
+    const created = await api("/api/boards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ personId: currentPersonId, title: "Unbenannte Skizze", folderId: currentFolderId }),
+    });
+    await openBoard(created.board.id, created.board.title);
+  }
+
+  async function createFolder() {
+    const name = window.prompt("Name für den Ordner", "Ordner");
+    if (name == null) return;
+    await api("/api/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId }),
+    });
+    refreshLibrary();
+  }
+
+  async function renameFolder(folder) {
+    const name = window.prompt("Neuer Name", folder.name);
+    if (name == null) return;
+    await api("/api/folders/" + encodeURIComponent(folder.id), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ personId: currentPersonId, name }),
+    });
+    refreshLibrary();
+  }
+
+  async function deleteFolder(folder) {
+    if (!window.confirm("Ordner löschen? Blätter bleiben, nur der Ordner geht weg.")) return;
+    await api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
+      method: "DELETE",
+    });
+    refreshLibrary();
+  }
+
+  async function deleteBoard(board) {
+    if (!window.confirm("Dieses Blatt wirklich löschen?")) return;
+    await api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
+      method: "DELETE",
+    });
+    if (currentBoardId === board.id) {
+      currentBoardId = "";
+      boardStrokes.clear();
+      disconnectWS();
+    }
+    refreshLibrary();
+  }
+
+  function openShare(board) {
+    const box = document.getElementById("share-choices");
+    box.innerHTML = "";
+    for (const p of PEOPLE) {
+      if (p.id === currentPersonId) continue;
+      const on = (board.sharedWith || []).includes(p.id);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = on ? "on" : "";
+      b.textContent = on ? "Geteilt mit " + p.name : "Teilen mit " + p.name;
+      b.addEventListener("click", async () => {
+        if (on) {
+          await api(
+            "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
+            { method: "DELETE" }
+          );
+        } else {
+          await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
+          });
+        }
+        shareBackdrop.classList.add("hidden");
+        refreshLibrary();
+      });
+      box.appendChild(b);
+    }
+    shareBackdrop.classList.remove("hidden");
+  }
+
+  function openMove(kind, id) {
+    const box = document.getElementById("move-choices");
+    box.innerHTML = "";
+    const root = document.createElement("button");
+    root.type = "button";
+    root.textContent = "Ganz oben (kein Ordner)";
+    root.addEventListener("click", () => applyMove(kind, id, null));
+    box.appendChild(root);
+    const folders = (libraryCache && libraryCache.allFolders) || [];
+    for (const f of folders) {
+      if (kind === "folder" && f.id === id) continue;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = f.name;
+      b.addEventListener("click", () => applyMove(kind, id, f.id));
+      box.appendChild(b);
+    }
+    moveBackdrop.classList.remove("hidden");
+  }
+
+  async function applyMove(kind, id, folderId) {
+    moveBackdrop.classList.add("hidden");
+    if (kind === "board") {
+      await api("/api/placements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, boardId: id, folderId }),
+      });
+    } else {
+      await api("/api/folders/" + encodeURIComponent(id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, parentId: folderId }),
+      });
+    }
+    refreshLibrary();
+  }
+
+  function pickPerson(id) {
+    currentPersonId = id;
+    localStorage.setItem("sofianotes-person", id);
+    currentFolderId = null;
+    currentBoardId = "";
+    boardStrokes.clear();
+    disconnectWS();
+    syncWhoChip();
+    showLibrary();
+  }
+
+  document.querySelectorAll(".who-btn").forEach((btn) => {
+    btn.addEventListener("click", () => pickPerson(btn.dataset.person));
+  });
+  document.getElementById("btn-who-chip")?.addEventListener("click", showWho);
+  document.getElementById("btn-open-library")?.addEventListener("click", showLibrary);
+  document.getElementById("btn-library-close")?.addEventListener("click", hideLibrary);
+  document.getElementById("btn-library-switch")?.addEventListener("click", showWho);
+  document.getElementById("btn-library-home")?.addEventListener("click", () => {
+    if (currentFolderId && libraryCache && libraryCache.crumbs.length) {
+      const prev = libraryCache.crumbs[libraryCache.crumbs.length - 1];
+      currentFolderId = prev.parentId || null;
+    } else currentFolderId = null;
+    refreshLibrary();
+  });
+  document.getElementById("btn-new-board")?.addEventListener("click", createBoard);
+  document.getElementById("btn-new-folder")?.addEventListener("click", createFolder);
+  document.getElementById("btn-share-board")?.addEventListener("click", async () => {
+    if (!currentBoardId) {
+      showLibrary();
+      return;
+    }
+    const board = currentBoardMeta && currentBoardMeta.id === currentBoardId ? currentBoardMeta : { id: currentBoardId, sharedWith: [], ownerId: currentPersonId };
+    if (board.ownerId && board.ownerId !== currentPersonId) {
+      window.alert("Nur " + personName(board.ownerId) + " kann dieses Blatt teilen.");
+      return;
+    }
+    openShare(board);
+  });
+  document.getElementById("btn-share-close")?.addEventListener("click", () => shareBackdrop.classList.add("hidden"));
+  document.getElementById("btn-move-close")?.addEventListener("click", () => moveBackdrop.classList.add("hidden"));
+  shareBackdrop?.addEventListener("click", (e) => {
+    if (e.target === shareBackdrop) shareBackdrop.classList.add("hidden");
+  });
+  moveBackdrop?.addEventListener("click", (e) => {
+    if (e.target === moveBackdrop) moveBackdrop.classList.add("hidden");
+  });
+
   resizeCanvas();
   offsetX = window.innerWidth / 2;
   offsetY = window.innerHeight / 2;
-  connectWS();
+  if (currentPersonId && PEOPLE.some((p) => p.id === currentPersonId)) {
+    hideWho();
+    syncWhoChip();
+    showLibrary();
+  } else {
+    showWho();
+  }
   requestAnimationFrame(tick);
 })();
