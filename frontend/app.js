@@ -2389,8 +2389,15 @@
     const b = cropState && cropState.full ? cropState.full : s && (s.bbox || imageDestRect(s));
     if (!b) return;
     const top = worldToScreen((b.minX + b.maxX) / 2, b.minY);
+    const bottom = worldToScreen((b.minX + b.maxX) / 2, b.maxY);
     mediaToolbar.style.left = Math.round(top.x) + "px";
-    mediaToolbar.style.top = Math.round(top.y - 48) + "px";
+    if (top.y < 78) {
+      mediaToolbar.style.top = Math.round(bottom.y + 8) + "px";
+      mediaToolbar.style.transform = "translate(-50%, 0)";
+    } else {
+      mediaToolbar.style.top = Math.round(top.y - 8) + "px";
+      mediaToolbar.style.transform = "translate(-50%, -100%)";
+    }
   }
 
   function bitmapToJpeg(source, maxEdge) {
