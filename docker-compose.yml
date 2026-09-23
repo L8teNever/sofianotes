@@ -1,6 +1,9 @@
 services:
   sofianotes:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-main}
     container_name: sofianotes
     restart: unless-stopped
     ports:
@@ -8,6 +11,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      GIT_COMMIT: ${GIT_COMMIT:-main}
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
       CLOUDFLARE_OCR_MODEL: ${CLOUDFLARE_OCR_MODEL:-}

@@ -18,7 +18,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 echo "==> git pull ($(git rev-parse --abbrev-ref HEAD))"
 git pull --ff-only
 
-echo "==> docker compose up -d --build"
+export GIT_COMMIT="$(git rev-parse --short HEAD)"
+echo "==> docker compose up -d --build (commit ${GIT_COMMIT})"
 docker compose up -d --build
 
 echo "==> Status"

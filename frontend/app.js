@@ -962,6 +962,9 @@
     hideEraseAllMenu();
     hidePasteMenu();
     if (settingsBackdrop) settingsBackdrop.classList.remove("hidden");
+    if (window.SofiaUpdates && window.SofiaUpdates.refreshInfo) {
+      window.SofiaUpdates.refreshInfo();
+    }
   }
 
   settingsToggleBtn.addEventListener("click", (e) => {
