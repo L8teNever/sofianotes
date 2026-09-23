@@ -2156,7 +2156,7 @@
       const useCircle = aspectDiff < 0.18;
       const rx = useCircle ? meanR : w / 2;
       const ry = useCircle ? meanR : h / 2;
-      return { type: "circle", points: makeEllipsePoints(cx, cy, rx, ry, avgPressure, 96) };
+      return { type: "circle", round: useCircle, points: makeEllipsePoints(cx, cy, rx, ry, avgPressure, 96) };
     }
     if (quad && quad.length === 4) {
       return { type: "rectangle", points: fitOrientedRect(quad, avgPressure) };
@@ -2189,11 +2189,268 @@
     let detected = detectShape(currentStroke.points);
     if (!detected && currentStroke.tool === "marker") detected = straightenOpenStroke(currentStroke.points);
     if (!detected) return;
+    const grab = currentStroke.points[currentStroke.points.length - 1];
     currentStroke.points = detected.points;
     currentStroke.unsent = [];
     currentStroke.locked = true;
-    wsSend({ type: "stroke_replace", strokeId: currentStroke.id, points: detected.points });
+    const shapeName = detected.type === "circle" && detected.round === false ? "ellipse" : detected.type;
+    currentStroke.extra = Object.assign({}, currentStroke.extra || {}, { shape: shapeName });
+    currentStroke.shape = shapeName;
+    currentStroke.shapeBase = detected.points.map((p) => ({ x: p.x, y: p.y, p: p.p }));
+    currentStroke.shapeHandle = pickLockedHandle(shapeName, detected.points, grab);
+    currentStroke.shapeGeom = makeShapeGeom(shapeName, detected.points, grab);
+    wsSend({
+      type: "stroke_replace",
+      strokeId: currentStroke.id,
+      points: detected.points,
+      extra: currentStroke.extra,
+    });
     requestRedraw();
+  }
+
+  function closedRing(pts) {
+    if (!pts || pts.length < 2) return pts || [];
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 1.5) return pts.slice(0, -1);
+    return pts.slice();
+  }
+
+  function uniqueRectCorners(pts) {
+    const ring = closedRing(pts);
+    const four = ring.length >= 4 ? ring.slice(0, 4) : ring;
+    return orderCornersCcw(four.map((p) => ({ x: p.x, y: p.y, p: p.p })));
+  }
+
+  function rebuildClosed(corners, pressure) {
+    const p = pressure == null ? 0.5 : pressure;
+    return corners.map((c) => ({ x: c.x, y: c.y, p })).concat([{ x: corners[0].x, y: corners[0].y, p }]);
+  }
+
+  function moveRectCorner(ordered, i, world, pressure) {
+    const opp = ordered[(i + 2) % 4];
+    const prev = ordered[(i + 3) % 4];
+    const next = ordered[(i + 1) % 4];
+    let ax = prev.x - opp.x;
+    let ay = prev.y - opp.y;
+    let bx = next.x - opp.x;
+    let by = next.y - opp.y;
+    const al = Math.hypot(ax, ay) || 1;
+    const bl = Math.hypot(bx, by) || 1;
+    ax /= al;
+    ay /= al;
+    bx /= bl;
+    by /= bl;
+    const dx = world.x - opp.x;
+    const dy = world.y - opp.y;
+    const ua = Math.max(10, dx * ax + dy * ay);
+    const vb = Math.max(10, dx * bx + dy * by);
+    const out = ordered.map((c) => ({ x: c.x, y: c.y, p: pressure }));
+    out[(i + 2) % 4] = { x: opp.x, y: opp.y, p: pressure };
+    out[(i + 3) % 4] = { x: opp.x + ax * ua, y: opp.y + ay * ua, p: pressure };
+    out[(i + 1) % 4] = { x: opp.x + bx * vb, y: opp.y + by * vb, p: pressure };
+    out[i] = { x: opp.x + ax * ua + bx * vb, y: opp.y + ay * ua + by * vb, p: pressure };
+    return rebuildClosed(out, pressure);
+  }
+
+  function moveRectSide(ordered, i, world, pressure) {
+    const a = ordered[i];
+    const b = ordered[(i + 1) % 4];
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    let ex = b.x - a.x;
+    let ey = b.y - a.y;
+    const el = Math.hypot(ex, ey) || 1;
+    ex /= el;
+    ey /= el;
+    let nx = -ey;
+    let ny = ex;
+    const cx = ordered.reduce((s, p) => s + p.x, 0) / 4;
+    const cy = ordered.reduce((s, p) => s + p.y, 0) / 4;
+    if ((mx - cx) * nx + (my - cy) * ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const dist = (world.x - mx) * nx + (world.y - my) * ny;
+    const out = ordered.map((c) => ({ x: c.x, y: c.y, p: pressure }));
+    out[i] = { x: a.x + nx * dist, y: a.y + ny * dist, p: pressure };
+    out[(i + 1) % 4] = { x: b.x + nx * dist, y: b.y + ny * dist, p: pressure };
+    const w = Math.hypot(out[i].x - out[(i + 3) % 4].x, out[i].y - out[(i + 3) % 4].y);
+    const h = Math.hypot(out[i].x - out[(i + 1) % 4].x, out[i].y - out[(i + 1) % 4].y);
+    if (w < 10 || h < 10) return rebuildClosed(ordered, pressure);
+    return rebuildClosed(out, pressure);
+  }
+
+  function ellipseGeomFromPoints(pts) {
+    const b = makeBBox(pts);
+    return {
+      cx: (b.minX + b.maxX) / 2,
+      cy: (b.minY + b.maxY) / 2,
+      rx: Math.max(8, (b.maxX - b.minX) / 2),
+      ry: Math.max(8, (b.maxY - b.minY) / 2),
+    };
+  }
+
+  function inferShape(stroke) {
+    if (!stroke || stroke.tool === "image" || stroke.tool === "text") return null;
+    const tagged = stroke.extra && stroke.extra.shape;
+    if (tagged) return tagged;
+    const pts = stroke.points || [];
+    if (pts.length === 2) return "line";
+    if (looksLikePolygon(pts)) {
+      const n = closedRing(pts).length;
+      if (n === 4) return "rectangle";
+      if (n === 3) return "triangle";
+    }
+    if (pts.length >= 48) {
+      const g = ellipseGeomFromPoints(pts);
+      let sum = 0;
+      for (const p of pts) {
+        const rx = g.rx || 1;
+        const ry = g.ry || 1;
+        const nx = (p.x - g.cx) / rx;
+        const ny = (p.y - g.cy) / ry;
+        sum += Math.abs(Math.hypot(nx, ny) - 1);
+      }
+      if (sum / pts.length < 0.18) return Math.abs(g.rx - g.ry) / Math.max(g.rx, g.ry) < 0.18 ? "circle" : "ellipse";
+    }
+    return null;
+  }
+
+  function pickLockedHandle(shape, pts, grab) {
+    if (!grab) return { kind: "scale", i: 0 };
+    if (shape === "rectangle") {
+      const corners = uniqueRectCorners(pts);
+      let best = { kind: "corner", i: 0, d: Infinity };
+      for (let i = 0; i < corners.length; i++) {
+        const d = Math.hypot(corners[i].x - grab.x, corners[i].y - grab.y);
+        if (d < best.d) best = { kind: "corner", i, d };
+      }
+      for (let i = 0; i < corners.length; i++) {
+        const a = corners[i];
+        const b = corners[(i + 1) % 4];
+        const d = Math.hypot((a.x + b.x) / 2 - grab.x, (a.y + b.y) / 2 - grab.y);
+        if (d < best.d - 6) best = { kind: "side", i, d };
+      }
+      return best;
+    }
+    if (shape === "line") {
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      const da = Math.hypot(a.x - grab.x, a.y - grab.y);
+      const db = Math.hypot(b.x - grab.x, b.y - grab.y);
+      return { kind: "end", i: da <= db ? 0 : pts.length - 1 };
+    }
+    return { kind: "scale", i: 0 };
+  }
+
+  function makeShapeGeom(shape, pts, grab) {
+    const g = ellipseGeomFromPoints(pts);
+    g.grabX = grab ? grab.x : g.cx + g.rx;
+    g.grabY = grab ? grab.y : g.cy;
+    g.grabR = Math.max(8, Math.hypot(g.grabX - g.cx, g.grabY - g.cy));
+    g.base = (pts || []).map((p) => ({ x: p.x, y: p.y, p: p.p }));
+    g.shape = shape;
+    return g;
+  }
+
+  function reshapeLockedStroke(wx, wy) {
+    const s = currentStroke;
+    if (!s || !s.locked || !s.shape) return;
+    const p = (s.points[0] && s.points[0].p) || 0.5;
+    const world = { x: wx, y: wy };
+    if (s.shape === "rectangle") {
+      const base = uniqueRectCorners(s.shapeBase || s.points);
+      const h = s.shapeHandle || { kind: "corner", i: 0 };
+      s.points = h.kind === "side" ? moveRectSide(base, h.i, world, p) : moveRectCorner(base, h.i, world, p);
+    } else if (s.shape === "circle" || s.shape === "ellipse") {
+      const g = s.shapeGeom || ellipseGeomFromPoints(s.shapeBase || s.points);
+      const d = Math.max(8, Math.hypot(wx - g.cx, wy - g.cy));
+      if (s.shape === "circle") s.points = makeEllipsePoints(g.cx, g.cy, d, d, p, 96);
+      else {
+        const f = d / (g.grabR || 1);
+        s.points = makeEllipsePoints(g.cx, g.cy, Math.max(8, g.rx * f), Math.max(8, g.ry * f), p, 96);
+      }
+    } else if (s.shape === "line") {
+      const pts = (s.shapeBase || s.points).map((pt) => ({ x: pt.x, y: pt.y, p: pt.p }));
+      const i = (s.shapeHandle && s.shapeHandle.i) || pts.length - 1;
+      pts[i] = { x: wx, y: wy, p };
+      s.points = pts;
+    } else if (s.shape === "triangle") {
+      const g = s.shapeGeom;
+      const d = Math.max(8, Math.hypot(wx - g.cx, wy - g.cy));
+      const f = d / (g.grabR || 1);
+      s.points = g.base.map((pt) => ({ x: g.cx + (pt.x - g.cx) * f, y: g.cy + (pt.y - g.cy) * f, p }));
+    }
+    s.bbox = makeBBox(s.points);
+    wsSend({ type: "stroke_replace", strokeId: s.id, points: s.points, extra: s.extra });
+    requestRedraw();
+  }
+
+  function shapeEditKnots(stroke) {
+    const shape = inferShape(stroke);
+    const pts = stroke.points || [];
+    const p0 = pts[0] || { p: 0.5 };
+    if (shape === "rectangle") {
+      const corners = uniqueRectCorners(pts);
+      const knots = corners.map((c, i) => ({ kind: "corner", corner: i, i, x: c.x, y: c.y }));
+      for (let i = 0; i < 4; i++) {
+        const a = corners[i];
+        const b = corners[(i + 1) % 4];
+        knots.push({ kind: "side", side: i, i: 100 + i, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      }
+      return knots;
+    }
+    if (shape === "circle" || shape === "ellipse") {
+      const g = ellipseGeomFromPoints(pts);
+      return [
+        { kind: "radius", axis: "x", i: 0, x: g.cx + g.rx, y: g.cy },
+        { kind: "radius", axis: "y", i: 1, x: g.cx, y: g.cy - g.ry },
+        { kind: "radius", axis: "x", i: 2, x: g.cx - g.rx, y: g.cy },
+        { kind: "radius", axis: "y", i: 3, x: g.cx, y: g.cy + g.ry },
+      ];
+    }
+    if (shape === "triangle") {
+      return closedRing(pts)
+        .slice(0, 3)
+        .map((c, i) => ({ kind: "corner", corner: i, i, x: c.x, y: c.y }));
+    }
+    if (shape === "line" && pts.length >= 2) {
+      const last = pts.length - 1;
+      return [
+        { kind: "end", i: 0, x: pts[0].x, y: pts[0].y },
+        { kind: "end", i: last, x: pts[last].x, y: pts[last].y },
+      ];
+    }
+    return null;
+  }
+
+  function pickShapedStrokeAt(world) {
+    const hit = pickStrokeAt(world);
+    if (hit && inferShape(hit)) return hit;
+    return null;
+  }
+
+  function beginStrokeInteraction(pointerId, world, stroke, clientX, clientY) {
+    selectStrokeIds([stroke.id]);
+    const pad = 10 / scale;
+    const knot = pickEditKnot(world);
+    if (knot) {
+      startPointEdit(pointerId, world, knot);
+      return;
+    }
+    if (selection.bbox) {
+      const handle = pickScaleHandle(world, selection.bbox, pad);
+      if (handle) {
+        startSelectionScale(pointerId, world, handle);
+        return;
+      }
+      if (pickRotateHandle(world, selection.bbox, pad)) {
+        startSelectionRotate(pointerId, world);
+        return;
+      }
+    }
+    pendingShapeDrag = { pointerId, startWorld: world, clientX, clientY, strokeId: stroke.id };
   }
 
   // ---- drawing (pointer handling with palm rejection) -------------------
@@ -2207,6 +2464,7 @@
   let lassoPoints = null;
   let lassoPointerId = null;
   let dragState = null; // {pointerId, startWorld, snapshot: Map(id -> points[])}
+  let pendingShapeDrag = null;
 
   function distPointToSeg(p, a, b) {
     const dx = b.x - a.x;
@@ -2447,6 +2705,7 @@
       strokeId: knot.strokeId,
       index: knot.i,
       knots: knot.knots,
+      knot,
       ...snap,
     };
   }
@@ -2537,22 +2796,58 @@
     const dx = world.x - dragState.startWorld.x;
     const dy = world.y - dragState.startWorld.y;
     const id = dragState.strokeId;
-    const k = dragState.index;
-    const knotIdx = dragState.knots || [k];
     const pts = dragState.snapshot.get(id);
     const s = boardStrokes.get(id);
     if (!s || !pts) return;
-    const pos = knotIdx.indexOf(k);
-    const k0 = pos > 0 ? knotIdx[pos - 1] : k;
-    const k1 = pos >= 0 && pos < knotIdx.length - 1 ? knotIdx[pos + 1] : k;
-    s.points = pts.map((p, i) => {
-      let w = 0;
-      if (i === k) w = 1;
-      else if (k !== k0 && i > k0 && i < k) w = (i - k0) / (k - k0);
-      else if (k !== k1 && i > k && i < k1) w = (k1 - i) / (k1 - k);
-      if (w <= 0) return { x: p.x, y: p.y, p: p.p, text: p.text };
-      return { x: p.x + dx * w, y: p.y + dy * w, p: p.p, text: p.text };
-    });
+    const knot = dragState.knot || { kind: "free", i: dragState.index, knots: dragState.knots };
+    const pressure = (pts[0] && pts[0].p) || 0.5;
+    const shape = inferShape({ ...s, points: pts, extra: s.extra });
+    if (shape === "rectangle" && (knot.kind === "corner" || knot.kind === "side")) {
+      const corners = uniqueRectCorners(pts);
+      s.points =
+        knot.kind === "side"
+          ? moveRectSide(corners, knot.side, world, pressure)
+          : moveRectCorner(corners, knot.corner, world, pressure);
+      s.extra = Object.assign({}, s.extra || {}, { shape: "rectangle" });
+    } else if ((shape === "circle" || shape === "ellipse") && knot.kind === "radius") {
+      const g = ellipseGeomFromPoints(pts);
+      if (shape === "circle") {
+        const r = Math.max(8, Math.hypot(world.x - g.cx, world.y - g.cy));
+        s.points = makeEllipsePoints(g.cx, g.cy, r, r, pressure, 96);
+        s.extra = Object.assign({}, s.extra || {}, { shape: "circle" });
+      } else {
+        let rx = g.rx;
+        let ry = g.ry;
+        if (knot.axis === "x") rx = Math.max(8, Math.abs(world.x - g.cx));
+        else ry = Math.max(8, Math.abs(world.y - g.cy));
+        s.points = makeEllipsePoints(g.cx, g.cy, rx, ry, pressure, 96);
+        s.extra = Object.assign({}, s.extra || {}, { shape: "ellipse" });
+      }
+    } else if (shape === "triangle" && knot.kind === "corner") {
+      const ring = closedRing(pts).slice(0, 3).map((p) => ({ x: p.x, y: p.y, p: pressure }));
+      ring[knot.corner] = { x: world.x, y: world.y, p: pressure };
+      s.points = rebuildClosed(ring, pressure);
+      s.extra = Object.assign({}, s.extra || {}, { shape: "triangle" });
+    } else if (shape === "line" && knot.kind === "end") {
+      const next = pts.map((p) => ({ x: p.x, y: p.y, p: p.p }));
+      next[knot.i] = { x: world.x, y: world.y, p: pressure };
+      s.points = next;
+      s.extra = Object.assign({}, s.extra || {}, { shape: "line" });
+    } else {
+      const k = dragState.index;
+      const knotIdx = dragState.knots || [k];
+      const pos = knotIdx.indexOf(k);
+      const k0 = pos > 0 ? knotIdx[pos - 1] : k;
+      const k1 = pos >= 0 && pos < knotIdx.length - 1 ? knotIdx[pos + 1] : k;
+      s.points = pts.map((p, i) => {
+        let w = 0;
+        if (i === k) w = 1;
+        else if (k !== k0 && i > k0 && i < k) w = (i - k0) / (k - k0);
+        else if (k !== k1 && i > k && i < k1) w = (k1 - i) / (k1 - k);
+        if (w <= 0) return { x: p.x, y: p.y, p: p.p, text: p.text };
+        return { x: p.x + dx * w, y: p.y + dy * w, p: p.p, text: p.text };
+      });
+    }
     s.bbox = strokeWorldBBox(s);
     const boxes = [];
     for (const sid of selection.ids) {
@@ -2582,7 +2877,20 @@
         });
       }
     }
-    if (moves.length > 0) pushUndo({ type: "move", moves });
+    if (moves.length > 0) {
+      const changed = moves.some((m) => {
+        if (m.before.length !== m.after.length) return true;
+        for (let i = 0; i < m.before.length; i++) {
+          if (Math.hypot(m.before[i].x - m.after[i].x, m.before[i].y - m.after[i].y) > 0.35) return true;
+        }
+        const be = JSON.stringify(m.beforeExtra || null);
+        const ae = JSON.stringify(m.afterExtra || null);
+        if (be !== ae) return true;
+        if (m.beforeSize != null && m.afterSize != null && Math.abs(m.beforeSize - m.afterSize) > 0.05) return true;
+        return false;
+      });
+      if (changed) pushUndo({ type: "move", moves });
+    }
     dragState = null;
   }
   function cancelSelectionDrag() {
@@ -2649,11 +2957,16 @@
     if (!ink.length || ink.length > 10) return [];
     const out = [];
     for (const s of ink) {
+      const shaped = shapeEditKnots(s);
+      if (shaped) {
+        for (const k of shaped) out.push(Object.assign({ strokeId: s.id, knots: [] }, k));
+        continue;
+      }
       const knots = knotIndicesForStroke(s);
       for (const i of knots) {
         const p = s.points[i];
         if (!p) continue;
-        out.push({ strokeId: s.id, i, x: p.x, y: p.y, knots });
+        out.push({ strokeId: s.id, i, x: p.x, y: p.y, knots, kind: "free" });
       }
     }
     return out.length > 80 ? [] : out;
@@ -3150,7 +3463,11 @@
   }
 
   function extendStroke(wx, wy, pressure) {
-    if (!currentStroke || currentStroke.locked) return;
+    if (!currentStroke) return;
+    if (currentStroke.locked) {
+      reshapeLockedStroke(wx, wy);
+      return;
+    }
     const last = currentStroke.points[currentStroke.points.length - 1];
     const dist = last ? Math.hypot(wx - last.x, wy - last.y) : 0;
     if (last && dist < MIN_MOVE_WORLD) return;
@@ -3305,7 +3622,7 @@
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
     }
-    wsSend({ type: "stroke_end", strokeId: currentStroke.id });
+    wsSend({ type: "stroke_end", strokeId: currentStroke.id, extra: currentStroke.extra || null });
     currentStroke.bbox = makeBBox(currentStroke.points);
     currentStroke.endedAt = performance.now();
     boardStrokes.set(currentStroke.id, currentStroke);
@@ -3387,6 +3704,14 @@
   function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
     lastPointerWorld = world;
+    if (currentTool !== "eraser" && currentTool !== "select") {
+      const shaped = pickShapedStrokeAt(world);
+      if (shaped) {
+        beginStrokeInteraction(e.pointerId, world, shaped, e.clientX, e.clientY);
+        sendCursor(world.x, world.y, currentTool, activeSize());
+        return;
+      }
+    }
     if (currentTool === "select") {
       if (cropState) {
         const handle = pickCropHandle(world);
@@ -3466,6 +3791,7 @@
       if (touchPointers.size === 2) {
         if (currentStroke) abortStroke();
         if (dragState) cancelSelectionDrag();
+        pendingShapeDrag = null;
         lassoPoints = null;
         lassoPointerId = null;
         erasedThisGesture.clear();
@@ -3480,6 +3806,11 @@
         return;
       }
       if (touchPointers.size === 1) {
+        const world = screenToWorld(e.clientX, e.clientY);
+        if (currentTool !== "eraser" && pickShapedStrokeAt(world)) {
+          dispatchPrimaryDown(e);
+          return;
+        }
         if (fingerDrawEnabled && !pinchState) {
           dispatchPrimaryDown(e);
           return;
@@ -3518,6 +3849,7 @@
       }
       const isActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
+        (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) ||
         (cropState && cropState.pointerId === e.pointerId) ||
         lassoPointerId === e.pointerId ||
         (currentStroke && currentStroke.pointerId === e.pointerId);
@@ -3548,7 +3880,18 @@
       updateEraserCursor(e.clientX, e.clientY);
     }
 
-    if (cropState && cropState.pointerId === e.pointerId) {
+    if (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) {
+      const moved = Math.hypot(e.clientX - pendingShapeDrag.clientX, e.clientY - pendingShapeDrag.clientY);
+      if (moved > 9) {
+        startSelectionDrag(pendingShapeDrag.pointerId, pendingShapeDrag.startWorld);
+        pendingShapeDrag = null;
+        if (touchPointers.size >= 2) {
+          cancelSelectionDrag();
+          return;
+        }
+        updateSelectionDrag(world);
+      }
+    } else if (cropState && cropState.pointerId === e.pointerId) {
       updateCropDrag(world);
       requestRedraw();
     } else if (dragState && dragState.pointerId === e.pointerId) {
@@ -3625,14 +3968,22 @@
       if (touchPointers.size === 0) panState = null;
       const wasActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
+        (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) ||
         (cropState && cropState.pointerId === e.pointerId) ||
         lassoPointerId === e.pointerId ||
         (currentStroke && currentStroke.pointerId === e.pointerId);
-      if (!wasActiveDrawTouch) return;
+      if (!wasActiveDrawTouch) {
+        if (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) pendingShapeDrag = null;
+        return;
+      }
       // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Abschluss-Logik unten
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       panState = null;
       return;
+    }
+
+    if (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) {
+      pendingShapeDrag = null;
     }
 
     if (cropState && cropState.pointerId === e.pointerId) {

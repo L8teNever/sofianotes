@@ -247,6 +247,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             elif msg_type == "stroke_end":
                 stroke_id = msg.get("strokeId")
                 entry = client.in_progress.pop(stroke_id, None)
+                extra = msg.get("extra")
+                if entry is not None and extra is not None:
+                    entry["extra"] = extra
                 if entry is not None and len(entry["points"]) >= 1:
                     await db.insert_stroke(entry)
                     persist_changed = True
@@ -259,8 +262,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 stroke_id = msg.get("strokeId")
                 entry = client.in_progress.get(stroke_id)
                 new_points = msg.get("points", [])
+                extra = msg.get("extra")
                 if entry is not None:
                     entry["points"] = new_points
+                    if extra is not None:
+                        entry["extra"] = extra
                 await manager.broadcast(
                     {
                         "type": "stroke_replace",
