@@ -66,6 +66,7 @@
   const remoteInProgress = new Map(); // strokeId -> stroke (owned by other client)
   let currentStroke = null; // own in-progress stroke
   let dirty = true;
+  let cropState = null;
   function requestRedraw() {
     dirty = true;
   }
@@ -255,6 +256,10 @@
       c.restore();
       return;
     }
+    if (stroke.tool === "image") {
+      drawImageStroke(c, stroke);
+      return;
+    }
     const isMarker = stroke.tool === "marker";
     const alpha = opts && opts.alpha != null ? opts.alpha : isMarker ? 0.38 : 1;
     if (pts.length === 1) {
@@ -274,6 +279,89 @@
     }
     // feste Breite, glatte Kurve — Druckstaerke aendert die Dicke nicht
     drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
+  }
+
+  const mediaImages = new Map();
+
+  function ensureMedia(mediaId) {
+    if (!mediaId) return null;
+    let img = mediaImages.get(mediaId);
+    if (img) return img;
+    img = new Image();
+    img.decoding = "async";
+    img.onload = () => requestRedraw();
+    img.src = "/api/media/" + encodeURIComponent(mediaId);
+    mediaImages.set(mediaId, img);
+    return img;
+  }
+
+  function imageDestRect(stroke) {
+    const pts = stroke.points || [];
+    if (pts.length < 2) return null;
+    const minX = Math.min(pts[0].x, pts[1].x);
+    const minY = Math.min(pts[0].y, pts[1].y);
+    const maxX = Math.max(pts[0].x, pts[1].x);
+    const maxY = Math.max(pts[0].y, pts[1].y);
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  }
+
+  function imageCrop(stroke) {
+    const c = (stroke.extra && stroke.extra.crop) || {};
+    const l = Math.max(0, Math.min(0.98, c.l == null ? 0 : c.l));
+    const t = Math.max(0, Math.min(0.98, c.t == null ? 0 : c.t));
+    const r = Math.max(l + 0.02, Math.min(1, c.r == null ? 1 : c.r));
+    const b = Math.max(t + 0.02, Math.min(1, c.b == null ? 1 : c.b));
+    return { l, t, r, b };
+  }
+
+  function imageFullRect(stroke) {
+    const dest = imageDestRect(stroke);
+    if (!dest) return null;
+    const crop = imageCrop(stroke);
+    const fw = dest.w / (crop.r - crop.l);
+    const fh = dest.h / (crop.b - crop.t);
+    const minX = dest.minX - crop.l * fw;
+    const minY = dest.minY - crop.t * fh;
+    return { minX, minY, maxX: minX + fw, maxY: minY + fh, w: fw, h: fh };
+  }
+
+  function drawImageStroke(c, stroke) {
+    const dest = imageDestRect(stroke);
+    if (!dest || dest.w < 1 || dest.h < 1) return;
+    const extra = stroke.extra || {};
+    const showingCrop = cropState && cropState.strokeId === stroke.id;
+    const rect = showingCrop ? cropState.full : dest;
+    const crop = showingCrop ? cropState.crop : imageCrop(stroke);
+    const img = ensureMedia(extra.mediaId);
+    c.save();
+    if (!img || !img.complete || !img.naturalWidth) {
+      c.fillStyle = "#e8eaed";
+      c.fillRect(dest.minX, dest.minY, dest.w, dest.h);
+      c.strokeStyle = "#9aa0a6";
+      c.lineWidth = 1.5 / scale;
+      c.strokeRect(dest.minX, dest.minY, dest.w, dest.h);
+      c.restore();
+      return;
+    }
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    const sx = crop.l * nw;
+    const sy = crop.t * nh;
+    const sw = Math.max(1, (crop.r - crop.l) * nw);
+    const sh = Math.max(1, (crop.b - crop.t) * nh);
+    if (showingCrop) {
+      c.globalAlpha = 0.38;
+      c.drawImage(img, rect.minX, rect.minY, rect.w, rect.h);
+      c.globalAlpha = 1;
+      const cx = rect.minX + crop.l * rect.w;
+      const cy = rect.minY + crop.t * rect.h;
+      const cw = (crop.r - crop.l) * rect.w;
+      const ch = (crop.b - crop.t) * rect.h;
+      c.drawImage(img, sx, sy, sw, sh, cx, cy, cw, ch);
+    } else {
+      c.drawImage(img, sx, sy, sw, sh, dest.minX, dest.minY, dest.w, dest.h);
+    }
+    c.restore();
   }
 
   const markerLayer = document.createElement("canvas");
@@ -355,8 +443,72 @@
       const x = b.minX - pad, y = b.minY - pad, w = b.maxX - b.minX + pad * 2, h = b.maxY - b.minY + pad * 2;
       ctx.fillRect(x, y, w, h);
       ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#3b6fe0";
+      ctx.lineWidth = 1.5 / scale;
+      const hs = 5 / scale;
+      for (const p of selectionHandlePoints(b, pad)) {
+        ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+        ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+      }
       ctx.restore();
     }
+    if (cropState && cropState.full) {
+      const full = cropState.full;
+      const crop = cropState.crop;
+      const cx = full.minX + crop.l * full.w;
+      const cy = full.minY + crop.t * full.h;
+      const cw = (crop.r - crop.l) * full.w;
+      const ch = (crop.b - crop.t) * full.h;
+      ctx.save();
+      ctx.fillStyle = "rgba(15,23,42,0.35)";
+      ctx.fillRect(full.minX, full.minY, full.w, cy - full.minY);
+      ctx.fillRect(full.minX, cy + ch, full.w, full.maxY - (cy + ch));
+      ctx.fillRect(full.minX, cy, cx - full.minX, ch);
+      ctx.fillRect(cx + cw, cy, full.maxX - (cx + cw), ch);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2 / scale;
+      ctx.strokeRect(cx, cy, cw, ch);
+      ctx.fillStyle = "#fff";
+      const hs = 6 / scale;
+      for (const p of cropHandlePoints(full, crop)) {
+        ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+        ctx.strokeStyle = "#3b6fe0";
+        ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
+      }
+      ctx.restore();
+    }
+    positionMediaToolbar();
+  }
+
+  function selectionHandlePoints(b, pad) {
+    const x0 = b.minX - pad, y0 = b.minY - pad, x1 = b.maxX + pad, y1 = b.maxY + pad;
+    return [
+      { name: "nw", x: x0, y: y0 },
+      { name: "ne", x: x1, y: y0 },
+      { name: "sw", x: x0, y: y1 },
+      { name: "se", x: x1, y: y1 },
+    ];
+  }
+
+  function cropHandlePoints(full, crop) {
+    const x0 = full.minX + crop.l * full.w;
+    const y0 = full.minY + crop.t * full.h;
+    const x1 = full.minX + crop.r * full.w;
+    const y1 = full.minY + crop.b * full.h;
+    const mx = (x0 + x1) / 2;
+    const my = (y0 + y1) / 2;
+    return [
+      { name: "nw", x: x0, y: y0 },
+      { name: "n", x: mx, y: y0 },
+      { name: "ne", x: x1, y: y0 },
+      { name: "w", x: x0, y: my },
+      { name: "e", x: x1, y: my },
+      { name: "sw", x: x0, y: y1 },
+      { name: "s", x: mx, y: y1 },
+      { name: "se", x: x1, y: y1 },
+    ];
   }
 
   function draw() {
@@ -381,7 +533,8 @@
     ctx.restore();
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
-    for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker") drawStroke(stroke);
+    for (const stroke of boardStrokes.values()) if (stroke.tool === "image") drawStroke(stroke);
+    for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker") drawStroke(stroke);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
@@ -1118,6 +1271,7 @@
         for (const s of msg.strokes) {
           s.bbox = makeBBox(s.points);
           boardStrokes.set(s.id, s);
+          if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
         }
         requestRedraw();
         break;
@@ -1177,6 +1331,7 @@
         if (s && s.id) {
           s.bbox = makeBBox(s.points);
           boardStrokes.set(s.id, s);
+          if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
           requestRedraw();
         }
         break;
@@ -1310,7 +1465,14 @@
   const MAX_UNDO = 100;
 
   function cloneStroke(s) {
-    return { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points.map((p) => ({ ...p })) };
+    const out = { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points.map((p) => ({ ...p })) };
+    if (s.extra) out.extra = JSON.parse(JSON.stringify(s.extra));
+    return out;
+  }
+  function serializeStroke(s) {
+    const out = { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points };
+    if (s.extra) out.extra = s.extra;
+    return out;
   }
   function updateUndoRedoButtons() {
     undoBtn.disabled = undoStack.length === 0;
@@ -1357,7 +1519,7 @@
   function putStroke(stroke) {
     const withBBox = { ...stroke, bbox: makeBBox(stroke.points), endedAt: performance.now() };
     boardStrokes.set(withBBox.id, withBBox);
-    wsSend({ type: "stroke_move", stroke: { id: stroke.id, tool: stroke.tool, color: stroke.color, size: stroke.size, points: stroke.points } });
+    wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
   }
   function removeStrokes(ids) {
     for (const id of ids) boardStrokes.delete(id);
@@ -1378,7 +1540,9 @@
         if (s) {
           s.points = points.map((p) => ({ ...p }));
           s.bbox = makeBBox(s.points);
-          wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+          const extra = direction === 1 ? m.afterExtra : m.beforeExtra;
+          if (extra) s.extra = JSON.parse(JSON.stringify(extra));
+          wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
         }
       }
     } else if (action.type === "style") {
@@ -1388,7 +1552,7 @@
         if (s && st) {
           s.color = st.color;
           s.size = st.size;
-          wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
+          wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
         }
       }
     }
@@ -1802,6 +1966,12 @@
       .filter((s) => s && (s.tool === "pen" || s.tool === "marker" || s.tool === "text"));
   }
 
+  function selectedImageStroke() {
+    if (selection.ids.size !== 1) return null;
+    const s = boardStrokes.get(Array.from(selection.ids)[0]);
+    return s && s.tool === "image" ? s : null;
+  }
+
   function selectStrokeIds(ids) {
     const present = ids.filter((id) => boardStrokes.get(id));
     if (!present.length) {
@@ -1813,6 +1983,7 @@
       bbox: unionBBox(present.map((id) => boardStrokes.get(id).bbox)),
     };
     renderToolPopover();
+    syncMediaToolbar();
     requestRedraw();
   }
 
@@ -1831,7 +2002,7 @@
       changes.push({ id: s.id, before, after: { color: s.color, size: s.size } });
       wsSend({
         type: "stroke_move",
-        stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points },
+        stroke: serializeStroke(s),
       });
     }
     if (!changes.length) return;
@@ -1858,7 +2029,7 @@
     const r = (stroke.size || 6) / 2 + pad;
     const b = stroke.bbox || makeBBox(stroke.points || []);
     if (!pointInBBox(pt, b, r)) return false;
-    if (stroke.tool === "text") return true;
+    if (stroke.tool === "text" || stroke.tool === "image") return true;
     const pts = stroke.points || [];
     if (pts.length === 1) return Math.hypot(pts[0].x - pt.x, pts[0].y - pt.y) <= r;
     for (let i = 1; i < pts.length; i++) {
@@ -1890,7 +2061,9 @@
     lassoPoints = null;
     lassoPointerId = null;
     dragState = null;
+    cancelCropMode(true);
     if (toolPopover && !toolPopover.classList.contains("hidden")) renderToolPopover();
+    syncMediaToolbar();
     requestRedraw();
   }
 
@@ -1919,6 +2092,18 @@
     }
     const ids = new Set();
     for (const stroke of boardStrokes.values()) {
+      if (stroke.tool === "image") {
+        const b = stroke.bbox || makeBBox(stroke.points || []);
+        const corners = [
+          { x: b.minX, y: b.minY },
+          { x: b.maxX, y: b.minY },
+          { x: b.minX, y: b.maxY },
+          { x: b.maxX, y: b.maxY },
+          { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 },
+        ];
+        if (corners.some((p) => pointInPolygon(p, pts))) ids.add(stroke.id);
+        continue;
+      }
       for (const p of stroke.points) {
         if (pointInPolygon(p, pts)) {
           ids.add(stroke.id);
@@ -1937,9 +2122,63 @@
     const snapshot = new Map();
     for (const id of selection.ids) {
       const s = boardStrokes.get(id);
-      if (s) snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p })));
+      if (s) snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
     }
-    dragState = { pointerId, startWorld: world, snapshot };
+    dragState = { pointerId, startWorld: world, snapshot, kind: "move" };
+  }
+
+  function startSelectionScale(pointerId, world, corner) {
+    const snapshot = new Map();
+    const extras = new Map();
+    for (const id of selection.ids) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      snapshot.set(id, s.points.map((p) => ({ x: p.x, y: p.y, p: p.p, text: p.text })));
+      if (s.extra) extras.set(id, JSON.parse(JSON.stringify(s.extra)));
+    }
+    const pad = 10 / scale;
+    const b = selection.bbox;
+    const originMap = {
+      nw: { x: b.maxX + pad, y: b.maxY + pad },
+      ne: { x: b.minX - pad, y: b.maxY + pad },
+      sw: { x: b.maxX + pad, y: b.minY - pad },
+      se: { x: b.minX - pad, y: b.minY - pad },
+    };
+    dragState = {
+      pointerId,
+      startWorld: world,
+      snapshot,
+      extras,
+      kind: "scale",
+      corner,
+      origin: originMap[corner],
+    };
+  }
+
+  function updateSelectionScale(world) {
+    const origin = dragState.origin;
+    const s0x = dragState.startWorld.x - origin.x;
+    const s0y = dragState.startWorld.y - origin.y;
+    const s1x = world.x - origin.x;
+    const s1y = world.y - origin.y;
+    let factor = Math.abs(s0x) > Math.abs(s0y) ? s1x / s0x : s1y / s0y;
+    if (!Number.isFinite(factor)) factor = 1;
+    factor = Math.max(0.08, Math.min(12, factor));
+    const boxes = [];
+    for (const [id, pts] of dragState.snapshot) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      s.points = pts.map((p) => ({
+        x: origin.x + (p.x - origin.x) * factor,
+        y: origin.y + (p.y - origin.y) * factor,
+        p: p.p,
+        text: p.text,
+      }));
+      s.bbox = makeBBox(s.points);
+      boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
   }
 
   function updateSelectionDrag(world) {
@@ -1949,7 +2188,7 @@
     for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
       if (!s) continue;
-      s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p }));
+      s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p, text: p.text }));
       s.bbox = makeBBox(s.points);
       boxes.push(s.bbox);
     }
@@ -1962,8 +2201,15 @@
     for (const [id, beforePts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
       if (s) {
-        wsSend({ type: "stroke_move", stroke: { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points } });
-        moves.push({ id, before: beforePts, after: s.points.map((p) => ({ ...p })) });
+        wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
+        const extra = dragState.extras && dragState.extras.get(id);
+        moves.push({
+          id,
+          before: beforePts,
+          after: s.points.map((p) => ({ ...p })),
+          beforeExtra: extra || null,
+          afterExtra: s.extra ? JSON.parse(JSON.stringify(s.extra)) : null,
+        });
       }
     }
     if (moves.length > 0) pushUndo({ type: "move", moves });
@@ -1980,6 +2226,340 @@
     dragState = null;
     requestRedraw();
   }
+
+  function pickScaleHandle(world, bbox, pad) {
+    const r = 14 / Math.max(scale, 0.25);
+    for (const p of selectionHandlePoints(bbox, pad)) {
+      if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
+    }
+    return null;
+  }
+
+  function pickCropHandle(world) {
+    if (!cropState || !cropState.full) return null;
+    const r = 16 / Math.max(scale, 0.25);
+    for (const p of cropHandlePoints(cropState.full, cropState.crop)) {
+      if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
+    }
+    return null;
+  }
+
+  function clampCrop(c) {
+    const min = 0.04;
+    let l = Math.max(0, Math.min(1 - min, c.l));
+    let t = Math.max(0, Math.min(1 - min, c.t));
+    let r = Math.max(l + min, Math.min(1, c.r));
+    let b = Math.max(t + min, Math.min(1, c.b));
+    return { l, t, r, b };
+  }
+
+  function updateCropDrag(world) {
+    if (!cropState || !cropState.handle || !cropState.startCrop) return;
+    const full = cropState.full;
+    const start = cropState.startCrop;
+    const dx = (world.x - cropState.startWorld.x) / full.w;
+    const dy = (world.y - cropState.startWorld.y) / full.h;
+    const next = { ...start };
+    const h = cropState.handle;
+    if (h === "move") {
+      const w = start.r - start.l;
+      const ht = start.b - start.t;
+      next.l = start.l + dx;
+      next.t = start.t + dy;
+      next.r = next.l + w;
+      next.b = next.t + ht;
+      if (next.l < 0) {
+        next.r -= next.l;
+        next.l = 0;
+      }
+      if (next.t < 0) {
+        next.b -= next.t;
+        next.t = 0;
+      }
+      if (next.r > 1) {
+        next.l -= next.r - 1;
+        next.r = 1;
+      }
+      if (next.b > 1) {
+        next.t -= next.b - 1;
+        next.b = 1;
+      }
+    } else {
+      if (h.indexOf("w") >= 0) next.l = start.l + dx;
+      if (h.indexOf("e") >= 0) next.r = start.r + dx;
+      if (h.indexOf("n") >= 0) next.t = start.t + dy;
+      if (h.indexOf("s") >= 0) next.b = start.b + dy;
+    }
+    cropState.crop = clampCrop(next);
+  }
+
+  function enterCropMode() {
+    const s = selectedImageStroke();
+    if (!s) return;
+    const full = imageFullRect(s);
+    if (!full) return;
+    cropState = {
+      strokeId: s.id,
+      full,
+      crop: imageCrop(s),
+      before: cloneStroke(s),
+      pointerId: null,
+      handle: null,
+    };
+    setTool("select");
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  function cancelCropMode(silent) {
+    if (!cropState) {
+      if (!silent) syncMediaToolbar();
+      return;
+    }
+    cropState = null;
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  function applyCropMode() {
+    if (!cropState) return;
+    const s = boardStrokes.get(cropState.strokeId);
+    if (!s) {
+      cropState = null;
+      syncMediaToolbar();
+      return;
+    }
+    const full = cropState.full;
+    const crop = clampCrop(cropState.crop);
+    const minX = full.minX + crop.l * full.w;
+    const minY = full.minY + crop.t * full.h;
+    const maxX = full.minX + crop.r * full.w;
+    const maxY = full.minY + crop.b * full.h;
+    const before = cropState.before;
+    s.points = [
+      { x: minX, y: minY, p: 1 },
+      { x: maxX, y: maxY, p: 1 },
+    ];
+    s.extra = s.extra || {};
+    s.extra.crop = crop;
+    s.bbox = makeBBox(s.points);
+    selection.bbox = s.bbox;
+    wsSend({ type: "stroke_move", stroke: serializeStroke(s) });
+    pushUndo({
+      type: "move",
+      moves: [
+        {
+          id: s.id,
+          before: before.points.map((p) => ({ ...p })),
+          after: s.points.map((p) => ({ ...p })),
+          beforeExtra: before.extra || null,
+          afterExtra: JSON.parse(JSON.stringify(s.extra)),
+        },
+      ],
+    });
+    cropState = null;
+    syncMediaToolbar();
+    requestRedraw();
+  }
+
+  const mediaToolbar = document.getElementById("media-toolbar");
+  const importFileInput = document.getElementById("import-file");
+
+  function syncMediaToolbar() {
+    if (!mediaToolbar) return;
+    const img = selectedImageStroke();
+    const cropping = !!cropState;
+    if (!img && !cropping) {
+      mediaToolbar.classList.add("hidden");
+      return;
+    }
+    mediaToolbar.classList.remove("hidden");
+    const cropBtn = document.getElementById("btn-media-crop");
+    const doneBtn = document.getElementById("btn-media-crop-done");
+    const cancelBtn = document.getElementById("btn-media-crop-cancel");
+    if (cropBtn) cropBtn.classList.toggle("hidden", cropping);
+    if (doneBtn) doneBtn.classList.toggle("hidden", !cropping);
+    if (cancelBtn) cancelBtn.classList.toggle("hidden", !cropping);
+    positionMediaToolbar();
+  }
+
+  function positionMediaToolbar() {
+    if (!mediaToolbar || mediaToolbar.classList.contains("hidden")) return;
+    const s = selectedImageStroke() || (cropState && boardStrokes.get(cropState.strokeId));
+    const b = cropState && cropState.full ? cropState.full : s && (s.bbox || imageDestRect(s));
+    if (!b) return;
+    const top = worldToScreen((b.minX + b.maxX) / 2, b.minY);
+    mediaToolbar.style.left = Math.round(top.x) + "px";
+    mediaToolbar.style.top = Math.round(top.y - 48) + "px";
+  }
+
+  function bitmapToJpeg(source, maxEdge) {
+    const w = source.width || source.naturalWidth;
+    const h = source.height || source.naturalHeight;
+    const fit = Math.min(1, maxEdge / Math.max(w, h, 1));
+    const cw = Math.max(1, Math.round(w * fit));
+    const ch = Math.max(1, Math.round(h * fit));
+    const canvas = document.createElement("canvas");
+    canvas.width = cw;
+    canvas.height = ch;
+    const c = canvas.getContext("2d");
+    c.fillStyle = "#ffffff";
+    c.fillRect(0, 0, cw, ch);
+    c.drawImage(source, 0, 0, cw, ch);
+    return { dataUrl: canvas.toDataURL("image/jpeg", 0.82), w: cw, h: ch };
+  }
+
+  async function uploadJpeg(dataUrl) {
+    const resp = await fetch("/api/media", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image: dataUrl }),
+    });
+    if (!resp.ok) throw new Error("upload");
+    const data = await resp.json();
+    if (!data || !data.id) throw new Error("upload");
+    return data.id;
+  }
+
+  function placeImageStroke(mediaId, w, h, name, origin) {
+    const maxW = Math.min(720, window.innerWidth * 0.62) / scale;
+    const maxH = Math.min(860, window.innerHeight * 0.7) / scale;
+    const fit = Math.min(maxW / w, maxH / h, 1);
+    const dw = w * fit;
+    const dh = h * fit;
+    const id = uuid();
+    const stroke = {
+      id,
+      tool: "image",
+      color: "#000000",
+      size: 1,
+      points: [
+        { x: origin.x, y: origin.y, p: 1 },
+        { x: origin.x + dw, y: origin.y + dh, p: 1 },
+      ],
+      extra: {
+        mediaId,
+        crop: { l: 0, t: 0, r: 1, b: 1 },
+        nw: w,
+        nh: h,
+        name: name || "Bild",
+      },
+    };
+    stroke.bbox = makeBBox(stroke.points);
+    boardStrokes.set(id, stroke);
+    ensureMedia(mediaId);
+    wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
+    pushUndo({ type: "add", stroke: cloneStroke(stroke) });
+    return stroke;
+  }
+
+  async function importImageFile(file, origin) {
+    const bmp = await createImageBitmap(file);
+    const jpeg = bitmapToJpeg(bmp, 1600);
+    if (bmp.close) bmp.close();
+    const mediaId = await uploadJpeg(jpeg.dataUrl);
+    return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
+  }
+
+  async function importPdfFile(file, origin) {
+    if (!window.pdfjsLib) throw new Error("pdfjs");
+    const buf = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+    const n = Math.min(pdf.numPages, 6);
+    const placed = [];
+    let y = origin.y;
+    for (let i = 1; i <= n; i++) {
+      const page = await pdf.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const scalePdf = Math.min(1.5, 1600 / Math.max(base.width, base.height));
+      const vp = page.getViewport({ scale: scalePdf });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(vp.width));
+      canvas.height = Math.max(1, Math.round(vp.height));
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+      const jpeg = bitmapToJpeg(canvas, 1600);
+      const mediaId = await uploadJpeg(jpeg.dataUrl);
+      const stroke = placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name + " S." + i, { x: origin.x, y });
+      placed.push(stroke);
+      y = stroke.points[1].y + 28;
+    }
+    return placed;
+  }
+
+  async function importFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const worldOrigin = screenToWorld(window.innerWidth * 0.18, window.innerHeight * 0.16);
+    let x = worldOrigin.x;
+    let y = worldOrigin.y;
+    const ids = [];
+    statusTextEl.textContent = "Importiere…";
+    try {
+      for (const file of files) {
+        const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
+        const origin = { x, y };
+        if (isPdf) {
+          const placed = await importPdfFile(file, origin);
+          placed.forEach((s) => ids.push(s.id));
+          if (placed.length) {
+            y = placed[placed.length - 1].points[1].y + 40;
+          }
+        } else if (/^image\//.test(file.type) || /\.(png|jpe?g|gif|webp|heic)$/i.test(file.name)) {
+          const s = await importImageFile(file, origin);
+          ids.push(s.id);
+          y = s.points[1].y + 40;
+        }
+      }
+      if (ids.length) {
+        setTool("select");
+        selectStrokeIds(ids);
+      }
+    } catch (err) {
+      console.warn("import failed", err);
+      statusTextEl.textContent = "Import fehlgeschlagen";
+      setTimeout(() => setConnected(!!(ws && ws.readyState === 1)), 1800);
+      return;
+    }
+    setConnected(!!(ws && ws.readyState === 1));
+    requestRedraw();
+  }
+
+  document.getElementById("btn-import")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hidePopovers();
+    if (importFileInput) {
+      importFileInput.value = "";
+      importFileInput.click();
+    }
+  });
+  importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
+  window.addEventListener("dragover", (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) e.preventDefault();
+  });
+  window.addEventListener("drop", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    importFiles(e.dataTransfer.files);
+  });
+  document.getElementById("btn-media-crop")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    enterCropMode();
+  });
+  document.getElementById("btn-media-crop-done")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyCropMode();
+  });
+  document.getElementById("btn-media-crop-cancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cancelCropMode();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && cropState) {
+      e.preventDefault();
+      cancelCropMode();
+    }
+  });
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") spacePressed = true;
@@ -2087,7 +2667,7 @@
     const b = stroke.bbox;
     if (!b) return false;
     const mouse = currentStroke && currentStroke.pointerType === "mouse";
-    if (stroke.tool === "text") {
+    if (stroke.tool === "text" || stroke.tool === "image") {
       for (const q of poly) {
         if (q.x >= b.minX && q.x <= b.maxX && q.y >= b.minY && q.y <= b.maxY) return true;
       }
@@ -2205,7 +2785,7 @@
         if (erasedThisGesture.has(stroke.id)) continue;
         const b = stroke.bbox;
         if (sx < b.minX - r || sx > b.maxX + r || sy < b.minY - r || sy > b.maxY + r) continue;
-        if (stroke.tool === "text") {
+        if (stroke.tool === "text" || stroke.tool === "image") {
           if (sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY) {
             erasedThisGesture.add(stroke.id);
             erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
@@ -2251,6 +2831,39 @@
   function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
     if (currentTool === "select") {
+      if (cropState) {
+        const handle = pickCropHandle(world);
+        if (handle) {
+          cropState.pointerId = e.pointerId;
+          cropState.handle = handle;
+          cropState.startCrop = { ...cropState.crop };
+          cropState.startWorld = world;
+          return;
+        }
+        const full = cropState.full;
+        const crop = cropState.crop;
+        const rect = {
+          minX: full.minX + crop.l * full.w,
+          minY: full.minY + crop.t * full.h,
+          maxX: full.minX + crop.r * full.w,
+          maxY: full.minY + crop.b * full.h,
+        };
+        if (pointInBBox(world, rect, 0)) {
+          cropState.pointerId = e.pointerId;
+          cropState.handle = "move";
+          cropState.startCrop = { ...cropState.crop };
+          cropState.startWorld = world;
+          return;
+        }
+      }
+      if (selection.bbox) {
+        const pad = 10 / scale;
+        const handle = pickScaleHandle(world, selection.bbox, pad);
+        if (handle) {
+          startSelectionScale(e.pointerId, world, handle);
+          return;
+        }
+      }
       if (selection.bbox && pointInBBox(world, selection.bbox, 10 / scale)) {
         startSelectionDrag(e.pointerId, world);
       } else {
@@ -2336,6 +2949,7 @@
       }
       const isActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
+        (cropState && cropState.pointerId === e.pointerId) ||
         lassoPointerId === e.pointerId ||
         (currentStroke && currentStroke.pointerId === e.pointerId);
       if (!isActiveDrawTouch) {
@@ -2364,12 +2978,16 @@
       updateEraserCursor(e.clientX, e.clientY);
     }
 
-    if (dragState && dragState.pointerId === e.pointerId) {
+    if (cropState && cropState.pointerId === e.pointerId) {
+      updateCropDrag(world);
+      requestRedraw();
+    } else if (dragState && dragState.pointerId === e.pointerId) {
       if (touchPointers.size >= 2) {
         cancelSelectionDrag();
         return;
       }
-      updateSelectionDrag(world);
+      if (dragState.kind === "scale") updateSelectionScale(world);
+      else updateSelectionDrag(world);
     } else if (lassoPointerId === e.pointerId && lassoPoints) {
       if (touchPointers.size >= 2) {
         lassoPoints = null;
@@ -2411,6 +3029,7 @@
       if (touchPointers.size === 0) panState = null;
       const wasActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
+        (cropState && cropState.pointerId === e.pointerId) ||
         lassoPointerId === e.pointerId ||
         (currentStroke && currentStroke.pointerId === e.pointerId);
       if (!wasActiveDrawTouch) return;
@@ -2420,6 +3039,11 @@
       return;
     }
 
+    if (cropState && cropState.pointerId === e.pointerId) {
+      cropState.pointerId = null;
+      cropState.handle = null;
+      return;
+    }
     if (dragState && dragState.pointerId === e.pointerId) {
       finalizeSelectionDrag();
       return;
@@ -2632,7 +3256,7 @@
     boardStrokes.set(id, stroke);
     wsSend({
       type: "stroke_move",
-      stroke: { id, tool: "text", color: stroke.color, size: stroke.size, points: stroke.points },
+      stroke: serializeStroke(stroke),
     });
     pushUndo({ type: "add", stroke: cloneStroke(stroke) });
     requestRedraw();

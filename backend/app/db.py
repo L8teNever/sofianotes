@@ -48,37 +48,49 @@ def _init_sync() -> None:
         )
         """
     )
+    cols = {row[1] for row in _conn.execute("PRAGMA table_info(strokes)").fetchall()}
+    if "extra" not in cols:
+        _conn.execute("ALTER TABLE strokes ADD COLUMN extra TEXT")
     _conn.commit()
 
 
 def _load_all_sync() -> list[dict[str, Any]]:
     cur = _conn.execute(
-        "SELECT id, tool, color, size, points FROM strokes ORDER BY created_at ASC"
+        "SELECT id, tool, color, size, points, extra FROM strokes ORDER BY created_at ASC"
     )
     strokes = []
     for row in cur.fetchall():
-        strokes.append(
-            {
-                "id": row[0],
-                "tool": row[1],
-                "color": row[2],
-                "size": row[3],
-                "points": json.loads(row[4]),
-            }
-        )
+        item = {
+            "id": row[0],
+            "tool": row[1],
+            "color": row[2],
+            "size": row[3],
+            "points": json.loads(row[4]),
+        }
+        if row[5]:
+            try:
+                extra = json.loads(row[5])
+            except json.JSONDecodeError:
+                extra = None
+            if extra:
+                item["extra"] = extra
+        strokes.append(item)
     return strokes
 
 
 def _insert_sync(stroke: dict[str, Any]) -> None:
+    extra = stroke.get("extra")
+    extra_json = json.dumps(extra) if extra is not None else None
     _conn.execute(
-        "INSERT OR REPLACE INTO strokes (id, tool, color, size, points, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO strokes (id, tool, color, size, points, extra, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             stroke["id"],
             stroke["tool"],
             stroke["color"],
             stroke["size"],
             json.dumps(stroke["points"]),
+            extra_json,
             time.time(),
         ),
     )

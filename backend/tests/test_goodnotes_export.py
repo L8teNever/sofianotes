@@ -32,6 +32,14 @@ def sample_strokes():
             "size": 22,
             "points": [{"x": 200, "y": 80, "p": 1, "text": "42"}, {"x": 230, "y": 58, "p": 1}],
         },
+        {
+            "id": "d",
+            "tool": "image",
+            "color": "#000000",
+            "size": 1,
+            "points": [{"x": 0, "y": 200}, {"x": 120, "y": 280}],
+            "extra": {"mediaId": "00000000-0000-0000-0000-000000000000", "crop": {"l": 0, "t": 0, "r": 1, "b": 1}},
+        },
     ]
 
 
@@ -51,7 +59,7 @@ class GoodnotesExportTests(unittest.TestCase):
         names = set(zf.namelist())
         self.assertEqual(names, {"manifest.json", "strokes.json", "sofianotes.pdf"})
         strokes = json.loads(zf.read("strokes.json"))
-        self.assertEqual(len(strokes), 3)
+        self.assertEqual(len(strokes), 4)
         self.assertTrue(zf.read("sofianotes.pdf").startswith(b"%PDF"))
         manifest = json.loads(zf.read("manifest.json"))
         self.assertEqual(manifest["app"], "sofianotes")

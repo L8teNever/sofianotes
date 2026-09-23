@@ -1,11 +1,11 @@
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import cloudflare_ocr, db, goodnotes_export, spellcheck
+from . import cloudflare_ocr, db, goodnotes_export, media, spellcheck
 from .ws_manager import ConnectionManager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
@@ -117,6 +117,37 @@ async def spell_ink(request: Request) -> dict:
     }
 
 
+@app.post("/api/media")
+async def upload_media(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="json required") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="json object required")
+    data = body.get("image") or body.get("data") or ""
+    try:
+        saved = media.save_data_uri(str(data))
+    except ValueError as exc:
+        code = str(exc)
+        if code == "too_large":
+            raise HTTPException(status_code=413, detail="image too large") from exc
+        raise HTTPException(status_code=400, detail="jpeg data URI required") from exc
+    return {"ok": True, "id": saved["id"], "bytes": saved["bytes"]}
+
+
+@app.get("/api/media/{media_id}")
+async def get_media(media_id: str) -> Response:
+    blob = media.load_bytes(media_id)
+    if blob is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return Response(
+        content=blob,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
 @app.get("/api/export.goodnotes")
 async def download_goodnotes() -> FileResponse:
     goodnotes_export.write_exports(await db.load_all())
@@ -174,13 +205,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 stroke_id = msg.get("strokeId")
                 if not stroke_id:
                     continue
-                client.in_progress[stroke_id] = {
+                entry = {
                     "id": stroke_id,
                     "tool": msg.get("tool", "pen"),
                     "color": msg.get("color", "#000000"),
                     "size": msg.get("size", 4),
                     "points": list(msg.get("points", [])),
                 }
+                if isinstance(msg.get("extra"), dict):
+                    entry["extra"] = msg.get("extra")
+                client.in_progress[stroke_id] = entry
                 await manager.broadcast(
                     {
                         "type": "stroke_start",

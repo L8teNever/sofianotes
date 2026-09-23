@@ -774,6 +774,34 @@ button {
 }
 .erase-all-menu.hidden { display: none; }
 
+.media-toolbar {
+  position: fixed;
+  z-index: 88;
+  display: flex;
+  gap: 6px;
+  transform: translate(-50%, -100%);
+  padding: 4px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+.media-toolbar.hidden { display: none; }
+.media-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #174ea6;
+  background: #e8f0fe;
+}
+.media-toolbar button .material-symbols-rounded { font-size: 18px; }
+.media-toolbar button.hidden { display: none; }
+
 .drag-guide {
   position: fixed;
   pointer-events: none;

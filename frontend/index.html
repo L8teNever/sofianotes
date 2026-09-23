@@ -14,15 +14,30 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,crop_landscape,crop_square,delete_sweep,description,download,drag_indicator,edit,gesture,grain,grid_4x4,group,hexagon,highlight,palette,person,redo,remove,reorder,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,close,crop,crop_landscape,crop_square,delete_sweep,description,download,drag_indicator,edit,gesture,grain,grid_4x4,group,hexagon,highlight,palette,person,redo,remove,reorder,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
 <link rel="preload" href="models/emnist/model.json" as="fetch" crossorigin />
 <link rel="preload" href="models/emnist/group1-shard1of1.bin" as="fetch" crossorigin />
-<link rel="stylesheet" href="style.css?v=29" />
+<link rel="stylesheet" href="style.css?v=30" />
 </head>
 <body>
 <canvas id="board"></canvas>
 <div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
+<div id="media-toolbar" class="media-toolbar hidden">
+  <button type="button" id="btn-media-crop" title="Zuschneiden">
+    <span class="material-symbols-rounded">crop</span>
+    Zuschneiden
+  </button>
+  <button type="button" id="btn-media-crop-done" class="hidden" title="Zuschnitt übernehmen">
+    <span class="material-symbols-rounded">check</span>
+    Fertig
+  </button>
+  <button type="button" id="btn-media-crop-cancel" class="hidden" title="Abbrechen">
+    <span class="material-symbols-rounded">close</span>
+    Abbrechen
+  </button>
+</div>
+<input id="import-file" type="file" accept="image/*,application/pdf,.pdf" multiple hidden />
 <div id="erase-all-menu" class="erase-all-menu hidden">
   <button type="button" id="btn-erase-all-here">
     <span class="material-symbols-rounded">delete_sweep</span>
@@ -120,6 +135,11 @@
         <span class="material-symbols-rounded">auto_awesome</span>
       </button>
     </div>
+    <div class="tool-wrapper">
+      <button id="btn-import" class="tool-btn" type="button" title="Bild oder PDF importieren">
+        <span class="material-symbols-rounded">add_photo_alternate</span>
+      </button>
+    </div>
 
     <div id="tool-popover" class="tool-popover hidden">
       <div class="popover-head">
@@ -193,10 +213,17 @@
   </div>
 </nav>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-<script src="de-words.js?v=29"></script>
-<script src="ink-recognize.js?v=29"></script>
-<script src="app.js?v=29"></script>
+<script src="de-words.js?v=30"></script>
+<script src="ink-recognize.js?v=30"></script>
+<script src="app.js?v=30"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
