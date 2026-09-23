@@ -9,8 +9,13 @@ RUN apt-get update \
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
+ARG GIT_COMMIT=main
+ENV GIT_COMMIT=$GIT_COMMIT
+
 COPY backend backend
 COPY frontend frontend
+
+RUN printf '{"version":"1.0.0","commit":"%s"}\n' "$GIT_COMMIT" > backend/version.json
 
 RUN mkdir -p data
 

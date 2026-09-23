@@ -1,14 +1,17 @@
 from pathlib import Path
+import time
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import cloudflare_ocr, db, goodnotes_export, media, spellcheck
+from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+BUILD_TS = str(int(time.time()))
 
 app = FastAPI(title="sofianotes")
 manager = ConnectionManager()
@@ -21,7 +24,9 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        if request.url.path == "/" or not request.url.path.startswith("/api/"):
+        if request.url.path == "/service-worker.js":
+            response.headers["Cache-Control"] = "no-store"
+        elif request.url.path == "/" or not request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
@@ -37,6 +42,39 @@ async def on_startup() -> None:
 @app.get("/api/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.get("/api/version")
+async def app_version() -> dict:
+    return get_version_info(BUILD_TS)
+
+
+def _index_html() -> HTMLResponse:
+    raw = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(inject_build(raw, BUILD_TS))
+
+
+@app.get("/")
+async def index_root() -> HTMLResponse:
+    return _index_html()
+
+
+@app.get("/index.html")
+async def index_file() -> HTMLResponse:
+    return _index_html()
+
+
+@app.get("/service-worker.js")
+async def service_worker() -> Response:
+    raw = (FRONTEND_DIR / "service-worker.js").read_text(encoding="utf-8")
+    return Response(
+        content=inject_build(raw, BUILD_TS),
+        media_type="application/javascript",
+        headers={
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.get("/api/recognize")
