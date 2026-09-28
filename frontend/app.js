@@ -4924,13 +4924,14 @@
       empty.textContent = "Noch leer. Leg ein Blatt oder einen Ordner an.";
       list.appendChild(empty);
     }
+    if (window.lucide) lucide.createIcons();
   }
 
   function iconBtn(name, title, onClick) {
     const b = document.createElement("button");
     b.type = "button";
     b.title = title;
-    b.innerHTML = `<span class="material-symbols-rounded">${name}</span>`;
+    b.innerHTML = `<i data-lucide="${name}"></i>`;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       onClick();
@@ -4938,12 +4939,20 @@
     return b;
   }
 
+  function libRowIcon(name) {
+    const box = document.createElement("div");
+    box.className = "lib-row-icon";
+    box.innerHTML = `<i data-lucide="${name}"></i>`;
+    return box;
+  }
+
   function folderCard(folder) {
     const el = document.createElement("div");
     el.className = "library-item";
     el.setAttribute("role", "button");
     el.tabIndex = 0;
-    el.innerHTML = `<span class="material-symbols-rounded">folder</span><strong></strong><span class="meta">Ordner</span>`;
+    el.appendChild(libRowIcon("folder"));
+    el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta">Ordner</span></div>`);
     el.querySelector("strong").textContent = folder.name;
     el.addEventListener("click", () => {
       currentFolderId = folder.id;
@@ -4951,9 +4960,9 @@
     });
     const row = document.createElement("div");
     row.className = "row";
-    row.appendChild(iconBtn("edit", "Umbenennen", () => renameFolder(folder)));
-    row.appendChild(iconBtn("drive_file_move", "Verschieben", () => openMove("folder", folder.id)));
-    row.appendChild(iconBtn("delete", "Löschen", () => deleteFolder(folder)));
+    row.appendChild(iconBtn("pencil", "Umbenennen", () => renameFolder(folder)));
+    row.appendChild(iconBtn("folder-open", "Verschieben", () => openMove("folder", folder.id)));
+    row.appendChild(iconBtn("trash-2", "Löschen", () => deleteFolder(folder)));
     el.appendChild(row);
     return el;
   }
@@ -4965,16 +4974,17 @@
     el.tabIndex = 0;
     const owner = personName(board.ownerId);
     const meta = board.shared ? "Geteilt von " + owner : "Eigenes Blatt";
-    el.innerHTML = `<span class="material-symbols-rounded">description</span><strong></strong><span class="meta"></span>`;
+    el.appendChild(libRowIcon("layout-dashboard"));
+    el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta"></span></div>`);
     el.querySelector("strong").textContent = board.title;
     el.querySelector(".meta").textContent = meta;
     el.addEventListener("click", () => openBoard(board.id, board.title));
     const row = document.createElement("div");
     row.className = "row";
-    row.appendChild(iconBtn("drive_file_move", "In Ordner legen", () => openMove("board", board.id)));
+    row.appendChild(iconBtn("folder-open", "In Ordner legen", () => openMove("board", board.id)));
     if (!board.shared) {
-      row.appendChild(iconBtn("share", "Teilen", () => openShare(board)));
-      row.appendChild(iconBtn("delete", "Löschen", () => deleteBoard(board)));
+      row.appendChild(iconBtn("share-2", "Teilen", () => openShare(board)));
+      row.appendChild(iconBtn("trash-2", "Löschen", () => deleteBoard(board)));
     }
     el.appendChild(row);
     return el;
