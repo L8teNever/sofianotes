@@ -154,6 +154,292 @@ html, body {
   z-index: 60;
 }
 
+#gate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #ece9e3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px;
+}
+
+#gate-overlay[hidden] {
+  display: none;
+}
+
+#gate-box {
+  max-width: 420px;
+}
+
+#gate-text {
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+#board-bar {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  z-index: 60;
+}
+
+#board-bar-btn {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--toolbar-bg);
+  border: 1px solid var(--toolbar-border);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  max-width: 45vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#boards-panel {
+  margin-top: 6px;
+  background: var(--toolbar-bg);
+  border: 1px solid var(--toolbar-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(10px);
+  padding: 8px;
+  width: min(300px, 70vw);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+#boards-panel[hidden] {
+  display: none;
+}
+
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.board-row:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.board-row.active {
+  background: var(--accent);
+  color: white;
+}
+
+.board-row .board-row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.board-row button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  color: inherit;
+}
+
+.boards-panel-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--toolbar-border);
+}
+
+.boards-panel-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--toolbar-border);
+  font-size: 13px;
+}
+
+.boards-panel-row button,
+.admin-new-user-row button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#admin-btn {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(56px, calc(56px + env(safe-area-inset-right)));
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--toolbar-border);
+  background: var(--toolbar-bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  font-size: 15px;
+  cursor: pointer;
+  z-index: 60;
+}
+
+#admin-btn[hidden] {
+  display: none;
+}
+
+#admin-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+#admin-modal[hidden] {
+  display: none;
+}
+
+#admin-box {
+  background: white;
+  border-radius: 16px;
+  padding: 16px;
+  width: min(480px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.admin-header h2 {
+  font-size: 17px;
+  margin: 0;
+}
+
+#admin-close-btn {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.admin-user-card {
+  border: 1px solid var(--toolbar-border);
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.admin-user-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-user-card-header strong {
+  font-size: 14px;
+}
+
+.admin-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--accent);
+  color: white;
+  border-radius: 8px;
+  padding: 2px 6px;
+  margin-left: 6px;
+}
+
+.admin-user-card button.danger {
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.admin-email-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.admin-email-row button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #c0392b;
+  font-size: 12px;
+}
+
+.admin-add-email-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.admin-add-email-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid var(--toolbar-border);
+  font-size: 12px;
+}
+
+.admin-add-email-row button {
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.admin-new-user-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.admin-new-user-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--toolbar-border);
+  font-size: 13px;
+}
+
 .presence-label {
   position: absolute;
   pointer-events: none;

@@ -11,14 +11,46 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="sofianotes" />
-<link rel="stylesheet" href="style.css?v=2" />
+<link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
 <canvas id="board"></canvas>
 <div id="eraser-cursor"></div>
 
+<div id="gate-overlay">
+  <div id="gate-box">
+    <p id="gate-text">Lädt…</p>
+  </div>
+</div>
+
+<div id="board-bar">
+  <button id="board-bar-btn"><span id="board-bar-name">Board</span> <span>▾</span></button>
+  <div id="boards-panel" hidden>
+    <div id="boards-list"></div>
+    <div class="boards-panel-row">
+      <input id="new-board-name" type="text" placeholder="Name für neues Board" />
+      <button id="new-board-btn">+ Board</button>
+    </div>
+  </div>
+</div>
+
 <div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
+<button id="admin-btn" title="Nutzerverwaltung" hidden>👤</button>
 <div id="zoom-indicator">100%</div>
+
+<div id="admin-modal" hidden>
+  <div id="admin-box">
+    <div class="admin-header">
+      <h2>Nutzerverwaltung</h2>
+      <button id="admin-close-btn">✕</button>
+    </div>
+    <div id="admin-users-list"></div>
+    <div class="admin-new-user-row">
+      <input id="new-user-name" type="text" placeholder="Name des neuen Nutzers" />
+      <button id="new-user-btn">+ Nutzer</button>
+    </div>
+  </div>
+</div>
 
 <div id="toolbar">
   <button id="undo-btn" class="tool-btn" title="Rückgängig (Strg/Cmd+Z)">↩️</button>
@@ -41,7 +73,7 @@
   <input type="range" id="size-slider" min="1" max="40" value="4" />
 </div>
 
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

@@ -7,3 +7,6 @@ services:
       - "${BIND_HOST:-127.0.0.1}:${BIND_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
+    environment:
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - DEV_BYPASS_EMAIL=${DEV_BYPASS_EMAIL:-}

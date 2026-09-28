@@ -1,9 +1,9 @@
 # sofianotes
 
 Live-Collaborative-Whiteboard fuer iPad (Apple Pencil), Desktop und Android.
-Ein einzelnes, dauerhaftes Board, an dem mehrere Personen gleichzeitig zeichnen
-koennen — inkl. Palm Rejection, Pinch-Zoom, Radiergummi und Live-Cursor der
-anderen Teilnehmer.
+Jeder Nutzer hat seine eigenen, dauerhaften Boards, an denen mehrere
+Personen gleichzeitig zeichnen koennen — inkl. Palm Rejection, Pinch-Zoom,
+Radiergummi und Live-Cursor der anderen Teilnehmer.
 
 ## Stack
 
@@ -12,17 +12,63 @@ anderen Teilnehmer.
 - Frontend: Vanilla JS + HTML5 Canvas (kein Framework)
 - PWA: installierbar auf iPad/Android/Desktop
 - Deployment: Docker, Pull-basiert vom GitHub-Repo
+- Zugriff/Login: Cloudflare Access (Zero Trust) davor, siehe unten
+
+## Nutzer, Boards & Login (Cloudflare Access)
+
+Die App selbst hat keinen eigenen Login. Stattdessen sitzt **Cloudflare
+Access** (Zero Trust) als Reverse Proxy davor und laesst nur Leute durch,
+die sich erfolgreich ueber Cloudflare angemeldet haben (z.B. per
+Mail-Einmalcode oder verbundenem Identity-Provider). Bei jedem
+durchgelassenen Request haengt Access den Header
+`Cf-Access-Authenticated-User-Email` mit der verifizierten Mail-Adresse an
+— die App vertraut ausschliesslich diesem Header, ein Client kann ihn nicht
+selbst faelschen, solange Access wirklich davor haengt.
+
+Wer sich in der App tatsaechlich als welcher Nutzer wiederfindet, entscheidet
+die App-interne Zuordnung, nicht Cloudflare selbst:
+
+- **Admin**: Die Mail-Adresse aus `ADMIN_EMAIL` (siehe `.env`) wird beim
+  allerersten Start automatisch als Admin-Nutzer angelegt. Ein Admin sieht
+  in der App oben rechts einen zusaetzlichen Button (👤) fuer die
+  Nutzerverwaltung.
+- **Nutzer anlegen**: Der Admin legt in dieser Nutzerverwaltung neue Nutzer
+  (Namen) an und ordnet ihnen eine oder mehrere Mail-Adressen zu. Jede
+  dieser Mail-Adressen loggt beim Anmelden denselben Nutzer ein — praktisch,
+  wenn jemand z.B. eine private und eine Schul-Mail hat.
+  Meldet sich jemand mit einer Cloudflare-Access-Mail an, die noch keinem
+  Nutzer zugeordnet ist, bekommt die App `403` und zeigt eine entsprechende
+  Meldung — Zutritt gibt es erst nach Zuordnung durch den Admin.
+- **Boards**: Jeder Nutzer sieht nach dem Einloggen ausschliesslich seine
+  eigenen Boards (oben links umschaltbar/anlegbar/umbenennbar/loeschbar).
+  Boards sind nicht zwischen Nutzern geteilt; mehrere Personen koennen aber
+  gleichzeitig auf demselben Board eines Nutzers mitzeichnen (Live-Sync wie
+  gehabt), wenn sie den Board-Link/die Sitzung teilen.
+
+Fuer die eigentliche Cloudflare-Access-Konfiguration (Access-Application +
+Policy auf der Domain/dem Tunnel-Hostname, der auf diesen Server zeigt)
+gibt es keine feste Anleitung in diesem Repo — das haengt von der eigenen
+Cloudflare-Zone/dem eigenen Tunnel ab und wird direkt im Cloudflare
+Zero-Trust-Dashboard eingerichtet.
 
 ## Lokal entwickeln & testen
+
+Lokal steht in der Regel kein Cloudflare Access davor. Damit die App trotzdem
+nutzbar ist, kann `DEV_BYPASS_EMAIL` gesetzt werden — taeuscht diese
+Mail-Adresse als eingeloggten Nutzer vor, ganz ohne den echten Header. Das
+darf **nie** in der produktiven `.env` stehen, sonst ist der Zugriffsschutz
+wirkungslos.
 
 ```bash
 # Variante A: direkt mit Python
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+ADMIN_EMAIL=admin@example.com DEV_BYPASS_EMAIL=admin@example.com \
+  uvicorn app.main:app --reload --port 8000
 # -> http://localhost:8000
 
 # Variante B: mit Docker (wie auf dem Server, nur auf 127.0.0.1)
+# ADMIN_EMAIL/DEV_BYPASS_EMAIL vorher in die lokale .env eintragen
 docker compose up --build
 # -> http://localhost:8000
 ```
@@ -118,5 +164,5 @@ geholt wird, ganz ohne dass ein Cache irgendwo explizit geleert werden muss.
 
 ## Was bewusst fehlt
 
-Mehrere Boards, Undo/Redo, Nutzer-Accounts/Login, Formen-Werkzeuge — laut
-Anforderung nicht Teil dieses Projekts.
+Formen-Werkzeuge ausserhalb der automatischen Erkennung — laut Anforderung
+nicht Teil dieses Projekts.

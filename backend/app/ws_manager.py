@@ -1,4 +1,4 @@
-"""WebSocket connection + presence management for the shared whiteboard."""
+"""WebSocket connection + presence management, gescoped pro Board."""
 import itertools
 import uuid
 from dataclasses import dataclass, field
@@ -20,6 +20,7 @@ PRESENCE_PALETTE = [
 class ClientState:
     id: str
     color: str
+    board_id: str
     websocket: WebSocket
     in_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -29,9 +30,9 @@ class ConnectionManager:
         self._clients: dict[WebSocket, ClientState] = {}
         self._color_cycle = itertools.cycle(PRESENCE_PALETTE)
 
-    def connect(self, websocket: WebSocket) -> ClientState:
+    def connect(self, websocket: WebSocket, board_id: str) -> ClientState:
         state = ClientState(
-            id=str(uuid.uuid4()), color=next(self._color_cycle), websocket=websocket
+            id=str(uuid.uuid4()), color=next(self._color_cycle), board_id=board_id, websocket=websocket
         )
         self._clients[websocket] = state
         return state
@@ -42,10 +43,12 @@ class ConnectionManager:
     def get(self, websocket: WebSocket) -> ClientState | None:
         return self._clients.get(websocket)
 
-    async def broadcast(self, message: dict[str, Any], exclude: WebSocket | None = None) -> None:
+    async def broadcast(
+        self, board_id: str, message: dict[str, Any], exclude: WebSocket | None = None
+    ) -> None:
         dead: list[WebSocket] = []
-        for ws in list(self._clients.keys()):
-            if ws is exclude:
+        for ws, state in list(self._clients.items()):
+            if ws is exclude or state.board_id != board_id:
                 continue
             try:
                 await ws.send_json(message)

@@ -14,6 +14,21 @@
   const undoBtn = document.getElementById("undo-btn");
   const redoBtn = document.getElementById("redo-btn");
 
+  const gateOverlayEl = document.getElementById("gate-overlay");
+  const gateTextEl = document.getElementById("gate-text");
+  const boardBarBtn = document.getElementById("board-bar-btn");
+  const boardBarNameEl = document.getElementById("board-bar-name");
+  const boardsPanelEl = document.getElementById("boards-panel");
+  const boardsListEl = document.getElementById("boards-list");
+  const newBoardNameEl = document.getElementById("new-board-name");
+  const newBoardBtn = document.getElementById("new-board-btn");
+  const adminBtn = document.getElementById("admin-btn");
+  const adminModalEl = document.getElementById("admin-modal");
+  const adminCloseBtn = document.getElementById("admin-close-btn");
+  const adminUsersListEl = document.getElementById("admin-users-list");
+  const newUserNameEl = document.getElementById("new-user-name");
+  const newUserBtn = document.getElementById("new-user-btn");
+
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 4;
   const GRID_SIZE = 32;
@@ -272,6 +287,8 @@
   let myClientId = null;
   let myColor = null;
   let reconnectDelay = 1000;
+  let currentBoardId = null;
+  let wsGeneration = 0;
 
   function wsSend(obj) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -282,21 +299,53 @@
     statusTextEl.textContent = connected ? "Live" : "Verbinde…";
   }
 
-  function connectWS() {
+  function resetBoardClientState() {
+    boardStrokes.clear();
+    remoteInProgress.clear();
+    currentStroke = null;
+    for (const id of Array.from(presence.keys())) removePresence(id);
+    undoStack.length = 0;
+    redoStack.length = 0;
+    updateUndoRedoButtons();
+    clearSelection();
+    requestRedraw();
+  }
+
+  function connectWS(boardId) {
+    wsGeneration += 1;
+    const myGeneration = wsGeneration;
+    currentBoardId = boardId;
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+    }
+    resetBoardClientState();
+    setConnected(false);
+
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(boardId)}`);
 
     ws.onopen = () => {
+      if (myGeneration !== wsGeneration) return;
       setConnected(true);
       reconnectDelay = 1000;
     };
     ws.onclose = () => {
+      if (myGeneration !== wsGeneration) return;
       setConnected(false);
-      setTimeout(connectWS, reconnectDelay);
+      setTimeout(() => connectWS(boardId), reconnectDelay);
       reconnectDelay = Math.min(10000, reconnectDelay * 1.7);
     };
     ws.onerror = () => ws.close();
-    ws.onmessage = (ev) => handleMessage(JSON.parse(ev.data));
+    ws.onmessage = (ev) => {
+      if (myGeneration !== wsGeneration) return;
+      handleMessage(JSON.parse(ev.data));
+    };
+  }
+
+  function switchBoard(boardId) {
+    if (boardId === currentBoardId) return;
+    connectWS(boardId);
   }
 
   function finalizeIncomingStroke(id) {
@@ -1113,10 +1162,231 @@
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
+  // ---- Login-Gate: eigene Person + eigene Boards laden ------------------
+
+  async function api(path, options) {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const err = new Error(body.detail || `HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    if (res.status === 204) return null;
+    return res.json();
+  }
+
+  let me = null;
+  let myBoards = [];
+
+  function showGate(text) {
+    gateTextEl.textContent = text;
+    gateOverlayEl.hidden = false;
+  }
+  function hideGate() {
+    gateOverlayEl.hidden = true;
+  }
+
+  function renderBoardsPanel() {
+    boardsListEl.innerHTML = "";
+    for (const board of myBoards) {
+      const row = document.createElement("div");
+      row.className = "board-row" + (board.id === currentBoardId ? " active" : "");
+      const nameEl = document.createElement("span");
+      nameEl.className = "board-row-name";
+      nameEl.textContent = board.name;
+      row.appendChild(nameEl);
+
+      const renameBtn = document.createElement("button");
+      renameBtn.textContent = "✏️";
+      renameBtn.title = "Umbenennen";
+      renameBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const name = prompt("Neuer Name fürs Board:", board.name);
+        if (!name || !name.trim()) return;
+        const updated = await api(`/api/boards/${board.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        board.name = updated.name;
+        renderBoardsPanel();
+        if (board.id === currentBoardId) boardBarNameEl.textContent = board.name;
+      });
+      row.appendChild(renameBtn);
+
+      if (myBoards.length > 1) {
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "🗑️";
+        delBtn.title = "Löschen";
+        delBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Board "${board.name}" wirklich löschen? Das kann nicht rückgängig gemacht werden.`)) return;
+          await api(`/api/boards/${board.id}`, { method: "DELETE" });
+          myBoards = myBoards.filter((b) => b.id !== board.id);
+          if (board.id === currentBoardId) {
+            const next = myBoards[0];
+            boardBarNameEl.textContent = next.name;
+            switchBoard(next.id);
+          }
+          renderBoardsPanel();
+        });
+        row.appendChild(delBtn);
+      }
+
+      row.addEventListener("click", () => {
+        boardBarNameEl.textContent = board.name;
+        switchBoard(board.id);
+        boardsPanelEl.hidden = true;
+      });
+      boardsListEl.appendChild(row);
+    }
+  }
+
+  boardBarBtn.addEventListener("click", () => {
+    boardsPanelEl.hidden = !boardsPanelEl.hidden;
+  });
+  document.addEventListener("click", (e) => {
+    if (!boardsPanelEl.hidden && !document.getElementById("board-bar").contains(e.target)) {
+      boardsPanelEl.hidden = true;
+    }
+  });
+  newBoardBtn.addEventListener("click", async () => {
+    const name = newBoardNameEl.value.trim() || `Board ${myBoards.length + 1}`;
+    const board = await api("/api/boards", { method: "POST", body: JSON.stringify({ name }) });
+    myBoards.push(board);
+    newBoardNameEl.value = "";
+    renderBoardsPanel();
+    boardBarNameEl.textContent = board.name;
+    switchBoard(board.id);
+    boardsPanelEl.hidden = true;
+  });
+
+  // ---- Admin-Panel: Nutzer + Mail-Adressen verwalten --------------------
+
+  async function loadAdminUsers() {
+    const users = await api("/api/admin/users");
+    adminUsersListEl.innerHTML = "";
+    for (const user of users) {
+      const card = document.createElement("div");
+      card.className = "admin-user-card";
+
+      const header = document.createElement("div");
+      header.className = "admin-user-card-header";
+      const title = document.createElement("div");
+      title.innerHTML = `<strong>${escapeHtml(user.name)}</strong>` + (user.is_admin ? `<span class="admin-badge">Admin</span>` : "");
+      header.appendChild(title);
+      if (!user.is_admin) {
+        const delBtn = document.createElement("button");
+        delBtn.className = "danger";
+        delBtn.textContent = "Nutzer löschen";
+        delBtn.addEventListener("click", async () => {
+          if (!confirm(`Nutzer "${user.name}" wirklich löschen? Alle seine Boards gehen dabei verloren.`)) return;
+          await api(`/api/admin/users/${user.id}`, { method: "DELETE" });
+          loadAdminUsers();
+        });
+        header.appendChild(delBtn);
+      }
+      card.appendChild(header);
+
+      for (const email of user.emails) {
+        const row = document.createElement("div");
+        row.className = "admin-email-row";
+        const span = document.createElement("span");
+        span.textContent = email;
+        row.appendChild(span);
+        const rm = document.createElement("button");
+        rm.textContent = "✕";
+        rm.title = "Mail-Adresse entfernen";
+        rm.addEventListener("click", async () => {
+          await api(`/api/admin/users/${user.id}/emails/${encodeURIComponent(email)}`, { method: "DELETE" });
+          loadAdminUsers();
+        });
+        row.appendChild(rm);
+        card.appendChild(row);
+      }
+
+      const addRow = document.createElement("div");
+      addRow.className = "admin-add-email-row";
+      const input = document.createElement("input");
+      input.type = "email";
+      input.placeholder = "weitere Mail-Adresse";
+      const addBtn = document.createElement("button");
+      addBtn.textContent = "+";
+      addBtn.addEventListener("click", async () => {
+        const email = input.value.trim();
+        if (!email) return;
+        try {
+          await api(`/api/admin/users/${user.id}/emails`, { method: "POST", body: JSON.stringify({ email }) });
+          input.value = "";
+          loadAdminUsers();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+      addRow.appendChild(input);
+      addRow.appendChild(addBtn);
+      card.appendChild(addRow);
+
+      adminUsersListEl.appendChild(card);
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  adminBtn.addEventListener("click", () => {
+    adminModalEl.hidden = false;
+    loadAdminUsers();
+  });
+  adminCloseBtn.addEventListener("click", () => {
+    adminModalEl.hidden = true;
+  });
+  newUserBtn.addEventListener("click", async () => {
+    const name = newUserNameEl.value.trim();
+    if (!name) return;
+    await api("/api/admin/users", { method: "POST", body: JSON.stringify({ name }) });
+    newUserNameEl.value = "";
+    loadAdminUsers();
+  });
+
   // ---- boot ------------------------------------------------------
   resizeCanvas();
   offsetX = window.innerWidth / 2;
   offsetY = window.innerHeight / 2;
-  connectWS();
   requestAnimationFrame(tick);
+
+  (async () => {
+    try {
+      me = await api("/api/me");
+    } catch (err) {
+      if (err.status === 401) {
+        showGate("Nicht über Cloudflare Access angemeldet.\nBitte über den regulären Zugangslink erneut anmelden.");
+      } else if (err.status === 403) {
+        showGate(err.message || "Kein Zugriff. Ein Admin muss deine Mail-Adresse erst freischalten.");
+      } else {
+        showGate("Anmeldung fehlgeschlagen: " + err.message);
+      }
+      return;
+    }
+
+    if (me.is_admin) adminBtn.hidden = false;
+
+    myBoards = await api("/api/boards");
+    if (myBoards.length === 0) {
+      const board = await api("/api/boards", { method: "POST", body: JSON.stringify({ name: "Mein Board" }) });
+      myBoards = [board];
+    }
+    renderBoardsPanel();
+
+    const firstBoard = myBoards[0];
+    boardBarNameEl.textContent = firstBoard.name;
+    hideGate();
+    connectWS(firstBoard.id);
+  })();
 })();
