@@ -1374,12 +1374,9 @@
   let myColor = null;
   let reconnectDelay = 1000;
   let wantWs = false;
-  const PEOPLE = [
-    { id: "simon", name: "Simon" },
-    { id: "franz", name: "Franz" },
-    { id: "jungen", name: "Die Jungen" },
-  ];
-  let currentPersonId = localStorage.getItem("sofianotes-person") || "";
+  let PEOPLE = [];
+  let currentPersonId = "";
+  let isAdmin = false;
   let currentBoardId = "";
   let currentBoardMeta = null;
   let currentFolderId = null;
@@ -4870,7 +4867,9 @@
     if (libPerson) libPerson.textContent = personName(currentPersonId);
   }
 
-  function showWho() {
+  function showGate(title, text) {
+    document.getElementById("gate-title").textContent = title;
+    document.getElementById("gate-text").textContent = text || "";
     whoBackdrop.classList.remove("hidden");
     libraryBackdrop.classList.add("hidden");
   }
@@ -5189,24 +5188,141 @@
     refreshLibrary();
   }
 
-  function pickPerson(id) {
-    currentPersonId = id;
-    localStorage.setItem("sofianotes-person", id);
-    currentFolderId = null;
-    currentBoardId = "";
-    boardStrokes.clear();
-    disconnectWS();
-    syncWhoChip();
-    showLibrary();
+  // ---- Admin: Personen + Mail-Adressen verwalten -----------------------
+  const adminBackdrop = document.getElementById("admin-backdrop");
+  const adminPeopleListEl = document.getElementById("admin-people-list");
+
+  function openAdminPanel() {
+    if (!isAdmin) return;
+    adminBackdrop.classList.remove("hidden");
+    loadAdminPeople();
+  }
+  function closeAdminPanel() {
+    adminBackdrop.classList.add("hidden");
   }
 
-  document.querySelectorAll(".who-btn").forEach((btn) => {
-    btn.addEventListener("click", () => pickPerson(btn.dataset.person));
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  async function loadAdminPeople() {
+    let people;
+    try {
+      people = await api("/api/admin/people");
+    } catch (err) {
+      adminPeopleListEl.textContent = "Konnte Personen nicht laden.";
+      return;
+    }
+    adminPeopleListEl.innerHTML = "";
+    for (const person of people) {
+      const card = document.createElement("div");
+      card.className = "admin-person-card";
+
+      const head = document.createElement("div");
+      head.className = "admin-person-head";
+      head.innerHTML =
+        `<span>${escapeHtml(person.name)}</span>` +
+        (person.isAdmin ? `<span class="admin-badge">Admin</span>` : "");
+      if (!person.isAdmin) {
+        const delBtn = document.createElement("button");
+        delBtn.className = "danger";
+        delBtn.textContent = "Löschen";
+        delBtn.addEventListener("click", async () => {
+          if (!window.confirm(`"${person.name}" wirklich löschen?`)) return;
+          try {
+            await api("/api/admin/people/" + encodeURIComponent(person.id), { method: "DELETE" });
+            await loadAdminPeople();
+            await refreshPeople();
+          } catch (err) {
+            window.alert("Geht nicht: hat noch eigene Blätter oder existiert nicht mehr.");
+          }
+        });
+        head.appendChild(delBtn);
+      }
+      card.appendChild(head);
+
+      for (const email of person.emails) {
+        const row = document.createElement("div");
+        row.className = "admin-email-row";
+        const span = document.createElement("span");
+        span.textContent = email;
+        row.appendChild(span);
+        const rm = document.createElement("button");
+        rm.textContent = "✕";
+        rm.title = "Mail-Adresse entfernen";
+        rm.addEventListener("click", async () => {
+          await api("/api/admin/people/" + encodeURIComponent(person.id) + "/emails/" + encodeURIComponent(email), {
+            method: "DELETE",
+          });
+          loadAdminPeople();
+        });
+        row.appendChild(rm);
+        card.appendChild(row);
+      }
+
+      const addRow = document.createElement("div");
+      addRow.className = "admin-add-email-row";
+      const input = document.createElement("input");
+      input.type = "email";
+      input.placeholder = "weitere Mail-Adresse";
+      const addBtn = document.createElement("button");
+      addBtn.textContent = "+";
+      addBtn.addEventListener("click", async () => {
+        const email = input.value.trim();
+        if (!email) return;
+        try {
+          await api("/api/admin/people/" + encodeURIComponent(person.id) + "/emails", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email }),
+          });
+          input.value = "";
+          loadAdminPeople();
+        } catch (err) {
+          window.alert("Diese Mail-Adresse ist schon vergeben.");
+        }
+      });
+      addRow.appendChild(input);
+      addRow.appendChild(addBtn);
+      card.appendChild(addRow);
+
+      adminPeopleListEl.appendChild(card);
+    }
+  }
+
+  async function refreshPeople() {
+    try {
+      const r = await api("/api/people");
+      PEOPLE = r.people || [];
+    } catch (err) {
+      // offline oder Fehler: alte Liste behalten
+    }
+  }
+
+  document.getElementById("btn-admin-close")?.addEventListener("click", closeAdminPanel);
+  adminBackdrop?.addEventListener("click", (e) => {
+    if (e.target === adminBackdrop) closeAdminPanel();
   });
-  document.getElementById("btn-who-chip")?.addEventListener("click", showWho);
+  document.getElementById("btn-admin-new-person")?.addEventListener("click", async () => {
+    const input = document.getElementById("admin-new-person-name");
+    const name = input.value.trim();
+    if (!name) return;
+    await api("/api/admin/people", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    input.value = "";
+    await loadAdminPeople();
+    await refreshPeople();
+  });
+
+  document.getElementById("btn-who-chip")?.addEventListener("click", openAdminPanel);
   document.getElementById("btn-open-library")?.addEventListener("click", showLibrary);
   document.getElementById("btn-library-close")?.addEventListener("click", hideLibrary);
-  document.getElementById("btn-library-switch")?.addEventListener("click", showWho);
+  document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
   document.getElementById("btn-library-home")?.addEventListener("click", () => {
     if (currentFolderId && libraryCache && libraryCache.crumbs.length) {
       const prev = libraryCache.crumbs[libraryCache.crumbs.length - 1];
@@ -5247,12 +5363,31 @@
   resizeCanvas();
   offsetX = window.innerWidth / 2;
   offsetY = window.innerHeight / 2;
-  if (currentPersonId && PEOPLE.some((p) => p.id === currentPersonId)) {
+  requestAnimationFrame(tick);
+
+  (async () => {
+    showGate("Lädt…", "");
+    let me;
+    try {
+      me = await api("/api/me");
+    } catch (err) {
+      if (String(err.message) === "401") {
+        showGate("Nicht angemeldet", "Bitte über den regulären Zugangslink erneut anmelden (Cloudflare Access).");
+      } else if (String(err.message) === "403") {
+        showGate("Kein Zugriff", "Diese Mail-Adresse ist noch keiner Person zugeordnet. Ein Admin muss dich erst freischalten.");
+      } else {
+        showGate("Verbindung fehlgeschlagen", "Bitte Seite neu laden.");
+      }
+      return;
+    }
+    currentPersonId = me.id;
+    isAdmin = !!me.isAdmin;
+    localStorage.setItem("sofianotes-person", currentPersonId);
+    whoChip.title = isAdmin ? "Personen verwalten" : "";
+    document.getElementById("btn-library-switch")?.classList.toggle("hidden", !isAdmin);
+    await refreshPeople();
     hideWho();
     syncWhoChip();
     showLibrary();
-  } else {
-    showWho();
-  }
-  requestAnimationFrame(tick);
+  })();
 })();

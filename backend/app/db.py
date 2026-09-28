@@ -1,8 +1,15 @@
 """SQLite persistence for sofianotes.
 
-Boards belong to one of three people (Simon, Franz, Die Jungen). Folders
-and placements are per person so shared boards can be sorted independently.
-Strokes stay on the board they were drawn on.
+Boards belong to a person. Folders and placements are per person so shared
+boards can be sorted independently. Strokes stay on the board they were
+drawn on.
+
+Who is "logged in" as which person is resolved from the
+Cf-Access-Authenticated-User-Email header (see auth.py) against the
+person_emails table, managed by an admin. The three original people
+(Simon, Franz, Die Jungen) are seeded once on first start so existing
+boards/folders/shares referencing those ids keep working unchanged; an
+admin can add further people afterwards.
 """
 import asyncio
 import json
@@ -12,13 +19,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-PEOPLE = (
+LEGACY_PEOPLE = (
     {"id": "simon", "name": "Simon"},
     {"id": "franz", "name": "Franz"},
     {"id": "jungen", "name": "Die Jungen"},
 )
-PEOPLE_IDS = tuple(p["id"] for p in PEOPLE)
 LEGACY_BOARD_ID = "00000000-0000-0000-0000-000000000001"
+
+_person_ids_cache: set[str] = set()
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "board.db"
 
@@ -99,6 +107,26 @@ def _init_sync() -> None:
         )
         """
     )
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS people (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS person_emails (
+            email TEXT PRIMARY KEY,
+            person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE
+        )
+        """
+    )
+    _seed_people_sync()
+    _refresh_person_cache_sync()
     cols = {row[1] for row in _conn.execute("PRAGMA table_info(strokes)").fetchall()}
     if "extra" not in cols:
         _conn.execute("ALTER TABLE strokes ADD COLUMN extra TEXT")
@@ -106,6 +134,22 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE strokes ADD COLUMN board_id TEXT")
     _migrate_legacy_sync()
     _conn.commit()
+
+
+def _seed_people_sync() -> None:
+    n = _conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+    if n == 0:
+        now = time.time()
+        for p in LEGACY_PEOPLE:
+            _conn.execute(
+                "INSERT INTO people (id, name, is_admin, created_at) VALUES (?, ?, 0, ?)",
+                (p["id"], p["name"], now),
+            )
+
+
+def _refresh_person_cache_sync() -> None:
+    global _person_ids_cache
+    _person_ids_cache = {r[0] for r in _conn.execute("SELECT id FROM people").fetchall()}
 
 
 def _migrate_legacy_sync() -> None:
@@ -118,7 +162,7 @@ def _migrate_legacy_sync() -> None:
             (LEGACY_BOARD_ID, "simon", "Gemeinsames Blatt", now, now),
         )
         _conn.execute("UPDATE strokes SET board_id = ? WHERE board_id IS NULL OR board_id = ''", (LEGACY_BOARD_ID,))
-        for pid in PEOPLE_IDS:
+        for pid in _person_ids_cache:
             _conn.execute(
                 "INSERT OR IGNORE INTO placements (person_id, board_id, folder_id, sort_order) VALUES (?, ?, NULL, 0)",
                 (pid, LEGACY_BOARD_ID),
@@ -299,7 +343,7 @@ async def ocr_fill(budget: float) -> None:
 
 
 def valid_person(person_id: str | None) -> bool:
-    return person_id in PEOPLE_IDS
+    return person_id in _person_ids_cache
 
 
 def _board_row(board_id: str) -> dict[str, Any] | None:
@@ -448,7 +492,7 @@ def _share_sync(person_id: str, board_id: str, with_person: str) -> dict[str, An
     board = _board_row(board_id)
     if not board or board["ownerId"] != person_id:
         return None
-    if with_person not in PEOPLE_IDS or with_person == person_id:
+    if with_person not in _person_ids_cache or with_person == person_id:
         return None
     _conn.execute("INSERT OR IGNORE INTO shares (board_id, person_id) VALUES (?, ?)", (board_id, with_person))
     _conn.execute(
@@ -591,8 +635,154 @@ def _place_board_sync(person_id: str, board_id: str, folder_id: str | None) -> b
     return True
 
 
-async def people() -> list[dict[str, str]]:
-    return list(PEOPLE)
+def _people_sync() -> list[dict[str, Any]]:
+    rows = _conn.execute(
+        "SELECT id, name, is_admin FROM people ORDER BY created_at ASC, rowid ASC"
+    ).fetchall()
+    return [{"id": r[0], "name": r[1], "isAdmin": bool(r[2])} for r in rows]
+
+
+def _people_admin_sync() -> list[dict[str, Any]]:
+    people = _people_sync()
+    for p in people:
+        p["emails"] = [
+            r[0]
+            for r in _conn.execute(
+                "SELECT email FROM person_emails WHERE person_id = ? ORDER BY email ASC", (p["id"],)
+            ).fetchall()
+        ]
+    return people
+
+
+def _person_by_email_sync(email: str) -> dict[str, Any] | None:
+    row = _conn.execute(
+        """
+        SELECT p.id, p.name, p.is_admin
+        FROM person_emails pe JOIN people p ON p.id = pe.person_id
+        WHERE pe.email = ?
+        """,
+        (email.strip().lower(),),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"id": row[0], "name": row[1], "isAdmin": bool(row[2])}
+
+
+def _ensure_admin_sync(email: str) -> None:
+    email = email.strip().lower()
+    if not email:
+        return
+    row = _conn.execute("SELECT person_id FROM person_emails WHERE email = ?", (email,)).fetchone()
+    if row is not None:
+        _conn.execute("UPDATE people SET is_admin = 1 WHERE id = ?", (row[0],))
+        _conn.commit()
+        return
+    simon_claimed = _conn.execute(
+        "SELECT 1 FROM person_emails WHERE person_id = 'simon'"
+    ).fetchone()
+    simon_exists = _conn.execute("SELECT 1 FROM people WHERE id = 'simon'").fetchone()
+    if simon_exists and not simon_claimed:
+        target_id = "simon"
+        _conn.execute("UPDATE people SET is_admin = 1 WHERE id = ?", (target_id,))
+    else:
+        target_id = str(uuid.uuid4())
+        _conn.execute(
+            "INSERT INTO people (id, name, is_admin, created_at) VALUES (?, 'Admin', 1, ?)",
+            (target_id, time.time()),
+        )
+    _conn.execute("INSERT INTO person_emails (email, person_id) VALUES (?, ?)", (email, target_id))
+    _conn.commit()
+    _refresh_person_cache_sync()
+
+
+def _create_person_sync(name: str) -> dict[str, Any]:
+    person_id = str(uuid.uuid4())
+    name = (name or "").strip() or "Neue Person"
+    now = time.time()
+    _conn.execute(
+        "INSERT INTO people (id, name, is_admin, created_at) VALUES (?, ?, 0, ?)",
+        (person_id, name, now),
+    )
+    _conn.commit()
+    _refresh_person_cache_sync()
+    return {"id": person_id, "name": name, "isAdmin": False, "emails": []}
+
+
+def _delete_person_sync(person_id: str) -> str | None:
+    """Returns None on success, or an error code string."""
+    if not _conn.execute("SELECT 1 FROM people WHERE id = ?", (person_id,)).fetchone():
+        return "not_found"
+    if _conn.execute("SELECT 1 FROM boards WHERE owner_id = ?", (person_id,)).fetchone():
+        return "owns_boards"
+    _conn.execute("DELETE FROM person_emails WHERE person_id = ?", (person_id,))
+    _conn.execute("DELETE FROM folders WHERE person_id = ?", (person_id,))
+    _conn.execute("DELETE FROM placements WHERE person_id = ?", (person_id,))
+    _conn.execute("DELETE FROM shares WHERE person_id = ?", (person_id,))
+    _conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+    _conn.commit()
+    _refresh_person_cache_sync()
+    return None
+
+
+def _add_person_email_sync(person_id: str, email: str) -> bool:
+    email = email.strip().lower()
+    if not _conn.execute("SELECT 1 FROM people WHERE id = ?", (person_id,)).fetchone():
+        return False
+    if _conn.execute("SELECT 1 FROM person_emails WHERE email = ?", (email,)).fetchone():
+        return False
+    _conn.execute("INSERT INTO person_emails (email, person_id) VALUES (?, ?)", (email, person_id))
+    _conn.commit()
+    return True
+
+
+def _remove_person_email_sync(person_id: str, email: str) -> None:
+    _conn.execute(
+        "DELETE FROM person_emails WHERE email = ? AND person_id = ?",
+        (email.strip().lower(), person_id),
+    )
+    _conn.commit()
+
+
+async def people() -> list[dict[str, Any]]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _people_sync)
+
+
+async def people_admin() -> list[dict[str, Any]]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _people_admin_sync)
+
+
+async def person_by_email(email: str) -> dict[str, Any] | None:
+    if not email:
+        return None
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _person_by_email_sync, email)
+
+
+async def ensure_admin(email: str) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _ensure_admin_sync, email)
+
+
+async def create_person(name: str) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _create_person_sync, name)
+
+
+async def delete_person(person_id: str) -> str | None:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _delete_person_sync, person_id)
+
+
+async def add_person_email(person_id: str, email: str) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _add_person_email_sync, person_id, email)
+
+
+async def remove_person_email(person_id: str, email: str) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _remove_person_email_sync, person_id, email)
 
 
 async def can_access(person_id: str, board_id: str) -> bool:

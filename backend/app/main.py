@@ -1,17 +1,21 @@
+import os
 from pathlib import Path
 import time
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import cloudflare_ocr, db, goodnotes_export, media, spellcheck
+from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 BUILD_TS = str(int(time.time()))
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip()
 
 app = FastAPI(title="sofianotes")
 manager = ConnectionManager()
@@ -37,6 +41,8 @@ app.add_middleware(NoCacheStaticMiddleware)
 @app.on_event("startup")
 async def on_startup() -> None:
     await db.init()
+    if ADMIN_EMAIL:
+        await db.ensure_admin(ADMIN_EMAIL)
 
 
 @app.get("/api/health")
@@ -159,87 +165,137 @@ async def list_people() -> dict:
     return {"people": await db.people()}
 
 
+@app.get("/api/me")
+async def me(person: dict = Depends(get_current_person)) -> dict:
+    return person
+
+
+class PersonCreate(BaseModel):
+    name: str
+
+
+class EmailAdd(BaseModel):
+    email: str
+
+
+@app.get("/api/admin/people")
+async def admin_list_people(_: dict = Depends(require_admin)) -> list[dict]:
+    return await db.people_admin()
+
+
+@app.post("/api/admin/people")
+async def admin_create_person(payload: PersonCreate, _: dict = Depends(require_admin)) -> dict:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name fehlt.")
+    return await db.create_person(name)
+
+
+@app.delete("/api/admin/people/{person_id}")
+async def admin_delete_person(person_id: str, admin: dict = Depends(require_admin)) -> dict:
+    if person_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Die eigene Person kann nicht geloescht werden.")
+    err = await db.delete_person(person_id)
+    if err == "not_found":
+        raise HTTPException(status_code=404, detail="not found")
+    if err == "owns_boards":
+        raise HTTPException(status_code=409, detail="Diese Person besitzt noch Blaetter - erst loeschen/uebertragen.")
+    return {"ok": True}
+
+
+@app.post("/api/admin/people/{person_id}/emails")
+async def admin_add_email(person_id: str, payload: EmailAdd, _: dict = Depends(require_admin)) -> dict:
+    email = payload.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Ungueltige Mail-Adresse.")
+    added = await db.add_person_email(person_id, email)
+    if not added:
+        raise HTTPException(status_code=409, detail="Diese Mail-Adresse ist schon vergeben oder die Person existiert nicht.")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/people/{person_id}/emails/{email}")
+async def admin_remove_email(person_id: str, email: str, _: dict = Depends(require_admin)) -> dict:
+    await db.remove_person_email(person_id, email)
+    return {"ok": True}
+
+
 @app.get("/api/library")
-async def get_library(person: str, folder: str | None = None) -> dict:
-    data = await db.library(person, folder or None)
+async def get_library(folder: str | None = None, me: dict = Depends(get_current_person)) -> dict:
+    data = await db.library(me["id"], folder or None)
     if data is None:
         raise HTTPException(status_code=400, detail="unknown person")
     return data
 
 
 @app.post("/api/boards")
-async def create_board(request: Request) -> dict:
+async def create_board(request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
     title = str(body.get("title") or "Unbenannte Skizze")
     folder = body.get("folderId") or None
-    board = await db.create_board(person, title, folder, body.get("id") or None)
+    board = await db.create_board(me["id"], title, folder, body.get("id") or None)
     if board is None:
         raise HTTPException(status_code=400, detail="unknown person")
     return {"ok": True, "board": board}
 
 
 @app.patch("/api/boards/{board_id}")
-async def patch_board(board_id: str, request: Request) -> dict:
+async def patch_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
     title = str(body.get("title") or "")
-    board = await db.rename_board(person, board_id, title)
+    board = await db.rename_board(me["id"], board_id, title)
     if board is None:
         raise HTTPException(status_code=404, detail="not found")
     return {"ok": True, "board": board}
 
 
 @app.delete("/api/boards/{board_id}")
-async def remove_board(board_id: str, person: str) -> dict:
-    ok = await db.delete_board(person, board_id)
+async def remove_board(board_id: str, me: dict = Depends(get_current_person)) -> dict:
+    ok = await db.delete_board(me["id"], board_id)
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
     return {"ok": True}
 
 
 @app.post("/api/boards/{board_id}/share")
-async def share_board(board_id: str, request: Request) -> dict:
+async def share_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
     with_person = str(body.get("withPersonId") or "")
-    board = await db.share_board(person, board_id, with_person)
+    board = await db.share_board(me["id"], board_id, with_person)
     if board is None:
         raise HTTPException(status_code=400, detail="cannot share")
     return {"ok": True, "board": board}
 
 
 @app.delete("/api/boards/{board_id}/share/{with_person}")
-async def unshare_board(board_id: str, with_person: str, person: str) -> dict:
-    ok = await db.unshare_board(person, board_id, with_person)
+async def unshare_board(board_id: str, with_person: str, me: dict = Depends(get_current_person)) -> dict:
+    ok = await db.unshare_board(me["id"], board_id, with_person)
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
     return {"ok": True}
 
 
 @app.post("/api/folders")
-async def create_folder(request: Request) -> dict:
+async def create_folder(request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
     name = str(body.get("name") or "Ordner")
     parent = body.get("parentId") or None
-    folder = await db.create_folder(person, name, parent, body.get("id") or None)
+    folder = await db.create_folder(me["id"], name, parent, body.get("id") or None)
     if folder is None:
         raise HTTPException(status_code=400, detail="unknown person")
     return {"ok": True, "folder": folder}
 
 
 @app.patch("/api/folders/{folder_id}")
-async def patch_folder(folder_id: str, request: Request) -> dict:
+async def patch_folder(folder_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
     if "parentId" in body:
         parent = body.get("parentId") or None
-        ok = await db.move_folder(person, folder_id, parent)
+        ok = await db.move_folder(me["id"], folder_id, parent)
         if not ok:
             raise HTTPException(status_code=400, detail="cannot move")
     if "name" in body:
-        folder = await db.rename_folder(person, folder_id, str(body.get("name") or ""))
+        folder = await db.rename_folder(me["id"], folder_id, str(body.get("name") or ""))
         if folder is None:
             raise HTTPException(status_code=404, detail="not found")
         return {"ok": True, "folder": folder}
@@ -247,20 +303,19 @@ async def patch_folder(folder_id: str, request: Request) -> dict:
 
 
 @app.delete("/api/folders/{folder_id}")
-async def remove_folder(folder_id: str, person: str) -> dict:
-    ok = await db.delete_folder(person, folder_id)
+async def remove_folder(folder_id: str, me: dict = Depends(get_current_person)) -> dict:
+    ok = await db.delete_folder(me["id"], folder_id)
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
     return {"ok": True}
 
 
 @app.post("/api/placements")
-async def place_board(request: Request) -> dict:
+async def place_board(request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
     board_id = str(body.get("boardId") or "")
     folder = body.get("folderId") or None
-    ok = await db.place_board(person, board_id, folder)
+    ok = await db.place_board(me["id"], board_id, folder)
     if not ok:
         raise HTTPException(status_code=400, detail="cannot move")
     return {"ok": True}
@@ -309,8 +364,8 @@ async def get_media(media_id: str) -> Response:
 
 
 @app.get("/api/boards/{board_id}/snapshot")
-async def board_snapshot(board_id: str, person: str) -> dict:
-    if not await db.can_access(person, board_id):
+async def board_snapshot(board_id: str, me: dict = Depends(get_current_person)) -> dict:
+    if not await db.can_access(me["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
     board = await db.get_board(board_id)
     strokes = await db.load_all(board_id)
@@ -318,10 +373,9 @@ async def board_snapshot(board_id: str, person: str) -> dict:
 
 
 @app.post("/api/boards/{board_id}/strokes")
-async def upsert_stroke(board_id: str, request: Request) -> dict:
+async def upsert_stroke(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
-    if not await db.can_access(person, board_id):
+    if not await db.can_access(me["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
     stroke = body.get("stroke")
     if not isinstance(stroke, dict) or not stroke.get("id"):
@@ -332,10 +386,9 @@ async def upsert_stroke(board_id: str, request: Request) -> dict:
 
 
 @app.post("/api/boards/{board_id}/erase")
-async def erase_board_strokes(board_id: str, request: Request) -> dict:
+async def erase_board_strokes(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
-    person = str(body.get("personId") or "")
-    if not await db.can_access(person, board_id):
+    if not await db.can_access(me["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
     stroke_ids = [s for s in body.get("strokeIds", []) if s]
     if stroke_ids:
@@ -369,12 +422,16 @@ async def download_pdf(board: str) -> FileResponse:
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
-    person = websocket.query_params.get("person") or ""
     board_id = websocket.query_params.get("board") or ""
-    await websocket.accept()
-    if not db.valid_person(person) or not await db.can_access(person, board_id):
+    me = await get_current_person_ws(websocket)
+    if me is None:
+        await websocket.close(code=4401)
+        return
+    person = me["id"]
+    if not await db.can_access(person, board_id):
         await websocket.close(code=4403)
         return
+    await websocket.accept()
     client = manager.connect(websocket)
     client.person_id = person
     client.board_id = board_id

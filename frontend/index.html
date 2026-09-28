@@ -271,21 +271,24 @@
 
 <div id="who-backdrop" class="who-backdrop">
   <div class="who-card">
-    <h1>Wer bist du?</h1>
-    <p>Einfach antippen. Kein Login.</p>
-    <div class="who-grid">
-      <button type="button" class="who-btn" data-person="simon">
-        <span class="material-symbols-rounded">person</span>
-        Simon
+    <h1 id="gate-title">Lädt…</h1>
+    <p id="gate-text"></p>
+  </div>
+</div>
+
+<div id="admin-backdrop" class="settings-backdrop hidden">
+  <div class="settings-modal" role="dialog" aria-modal="true">
+    <div class="settings-modal-head">
+      <h2>Personen</h2>
+      <button type="button" id="btn-admin-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
       </button>
-      <button type="button" class="who-btn" data-person="franz">
-        <span class="material-symbols-rounded">person</span>
-        Franz
-      </button>
-      <button type="button" class="who-btn" data-person="jungen">
-        <span class="material-symbols-rounded">group</span>
-        Die Jungen
-      </button>
+    </div>
+    <p class="share-hint">Wer sich mit welcher Mail-Adresse anmeldet, landet automatisch bei der zugeordneten Person. Eine Person kann mehrere Mail-Adressen haben.</p>
+    <div id="admin-people-list" class="admin-people-list"></div>
+    <div class="admin-new-person-row">
+      <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" />
+      <button type="button" id="btn-admin-new-person">Anlegen</button>
     </div>
   </div>
 </div>
@@ -300,7 +303,7 @@
         <div id="library-person" class="library-person">Simon</div>
         <div id="library-crumbs" class="library-crumbs">Alle Blätter</div>
       </div>
-      <button type="button" id="btn-library-switch" class="text-btn">Wechseln</button>
+      <button type="button" id="btn-library-switch" class="text-btn hidden">Personen</button>
       <button type="button" id="btn-library-close" class="icon-btn hidden" title="Schließen">
         <span class="material-symbols-rounded">close</span>
       </button>
