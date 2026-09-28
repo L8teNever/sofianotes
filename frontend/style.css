@@ -1129,25 +1129,35 @@ button {
 .lib-icon-btn:active { background: #e8def8; transform: scale(0.95); }
 .lib-icon-btn.hidden { display: none; }
 .lib-icon-btn i { width: 20px; height: 20px; }
-.lib-actions {
-  display: flex;
-  gap: 8px;
-  margin: 0 16px 16px;
-  flex-wrap: wrap;
-}
-.lib-action-btn {
-  border: 0;
-  background: #f3edf7;
-  color: #4a4458;
+.lib-add-wrap { position: relative; flex-shrink: 0; }
+.lib-add-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #fff;
   border-radius: 16px;
-  padding: 10px 16px;
-  font: 700 14px/1 'Google Sans', 'Inter', sans-serif;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.13), 0 1px 6px rgba(0, 0, 0, 0.07);
+  overflow: hidden;
+  min-width: 190px;
+  z-index: 20;
+}
+.lib-add-menu.hidden { display: none; }
+.lib-add-opt {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: #1c1b1f;
+  padding: 13px 16px;
+  font: 600 14px/1 'Google Sans', 'Inter', sans-serif;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
+  text-align: left;
 }
-.lib-action-btn i { width: 18px; height: 18px; }
+.lib-add-opt:hover { background: rgba(103, 80, 164, 0.08); }
+.lib-add-opt + .lib-add-opt { border-top: 1px solid rgba(0, 0, 0, 0.05); }
+.lib-add-opt i { width: 18px; height: 18px; color: #6750a4; flex-shrink: 0; }
 .library-list {
   display: flex;
   flex-direction: column;

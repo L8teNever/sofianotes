@@ -305,21 +305,26 @@
         <div id="library-person" class="lib-eyebrow">Simon</div>
         <div id="library-crumbs" class="lib-title">Alle Blätter</div>
       </div>
+      <div class="lib-add-wrap">
+        <button type="button" id="btn-library-add" class="lib-icon-btn" title="Neu">
+          <i data-lucide="plus"></i>
+        </button>
+        <div id="lib-add-menu" class="lib-add-menu hidden">
+          <button type="button" id="lib-add-board" class="lib-add-opt">
+            <i data-lucide="file-plus-2"></i>
+            Neues Blatt
+          </button>
+          <button type="button" id="lib-add-folder" class="lib-add-opt">
+            <i data-lucide="folder-plus"></i>
+            Neuer Ordner
+          </button>
+        </div>
+      </div>
       <button type="button" id="btn-library-switch" class="lib-icon-btn" title="Wechseln">
         <i data-lucide="users"></i>
       </button>
       <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Schließen">
         <i data-lucide="x"></i>
-      </button>
-    </div>
-    <div class="library-actions lib-actions">
-      <button type="button" id="btn-new-board" class="lib-action-btn">
-        <i data-lucide="file-plus-2"></i>
-        Neues Blatt
-      </button>
-      <button type="button" id="btn-new-folder" class="lib-action-btn">
-        <i data-lucide="folder-plus"></i>
-        Neuer Ordner
       </button>
     </div>
     <div id="library-list" class="library-list"></div>

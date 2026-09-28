@@ -5396,8 +5396,24 @@
     } else currentFolderId = null;
     refreshLibrary();
   });
-  document.getElementById("btn-new-board")?.addEventListener("click", createBoard);
-  document.getElementById("btn-new-folder")?.addEventListener("click", createFolder);
+  const libAddMenu = document.getElementById("lib-add-menu");
+  document.getElementById("btn-library-add")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    libAddMenu.classList.toggle("hidden");
+  });
+  document.addEventListener("click", (e) => {
+    if (!libAddMenu.classList.contains("hidden") && !document.querySelector(".lib-add-wrap").contains(e.target)) {
+      libAddMenu.classList.add("hidden");
+    }
+  });
+  document.getElementById("lib-add-board")?.addEventListener("click", () => {
+    libAddMenu.classList.add("hidden");
+    createBoard();
+  });
+  document.getElementById("lib-add-folder")?.addEventListener("click", () => {
+    libAddMenu.classList.add("hidden");
+    createFolder();
+  });
   document.getElementById("btn-share-board")?.addEventListener("click", async () => {
     if (!currentBoardId) {
       showLibrary();
