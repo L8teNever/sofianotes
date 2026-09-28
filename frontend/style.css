@@ -1104,6 +1104,7 @@ button {
   letter-spacing: 0.09em;
   opacity: 0.55;
 }
+.lib-eyebrow.hidden { display: none; }
 .lib-title {
   font-size: 1.5rem;
   font-weight: 700;

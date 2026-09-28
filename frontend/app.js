@@ -4908,8 +4908,18 @@
       setConnState("offline");
     }
     const crumbs = document.getElementById("library-crumbs");
-    if (!libraryCache.crumbs || !libraryCache.crumbs.length) crumbs.textContent = "Alle Blätter";
-    else crumbs.textContent = libraryCache.crumbs.map((c) => c.name).join(" › ");
+    const eyebrow = document.getElementById("library-person");
+    const backBtn = document.getElementById("btn-library-home");
+    const atRoot = !libraryCache.crumbs || !libraryCache.crumbs.length;
+    if (atRoot) {
+      crumbs.textContent = personName(currentPersonId) || "Bibliothek";
+      eyebrow.classList.add("hidden");
+      backBtn.classList.add("hidden");
+    } else {
+      crumbs.textContent = libraryCache.crumbs.map((c) => c.name).join(" › ");
+      eyebrow.classList.remove("hidden");
+      backBtn.classList.remove("hidden");
+    }
     const list = document.getElementById("library-list");
     list.innerHTML = "";
     for (const folder of libraryCache.folders || []) {
