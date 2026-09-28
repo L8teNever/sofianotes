@@ -26,6 +26,9 @@ LEGACY_PEOPLE = (
 )
 LEGACY_BOARD_ID = "00000000-0000-0000-0000-000000000001"
 
+FOLDER_COLORS = ("#eaddff", "#d3e3fd", "#c4eed0", "#ffdec1", "#ffd8e4", "#fff3c4")
+DEFAULT_FOLDER_COLOR = FOLDER_COLORS[0]
+
 _person_ids_cache: set[str] = set()
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "board.db"
@@ -132,6 +135,9 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE strokes ADD COLUMN extra TEXT")
     if "board_id" not in cols:
         _conn.execute("ALTER TABLE strokes ADD COLUMN board_id TEXT")
+    folder_cols = {row[1] for row in _conn.execute("PRAGMA table_info(folders)").fetchall()}
+    if "color" not in folder_cols:
+        _conn.execute(f"ALTER TABLE folders ADD COLUMN color TEXT DEFAULT '{DEFAULT_FOLDER_COLOR}'")
     _migrate_legacy_sync()
     _conn.commit()
 
@@ -384,14 +390,16 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     folders = []
     cur = _conn.execute(
         """
-        SELECT id, parent_id, name, sort_order FROM folders
+        SELECT id, parent_id, name, sort_order, color FROM folders
         WHERE person_id = ? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)
         ORDER BY sort_order ASC, name COLLATE NOCASE ASC
         """,
         (person_id, folder_id, folder_id),
     )
     for row in cur.fetchall():
-        folders.append({"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3]})
+        folders.append(
+            {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3], "color": row[4] or DEFAULT_FOLDER_COLOR}
+        )
     boards = []
     cur = _conn.execute(
         """
@@ -514,12 +522,15 @@ def _unshare_sync(person_id: str, board_id: str, with_person: str) -> bool:
     return True
 
 
-def _create_folder_sync(person_id: str, name: str, parent_id: str | None, folder_id: str | None = None) -> dict[str, Any]:
+def _create_folder_sync(
+    person_id: str, name: str, parent_id: str | None, folder_id: str | None = None, color: str | None = None
+) -> dict[str, Any]:
     name = (name or "").strip() or "Ordner"
+    color = color if color in FOLDER_COLORS else DEFAULT_FOLDER_COLOR
     folder_id = folder_id or str(uuid.uuid4())
-    row = _conn.execute("SELECT id, parent_id, name, sort_order FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    row = _conn.execute("SELECT id, parent_id, name, sort_order, color FROM folders WHERE id = ?", (folder_id,)).fetchone()
     if row:
-        return {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3]}
+        return {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3], "color": row[4] or DEFAULT_FOLDER_COLOR}
     if parent_id:
         row = _conn.execute(
             "SELECT 1 FROM folders WHERE id = ? AND person_id = ?",
@@ -528,27 +539,41 @@ def _create_folder_sync(person_id: str, name: str, parent_id: str | None, folder
         if not row:
             parent_id = None
     _conn.execute(
-        "INSERT INTO folders (id, person_id, parent_id, name, sort_order, created_at) VALUES (?, ?, ?, ?, 0, ?)",
-        (folder_id, person_id, parent_id, name, time.time()),
+        "INSERT INTO folders (id, person_id, parent_id, name, sort_order, created_at, color) VALUES (?, ?, ?, ?, 0, ?, ?)",
+        (folder_id, person_id, parent_id, name, time.time(), color),
     )
     _conn.commit()
-    return {"id": folder_id, "parentId": parent_id, "name": name, "sortOrder": 0}
+    return {"id": folder_id, "parentId": parent_id, "name": name, "sortOrder": 0, "color": color}
 
 
-def _rename_folder_sync(person_id: str, folder_id: str, name: str) -> dict[str, Any] | None:
-    name = (name or "").strip() or "Ordner"
-    cur = _conn.execute(
-        "UPDATE folders SET name = ? WHERE id = ? AND person_id = ?",
-        (name, folder_id, person_id),
-    )
-    _conn.commit()
-    if cur.rowcount == 0:
-        return None
+def _rename_folder_sync(person_id: str, folder_id: str, name: str | None, color: str | None = None) -> dict[str, Any] | None:
+    sets: list[str] = []
+    params: list[Any] = []
+    if name is not None:
+        sets.append("name = ?")
+        params.append(name.strip() or "Ordner")
+    if color in FOLDER_COLORS:
+        sets.append("color = ?")
+        params.append(color)
+    if not sets:
+        row = _conn.execute(
+            "SELECT id FROM folders WHERE id = ? AND person_id = ?", (folder_id, person_id)
+        ).fetchone()
+        if not row:
+            return None
+    else:
+        params.extend([folder_id, person_id])
+        cur = _conn.execute(
+            f"UPDATE folders SET {', '.join(sets)} WHERE id = ? AND person_id = ?", params
+        )
+        _conn.commit()
+        if cur.rowcount == 0:
+            return None
     row = _conn.execute(
-        "SELECT id, parent_id, name, sort_order FROM folders WHERE id = ?",
+        "SELECT id, parent_id, name, sort_order, color FROM folders WHERE id = ?",
         (folder_id,),
     ).fetchone()
-    return {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3]}
+    return {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3], "color": row[4] or DEFAULT_FOLDER_COLOR}
 
 
 def _folder_descendants(person_id: str, folder_id: str) -> set[str]:
@@ -847,18 +872,20 @@ async def unshare_board(person_id: str, board_id: str, with_person: str) -> bool
         return await asyncio.get_event_loop().run_in_executor(None, _unshare_sync, person_id, board_id, with_person)
 
 
-async def create_folder(person_id: str, name: str, parent_id: str | None, folder_id: str | None = None) -> dict[str, Any] | None:
+async def create_folder(
+    person_id: str, name: str, parent_id: str | None, folder_id: str | None = None, color: str | None = None
+) -> dict[str, Any] | None:
     if not valid_person(person_id):
         return None
     async with _lock:
         return await asyncio.get_event_loop().run_in_executor(
-            None, _create_folder_sync, person_id, name, parent_id, folder_id
+            None, _create_folder_sync, person_id, name, parent_id, folder_id, color
         )
 
 
-async def rename_folder(person_id: str, folder_id: str, name: str) -> dict[str, Any] | None:
+async def rename_folder(person_id: str, folder_id: str, name: str | None, color: str | None = None) -> dict[str, Any] | None:
     async with _lock:
-        return await asyncio.get_event_loop().run_in_executor(None, _rename_folder_sync, person_id, folder_id, name)
+        return await asyncio.get_event_loop().run_in_executor(None, _rename_folder_sync, person_id, folder_id, name, color)
 
 
 async def move_folder(person_id: str, folder_id: str, parent_id: str | None) -> bool:

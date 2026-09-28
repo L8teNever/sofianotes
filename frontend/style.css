@@ -1159,6 +1159,9 @@ button {
 .lib-add-opt:hover { background: rgba(103, 80, 164, 0.08); }
 .lib-add-opt + .lib-add-opt { border-top: 1px solid rgba(0, 0, 0, 0.05); }
 .lib-add-opt i { width: 18px; height: 18px; color: #6750a4; flex-shrink: 0; }
+.lib-add-opt .material-symbols-rounded { font-size: 18px; color: #6750a4; flex-shrink: 0; }
+.canvas-menu-wrap { position: relative; display: flex; }
+#canvas-share-submenu { min-width: 160px; }
 .library-list {
   display: flex;
   flex-direction: column;
@@ -1404,3 +1407,17 @@ button {
   box-shadow: 0 2px 8px rgba(103, 80, 164, 0.25);
 }
 .m3-btn-primary:active { transform: scale(0.96); }
+.m3-field.hidden { display: none; }
+.name-sheet-colors { display: flex; gap: 10px; flex-wrap: wrap; }
+.name-sheet-color-swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.name-sheet-color-swatch.selected {
+  border-color: #6750a4;
+  box-shadow: 0 0 0 2px #fff inset;
+}

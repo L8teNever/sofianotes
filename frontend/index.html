@@ -89,15 +89,25 @@
     <span class="material-symbols-rounded">folder</span>
   </button>
   <button type="button" id="btn-who-chip" class="who-chip" title="Person wechseln">Simon</button>
-  <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" />
-  <button type="button" id="btn-share-board" class="icon-btn" title="Mit Simon, Franz oder den Jungen teilen">
-    <span class="material-symbols-rounded">share</span>
-  </button>
+  <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" autocomplete="off" autocorrect="off" spellcheck="false" name="board-title-input" />
   <div class="bar-divider"></div>
   <div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
-  <button id="export-btn" class="icon-btn" title="Als PDF herunterladen (in GoodNotes importieren)">
-    <span class="material-symbols-rounded">download</span>
-  </button>
+  <div class="canvas-menu-wrap">
+    <button type="button" id="btn-canvas-menu" class="icon-btn" title="Mehr">
+      <span class="material-symbols-rounded">more_vert</span>
+    </button>
+    <div id="canvas-menu" class="lib-add-menu hidden">
+      <button type="button" id="canvas-menu-share" class="lib-add-opt">
+        <span class="material-symbols-rounded">share</span>
+        Teilen mit …
+      </button>
+      <button type="button" id="canvas-menu-download" class="lib-add-opt">
+        <span class="material-symbols-rounded">download</span>
+        Herunterladen
+      </button>
+    </div>
+    <div id="canvas-share-submenu" class="lib-add-menu hidden"></div>
+  </div>
 </header>
 
 <aside id="undo-redo-dock" class="corner-top-left" title="Lange drücken, dann in eine Ecke ziehen">
@@ -289,7 +299,7 @@
     <p class="share-hint">Wer sich mit welcher Mail-Adresse anmeldet, landet automatisch bei der zugeordneten Person. Eine Person kann mehrere Mail-Adressen haben.</p>
     <div id="admin-people-list" class="admin-people-list"></div>
     <div class="admin-new-person-row">
-      <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" />
+      <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" autocomplete="off" autocorrect="off" spellcheck="false" name="admin-person-input" />
       <button type="button" id="btn-admin-new-person">Anlegen</button>
     </div>
   </div>
@@ -362,7 +372,11 @@
     <div class="sheet-title" id="name-sheet-title">Name</div>
     <div class="m3-field">
       <label class="m3-field-label" id="name-sheet-label">Name</label>
-      <input class="m3-input" id="name-sheet-input" type="text" maxlength="80" />
+      <input class="m3-input" id="name-sheet-input" type="text" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false" name="lib-name-input" />
+    </div>
+    <div class="m3-field hidden" id="name-sheet-color-field">
+      <label class="m3-field-label">Farbe</label>
+      <div id="name-sheet-colors" class="name-sheet-colors"></div>
     </div>
     <div class="m3-sheet-actions">
       <button type="button" id="name-sheet-cancel" class="m3-btn-outline" style="flex:1;">Abbrechen</button>

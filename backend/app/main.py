@@ -283,12 +283,18 @@ async def unshare_board(board_id: str, with_person: str, me: dict = Depends(get_
     return {"ok": True}
 
 
+@app.get("/api/folder-colors")
+async def folder_colors() -> dict:
+    return {"colors": list(db.FOLDER_COLORS)}
+
+
 @app.post("/api/folders")
 async def create_folder(request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
     name = str(body.get("name") or "Ordner")
     parent = body.get("parentId") or None
-    folder = await db.create_folder(me["id"], name, parent, body.get("id") or None)
+    color = body.get("color") or None
+    folder = await db.create_folder(me["id"], name, parent, body.get("id") or None, color)
     if folder is None:
         raise HTTPException(status_code=400, detail="unknown person")
     return {"ok": True, "folder": folder}
@@ -302,8 +308,9 @@ async def patch_folder(folder_id: str, request: Request, me: dict = Depends(get_
         ok = await db.move_folder(me["id"], folder_id, parent)
         if not ok:
             raise HTTPException(status_code=400, detail="cannot move")
-    if "name" in body:
-        folder = await db.rename_folder(me["id"], folder_id, str(body.get("name") or ""))
+    if "name" in body or "color" in body:
+        name = str(body["name"]) if "name" in body else None
+        folder = await db.rename_folder(me["id"], folder_id, name, body.get("color") or None)
         if folder is None:
             raise HTTPException(status_code=404, detail="not found")
         return {"ok": True, "folder": folder}

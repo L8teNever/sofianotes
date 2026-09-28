@@ -2055,11 +2055,10 @@
   }
   undoBtn.addEventListener("click", undo);
   redoBtn.addEventListener("click", redo);
-  const exportBtn = document.getElementById("export-btn");
-  exportBtn.addEventListener("click", () => {
+  function downloadCurrentBoard() {
     // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
     window.location.href = "/api/export.pdf?board=" + encodeURIComponent(currentBoardId || "");
-  });
+  }
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
@@ -4949,9 +4948,10 @@
     return b;
   }
 
-  function libRowIcon(name) {
+  function libRowIcon(name, color) {
     const box = document.createElement("div");
     box.className = "lib-row-icon";
+    if (color) box.style.background = color;
     box.innerHTML = `<i data-lucide="${name}"></i>`;
     return box;
   }
@@ -4961,7 +4961,7 @@
     el.className = "library-item";
     el.setAttribute("role", "button");
     el.tabIndex = 0;
-    el.appendChild(libRowIcon("folder"));
+    el.appendChild(libRowIcon("folder", folder.color));
     el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta">Ordner</span></div>`);
     el.querySelector("strong").textContent = folder.name;
     el.addEventListener("click", () => {
@@ -5028,21 +5028,42 @@
   }
 
   // ---- Sofia-Style Bottom-Sheet fuer Namenseingabe (ersetzt window.prompt) --
+  const FOLDER_COLORS = ["#eaddff", "#d3e3fd", "#c4eed0", "#ffdec1", "#ffd8e4", "#fff3c4"];
   const nameSheetScrim = document.getElementById("name-sheet-scrim");
   const nameSheetTitle = document.getElementById("name-sheet-title");
   const nameSheetLabel = document.getElementById("name-sheet-label");
   const nameSheetInput = document.getElementById("name-sheet-input");
+  const nameSheetColorField = document.getElementById("name-sheet-color-field");
+  const nameSheetColorsEl = document.getElementById("name-sheet-colors");
   const nameSheetCancel = document.getElementById("name-sheet-cancel");
   const nameSheetSave = document.getElementById("name-sheet-save");
   let nameSheetResolve = null;
+  let nameSheetSelectedColor = null;
 
-  function openNameSheet({ title, label, initial = "", placeholder = "" }) {
+  function openNameSheet({ title, label, initial = "", placeholder = "", colors = false, initialColor = FOLDER_COLORS[0] }) {
     return new Promise((resolve) => {
       nameSheetResolve = resolve;
       nameSheetTitle.textContent = title;
       nameSheetLabel.textContent = label;
       nameSheetInput.value = initial;
       nameSheetInput.placeholder = placeholder;
+      nameSheetColorField.classList.toggle("hidden", !colors);
+      nameSheetSelectedColor = colors ? initialColor : null;
+      nameSheetColorsEl.innerHTML = "";
+      if (colors) {
+        for (const c of FOLDER_COLORS) {
+          const sw = document.createElement("button");
+          sw.type = "button";
+          sw.className = "name-sheet-color-swatch" + (c === initialColor ? " selected" : "");
+          sw.style.background = c;
+          sw.addEventListener("click", () => {
+            nameSheetSelectedColor = c;
+            nameSheetColorsEl.querySelectorAll(".name-sheet-color-swatch").forEach((el) => el.classList.remove("selected"));
+            sw.classList.add("selected");
+          });
+          nameSheetColorsEl.appendChild(sw);
+        }
+      }
       nameSheetScrim.classList.remove("hidden");
       nameSheetInput.focus();
       nameSheetInput.select();
@@ -5052,7 +5073,7 @@
     nameSheetScrim.classList.add("hidden");
     const resolve = nameSheetResolve;
     nameSheetResolve = null;
-    if (resolve) resolve(value);
+    if (resolve) resolve(value === null ? null : { value, color: nameSheetSelectedColor });
   }
   nameSheetCancel.addEventListener("click", () => closeNameSheet(null));
   nameSheetSave.addEventListener("click", () => closeNameSheet(nameSheetInput.value));
@@ -5065,9 +5086,9 @@
   });
 
   async function createBoard() {
-    const raw = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
-    if (raw === null) return;
-    const title = raw.trim() || "Unbenannte Skizze";
+    const res = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
+    if (res === null) return;
+    const title = res.value.trim() || "Unbenannte Skizze";
     try {
       const created = await api("/api/boards", {
         method: "POST",
@@ -5097,21 +5118,22 @@
   }
 
   async function createFolder() {
-    const raw = await openNameSheet({ title: "Neuer Ordner", label: "Name", initial: "Ordner" });
-    if (raw === null) return;
-    const name = raw.trim() || "Ordner";
+    const res = await openNameSheet({ title: "Neuer Ordner", label: "Name", initial: "Ordner", colors: true });
+    if (res === null) return;
+    const name = res.value.trim() || "Ordner";
+    const color = res.color;
     try {
       await api("/api/folders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId }),
+        body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId, color }),
       });
     } catch (err) {
       const id = uuid();
-      await enqueueOp({ type: "folder_create", personId: currentPersonId, name, parentId: currentFolderId, id });
+      await enqueueOp({ type: "folder_create", personId: currentPersonId, name, parentId: currentFolderId, id, color });
       if (libraryCache) {
         libraryCache.folders = libraryCache.folders || [];
-        libraryCache.folders.push({ id, parentId: currentFolderId, name, sortOrder: 0 });
+        libraryCache.folders.push({ id, parentId: currentFolderId, name, sortOrder: 0, color });
         libraryCache.allFolders = libraryCache.allFolders || [];
         libraryCache.allFolders.push({ id, parentId: currentFolderId, name });
       }
@@ -5120,17 +5142,24 @@
   }
 
   async function renameFolder(folder) {
-    const raw = await openNameSheet({ title: "Ordner umbenennen", label: "Name", initial: folder.name });
-    if (raw === null) return;
-    const name = raw.trim() || folder.name;
+    const res = await openNameSheet({
+      title: "Ordner umbenennen",
+      label: "Name",
+      initial: folder.name,
+      colors: true,
+      initialColor: folder.color || FOLDER_COLORS[0],
+    });
+    if (res === null) return;
+    const name = res.value.trim() || folder.name;
+    const color = res.color;
     try {
       await api("/api/folders/" + encodeURIComponent(folder.id), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, name }),
+        body: JSON.stringify({ personId: currentPersonId, name, color }),
       });
     } catch (err) {
-      await enqueueOp({ type: "folder_rename", personId: currentPersonId, id: folder.id, name });
+      await enqueueOp({ type: "folder_rename", personId: currentPersonId, id: folder.id, name, color });
     }
     refreshLibrary();
   }
@@ -5290,12 +5319,12 @@
       renameBtn.className = "danger";
       renameBtn.textContent = "Umbenennen";
       renameBtn.addEventListener("click", async () => {
-        const raw = await openNameSheet({ title: "Person umbenennen", label: "Name", initial: person.name });
-        if (raw === null || !raw.trim()) return;
+        const res = await openNameSheet({ title: "Person umbenennen", label: "Name", initial: person.name });
+        if (res === null || !res.value.trim()) return;
         await api("/api/admin/people/" + encodeURIComponent(person.id), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: raw.trim() }),
+          body: JSON.stringify({ name: res.value.trim() }),
         });
         await loadAdminPeople();
         await refreshPeople();
@@ -5424,17 +5453,113 @@
     libAddMenu.classList.add("hidden");
     createFolder();
   });
-  document.getElementById("btn-share-board")?.addEventListener("click", async () => {
+  // ---- Canvas-Kopfzeile: Teilen + Herunterladen in einem Menü ----------
+  const canvasMenu = document.getElementById("canvas-menu");
+  const canvasShareSubmenu = document.getElementById("canvas-share-submenu");
+
+  function closeCanvasMenus() {
+    canvasMenu.classList.add("hidden");
+    canvasShareSubmenu.classList.add("hidden");
+  }
+
+  function currentOpenBoard() {
+    return currentBoardMeta && currentBoardMeta.id === currentBoardId
+      ? currentBoardMeta
+      : { id: currentBoardId, sharedWith: [], ownerId: currentPersonId };
+  }
+
+  async function toggleShareWith(board, personId, on) {
+    try {
+      if (on) {
+        await api(
+          "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(personId) + "?person=" + encodeURIComponent(currentPersonId),
+          { method: "DELETE" }
+        );
+      } else {
+        await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, withPersonId: personId }),
+        });
+      }
+    } catch (err) {
+      await enqueueOp(
+        on
+          ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: personId }
+          : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: personId }
+      );
+    }
+    if (on) board.sharedWith = (board.sharedWith || []).filter((id) => id !== personId);
+    else board.sharedWith = [...(board.sharedWith || []), personId];
+  }
+
+  function openCanvasShareSubmenu(board) {
+    canvasShareSubmenu.innerHTML = "";
+    for (const p of PEOPLE) {
+      if (p.id === currentPersonId) continue;
+      const on = (board.sharedWith || []).includes(p.id);
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "lib-add-opt";
+      row.innerHTML =
+        `<span class="material-symbols-rounded" style="visibility:${on ? "visible" : "hidden"};">check</span>` +
+        `<span>${p.name}</span>`;
+      row.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const nowOn = (board.sharedWith || []).includes(p.id);
+        await toggleShareWith(board, p.id, nowOn);
+        openCanvasShareSubmenu(board);
+      });
+      canvasShareSubmenu.appendChild(row);
+    }
+    // links neben dem Hauptmenue oeffnen (mehr Platz zur Bildschirmmitte),
+    // rechts wenn links kein Platz mehr ist. #top-filename-bar hat einen
+    // transform/backdrop-filter, der fuer position:fixed-Kindelemente eine
+    // eigene Bezugsbox aufmacht - deshalb bleibt es bei position:absolute
+    // (wie schon bei .lib-add-menu) und wird relativ zum gemeinsamen
+    // offsetParent (canvas-menu-wrap) in Pixeln berechnet, nicht relativ
+    // zum Viewport.
+    canvasShareSubmenu.style.right = "auto";
+    canvasShareSubmenu.classList.remove("hidden");
+    const wrapRect = canvasMenu.offsetParent.getBoundingClientRect();
+    const menuRect = canvasMenu.getBoundingClientRect();
+    const subRect = canvasShareSubmenu.getBoundingClientRect();
+    const menuLeft = menuRect.left - wrapRect.left;
+    if (menuRect.left - subRect.width - 8 >= 0) {
+      canvasShareSubmenu.style.left = menuLeft - subRect.width - 8 + "px";
+    } else {
+      const maxLeft = window.innerWidth - wrapRect.left - subRect.width - 8;
+      canvasShareSubmenu.style.left = Math.min(menuRect.right - wrapRect.left + 8, maxLeft) + "px";
+    }
+    canvasShareSubmenu.style.top = menuRect.top - wrapRect.top + "px";
+  }
+
+  document.getElementById("btn-canvas-menu")?.addEventListener("click", (e) => {
+    e.stopPropagation();
     if (!currentBoardId) {
       showLibrary();
       return;
     }
-    const board = currentBoardMeta && currentBoardMeta.id === currentBoardId ? currentBoardMeta : { id: currentBoardId, sharedWith: [], ownerId: currentPersonId };
+    canvasShareSubmenu.classList.add("hidden");
+    canvasMenu.classList.toggle("hidden");
+  });
+  document.getElementById("canvas-menu-download")?.addEventListener("click", () => {
+    closeCanvasMenus();
+    downloadCurrentBoard();
+  });
+  document.getElementById("canvas-menu-share")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const board = currentOpenBoard();
     if (board.ownerId && board.ownerId !== currentPersonId) {
       window.alert("Nur " + personName(board.ownerId) + " kann dieses Blatt teilen.");
       return;
     }
-    openShare(board);
+    openCanvasShareSubmenu(board);
+  });
+  document.addEventListener("click", (e) => {
+    if (!document.getElementById("btn-canvas-menu").contains(e.target) && !canvasMenu.contains(e.target) && !canvasShareSubmenu.contains(e.target)) {
+      closeCanvasMenus();
+    }
   });
   document.getElementById("btn-share-close")?.addEventListener("click", () => shareBackdrop.classList.add("hidden"));
   document.getElementById("btn-move-close")?.addEventListener("click", () => moveBackdrop.classList.add("hidden"));
