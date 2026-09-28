@@ -5225,6 +5225,21 @@
       head.innerHTML =
         `<span>${escapeHtml(person.name)}</span>` +
         (person.isAdmin ? `<span class="admin-badge">Admin</span>` : "");
+      const renameBtn = document.createElement("button");
+      renameBtn.className = "danger";
+      renameBtn.textContent = "Umbenennen";
+      renameBtn.addEventListener("click", async () => {
+        const name = window.prompt("Neuer Name:", person.name);
+        if (!name || !name.trim()) return;
+        await api("/api/admin/people/" + encodeURIComponent(person.id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim() }),
+        });
+        await loadAdminPeople();
+        await refreshPeople();
+      });
+      head.appendChild(renameBtn);
       if (!person.isAdmin) {
         const delBtn = document.createElement("button");
         delBtn.className = "danger";

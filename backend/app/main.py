@@ -191,6 +191,14 @@ async def admin_create_person(payload: PersonCreate, _: dict = Depends(require_a
     return await db.create_person(name)
 
 
+@app.patch("/api/admin/people/{person_id}")
+async def admin_rename_person(person_id: str, payload: PersonCreate, _: dict = Depends(require_admin)) -> dict:
+    ok = await db.rename_person(person_id, payload.name)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
 @app.delete("/api/admin/people/{person_id}")
 async def admin_delete_person(person_id: str, admin: dict = Depends(require_admin)) -> dict:
     if person_id == admin["id"]:

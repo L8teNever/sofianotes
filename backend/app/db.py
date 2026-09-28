@@ -708,6 +708,15 @@ def _create_person_sync(name: str) -> dict[str, Any]:
     return {"id": person_id, "name": name, "isAdmin": False, "emails": []}
 
 
+def _rename_person_sync(person_id: str, name: str) -> bool:
+    name = (name or "").strip()
+    if not name:
+        return False
+    cur = _conn.execute("UPDATE people SET name = ? WHERE id = ?", (name, person_id))
+    _conn.commit()
+    return cur.rowcount > 0
+
+
 def _delete_person_sync(person_id: str) -> str | None:
     """Returns None on success, or an error code string."""
     if not _conn.execute("SELECT 1 FROM people WHERE id = ?", (person_id,)).fetchone():
@@ -768,6 +777,11 @@ async def ensure_admin(email: str) -> None:
 async def create_person(name: str) -> dict[str, Any]:
     async with _lock:
         return await asyncio.get_event_loop().run_in_executor(None, _create_person_sync, name)
+
+
+async def rename_person(person_id: str, name: str) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _rename_person_sync, person_id, name)
 
 
 async def delete_person(person_id: str) -> str | None:
