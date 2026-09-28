@@ -1308,3 +1308,88 @@ button {
   #canvas-filename { max-width: 92px; }
   .tool-btn { width: 40px; height: 40px; }
 }
+
+/* ---- Namens-Eingabe als Bottom-Sheet (Sofia-Look) ----------------------
+   Ersetzt die bisherigen window.prompt()-Dialoge beim Anlegen/Umbenennen
+   von Blaettern, Ordnern und Personen. CSS 1:1 aus components.css der
+   grossen Sofia-App (bottom-sheet/.m3-input/.m3-field/.m3-btn-*). */
+#name-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 300;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+#name-sheet-scrim.hidden { display: none; }
+#name-sheet-scrim .bottom-sheet {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  background: #fef7ff;
+  color: #1c1b1f;
+  border-radius: 28px 28px 0 0;
+  padding: 8px 24px calc(env(safe-area-inset-bottom, 0px) + 24px) 24px;
+  font-family: 'Google Sans', 'Inter', sans-serif;
+  box-shadow: 0 -4px 32px rgba(103, 80, 164, 0.12), 0 -1px 0 rgba(0, 0, 0, 0.06);
+}
+.sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+  margin: 8px auto 20px auto;
+}
+.sheet-title { font-size: 1.1rem; font-weight: 700; color: #1c1b1f; margin-bottom: 18px; }
+.m3-field { margin-bottom: 14px; }
+.m3-field-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #6750a4;
+  display: block;
+  margin-bottom: 6px;
+  margin-left: 4px;
+}
+.m3-input {
+  width: 100%;
+  background: #f3edf7;
+  border-radius: 14px;
+  padding: 15px 16px;
+  border: 1.5px solid transparent;
+  outline: none;
+  margin-bottom: 10px;
+  font-size: 16px;
+  font-family: inherit;
+  color: #1c1b1f;
+  transition: border-color 0.15s, background 0.15s;
+  box-sizing: border-box;
+}
+.m3-input::placeholder { color: #79747e; }
+.m3-input:focus { background: #fff; border-color: #6750a4; }
+.m3-sheet-actions { display: flex; gap: 10px; margin-top: 16px; }
+.m3-btn-outline {
+  background: transparent;
+  border: 1.5px solid rgba(103, 80, 164, 0.35);
+  color: #6750a4;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 12px 20px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.m3-btn-outline:active { transform: scale(0.96); background: rgba(103, 80, 164, 0.14); }
+.m3-btn-primary {
+  background: #6750a4;
+  border: none;
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 12px 20px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(103, 80, 164, 0.25);
+}
+.m3-btn-primary:active { transform: scale(0.96); }

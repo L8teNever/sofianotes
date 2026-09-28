@@ -351,6 +351,21 @@
   </div>
 </div>
 
+<div id="name-sheet-scrim" class="hidden">
+  <div class="bottom-sheet" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title" id="name-sheet-title">Name</div>
+    <div class="m3-field">
+      <label class="m3-field-label" id="name-sheet-label">Name</label>
+      <input class="m3-input" id="name-sheet-input" type="text" maxlength="80" />
+    </div>
+    <div class="m3-sheet-actions">
+      <button type="button" id="name-sheet-cancel" class="m3-btn-outline" style="flex:1;">Abbrechen</button>
+      <button type="button" id="name-sheet-save" class="m3-btn-primary" style="flex:1;">Speichern</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
   if (window.pdfjsLib) {

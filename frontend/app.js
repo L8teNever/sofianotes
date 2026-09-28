@@ -5017,8 +5017,47 @@
     }
   }
 
+  // ---- Sofia-Style Bottom-Sheet fuer Namenseingabe (ersetzt window.prompt) --
+  const nameSheetScrim = document.getElementById("name-sheet-scrim");
+  const nameSheetTitle = document.getElementById("name-sheet-title");
+  const nameSheetLabel = document.getElementById("name-sheet-label");
+  const nameSheetInput = document.getElementById("name-sheet-input");
+  const nameSheetCancel = document.getElementById("name-sheet-cancel");
+  const nameSheetSave = document.getElementById("name-sheet-save");
+  let nameSheetResolve = null;
+
+  function openNameSheet({ title, label, initial = "", placeholder = "" }) {
+    return new Promise((resolve) => {
+      nameSheetResolve = resolve;
+      nameSheetTitle.textContent = title;
+      nameSheetLabel.textContent = label;
+      nameSheetInput.value = initial;
+      nameSheetInput.placeholder = placeholder;
+      nameSheetScrim.classList.remove("hidden");
+      nameSheetInput.focus();
+      nameSheetInput.select();
+    });
+  }
+  function closeNameSheet(value) {
+    nameSheetScrim.classList.add("hidden");
+    const resolve = nameSheetResolve;
+    nameSheetResolve = null;
+    if (resolve) resolve(value);
+  }
+  nameSheetCancel.addEventListener("click", () => closeNameSheet(null));
+  nameSheetSave.addEventListener("click", () => closeNameSheet(nameSheetInput.value));
+  nameSheetScrim.addEventListener("click", (e) => {
+    if (e.target === nameSheetScrim) closeNameSheet(null);
+  });
+  nameSheetInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") closeNameSheet(nameSheetInput.value);
+    else if (e.key === "Escape") closeNameSheet(null);
+  });
+
   async function createBoard() {
-    const title = "Unbenannte Skizze";
+    const raw = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
+    if (raw === null) return;
+    const title = raw.trim() || "Unbenannte Skizze";
     try {
       const created = await api("/api/boards", {
         method: "POST",
@@ -5048,8 +5087,9 @@
   }
 
   async function createFolder() {
-    const name = window.prompt("Name für den Ordner", "Ordner");
-    if (name == null) return;
+    const raw = await openNameSheet({ title: "Neuer Ordner", label: "Name", initial: "Ordner" });
+    if (raw === null) return;
+    const name = raw.trim() || "Ordner";
     try {
       await api("/api/folders", {
         method: "POST",
@@ -5070,8 +5110,9 @@
   }
 
   async function renameFolder(folder) {
-    const name = window.prompt("Neuer Name", folder.name);
-    if (name == null) return;
+    const raw = await openNameSheet({ title: "Ordner umbenennen", label: "Name", initial: folder.name });
+    if (raw === null) return;
+    const name = raw.trim() || folder.name;
     try {
       await api("/api/folders/" + encodeURIComponent(folder.id), {
         method: "PATCH",
@@ -5239,12 +5280,12 @@
       renameBtn.className = "danger";
       renameBtn.textContent = "Umbenennen";
       renameBtn.addEventListener("click", async () => {
-        const name = window.prompt("Neuer Name:", person.name);
-        if (!name || !name.trim()) return;
+        const raw = await openNameSheet({ title: "Person umbenennen", label: "Name", initial: person.name });
+        if (raw === null || !raw.trim()) return;
         await api("/api/admin/people/" + encodeURIComponent(person.id), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim() }),
+          body: JSON.stringify({ name: raw.trim() }),
         });
         await loadAdminPeople();
         await refreshPeople();
