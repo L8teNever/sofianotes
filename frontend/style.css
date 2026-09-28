@@ -711,14 +711,15 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  border-radius: 16px;
+  padding: 10px 18px;
+  border-radius: 999px;
   background: #1c1b1f;
   color: #fff;
   font-size: 13px;
   font-weight: 600;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
   white-space: nowrap;
+  max-width: calc(100vw - 24px);
 }
 .update-banner.hidden { display: none; }
 .update-banner button {
@@ -1132,6 +1133,21 @@ button {
 .lib-icon-btn.hidden { display: none; }
 .lib-icon-btn i { width: 20px; height: 20px; }
 .lib-add-wrap { position: relative; flex-shrink: 0; }
+.lib-search-row { padding: 0 16px 12px; }
+.lib-search-row.hidden { display: none; }
+.lib-search-row input {
+  width: 100%;
+  background: #f3edf7;
+  border-radius: 14px;
+  padding: 11px 14px;
+  border: 1.5px solid transparent;
+  outline: none;
+  font-size: 14px;
+  font-family: 'Google Sans', 'Inter', sans-serif;
+  color: #1c1b1f;
+  box-sizing: border-box;
+}
+.lib-search-row input:focus { background: #fff; border-color: #6750a4; }
 .lib-add-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -1228,6 +1244,23 @@ button {
   color: inherit;
 }
 .library-item .row button i { width: 16px; height: 16px; }
+.lib-star-btn {
+  border: 0;
+  background: none;
+  opacity: 0.35;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: inherit;
+  cursor: pointer;
+}
+.lib-star-btn i { width: 18px; height: 18px; }
+.lib-star-btn.starred { opacity: 1; color: #f9ab00; }
+.lib-star-btn.starred svg { fill: #f9ab00; }
 .library-empty {
   color: var(--muted);
   text-align: center;

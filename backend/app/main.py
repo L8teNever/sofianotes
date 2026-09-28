@@ -336,6 +336,24 @@ async def place_board(request: Request, me: dict = Depends(get_current_person)) 
     return {"ok": True}
 
 
+@app.post("/api/boards/{board_id}/star")
+async def star_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
+    body = await _json_body(request)
+    ok = await db.star_board(me["id"], board_id, bool(body.get("starred")))
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
+@app.post("/api/folders/{folder_id}/star")
+async def star_folder(folder_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
+    body = await _json_body(request)
+    ok = await db.star_folder(me["id"], folder_id, bool(body.get("starred")))
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
 async def _json_body(request: Request) -> dict:
     try:
         body = await request.json()

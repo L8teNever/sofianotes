@@ -330,12 +330,18 @@
           </button>
         </div>
       </div>
+      <button type="button" id="btn-library-search" class="lib-icon-btn" title="Suchen">
+        <i data-lucide="search"></i>
+      </button>
       <button type="button" id="btn-library-switch" class="lib-icon-btn" title="Wechseln">
         <i data-lucide="users"></i>
       </button>
       <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Schließen">
         <i data-lucide="x"></i>
       </button>
+    </div>
+    <div id="lib-search-row" class="lib-search-row hidden">
+      <input id="lib-search-input" type="text" placeholder="Suchen…" autocomplete="off" autocorrect="off" spellcheck="false" name="lib-search" />
     </div>
     <div id="library-list" class="library-list"></div>
   </div>

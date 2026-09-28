@@ -1380,6 +1380,7 @@
   let currentBoardId = "";
   let currentBoardMeta = null;
   let currentFolderId = null;
+  let librarySearchQuery = "";
   let libraryCache = null;
   const whoBackdrop = document.getElementById("who-backdrop");
   const libraryBackdrop = document.getElementById("library-backdrop");
@@ -4942,16 +4943,19 @@
     }
     const list = document.getElementById("library-list");
     list.innerHTML = "";
-    for (const folder of libraryCache.folders || []) {
+    const searchQ = librarySearchQuery.trim().toLowerCase();
+    const folders = (libraryCache.folders || []).filter((f) => !searchQ || f.name.toLowerCase().includes(searchQ));
+    const boards = (libraryCache.boards || []).filter((b) => !searchQ || b.title.toLowerCase().includes(searchQ));
+    for (const folder of folders) {
       list.appendChild(folderCard(folder));
     }
-    for (const board of libraryCache.boards || []) {
+    for (const board of boards) {
       list.appendChild(boardCard(board));
     }
-    if (!(libraryCache.folders || []).length && !(libraryCache.boards || []).length) {
+    if (!folders.length && !boards.length) {
       const empty = document.createElement("div");
       empty.className = "library-empty";
-      empty.textContent = "Noch leer. Leg ein Blatt oder einen Ordner an.";
+      empty.textContent = searchQ ? "Nichts gefunden." : "Noch leer. Leg ein Blatt oder einen Ordner an.";
       list.appendChild(empty);
     }
     if (window.lucide) lucide.createIcons();
@@ -4977,6 +4981,19 @@
     return box;
   }
 
+  function starBtn(starred, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.title = starred ? "Favorit entfernen" : "Als Favorit markieren";
+    b.className = "lib-star-btn" + (starred ? " starred" : "");
+    b.innerHTML = `<i data-lucide="star"></i>`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return b;
+  }
+
   function folderCard(folder) {
     const el = document.createElement("div");
     el.className = "library-item";
@@ -4988,6 +5005,17 @@
     el.addEventListener("click", () => {
       navigateToFolder(folder.id);
     });
+    el.appendChild(
+      starBtn(folder.starred, async () => {
+        folder.starred = !folder.starred;
+        await api("/api/folders/" + encodeURIComponent(folder.id) + "/star", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ starred: folder.starred }),
+        });
+        refreshLibrary();
+      })
+    );
     const row = document.createElement("div");
     row.className = "row";
     row.appendChild(iconBtn("pencil", "Umbenennen", () => renameFolder(folder)));
@@ -5009,6 +5037,17 @@
     el.querySelector("strong").textContent = board.title;
     el.querySelector(".meta").textContent = meta;
     el.addEventListener("click", () => openBoard(board.id, board.title));
+    el.appendChild(
+      starBtn(board.starred, async () => {
+        board.starred = !board.starred;
+        await api("/api/boards/" + encodeURIComponent(board.id) + "/star", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ starred: board.starred }),
+        });
+        refreshLibrary();
+      })
+    );
     const row = document.createElement("div");
     row.className = "row";
     row.appendChild(iconBtn("folder-open", "In Ordner legen", () => openMove("board", board.id)));
@@ -5021,7 +5060,13 @@
   }
 
   async function openBoard(id, title) {
-    if (currentBoardId && currentBoardId !== id) {
+    // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
+    // Boards: eine noch offene WS-Verbindung wuerde sonst keine frische
+    // "init"-Nachricht mehr bekommen (connectWS() ist dann ein No-Op), und
+    // currentBoardMeta bliebe fuer immer auf dem Platzhalter unten stehen -
+    // z.B. eine Freigabe, die laengst besteht, wuerde nach dem Verlassen
+    // und Wiederbetreten des Boards nicht mehr angezeigt.
+    if (currentBoardId) {
       boardStrokes.clear();
       clearSelection();
       undoStack.length = 0;
@@ -5447,6 +5492,22 @@
   document.getElementById("btn-open-library")?.addEventListener("click", showLibrary);
   document.getElementById("btn-library-close")?.addEventListener("click", hideLibrary);
   document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
+  const libSearchRow = document.getElementById("lib-search-row");
+  const libSearchInput = document.getElementById("lib-search-input");
+  document.getElementById("btn-library-search")?.addEventListener("click", () => {
+    libSearchRow.classList.toggle("hidden");
+    if (!libSearchRow.classList.contains("hidden")) {
+      libSearchInput.focus();
+    } else {
+      libSearchInput.value = "";
+      librarySearchQuery = "";
+      refreshLibrary();
+    }
+  });
+  libSearchInput?.addEventListener("input", () => {
+    librarySearchQuery = libSearchInput.value;
+    refreshLibrary();
+  });
   document.getElementById("btn-library-home")?.addEventListener("click", () => {
     if (currentFolderId && libraryCache && libraryCache.crumbs.length) {
       const prev = libraryCache.crumbs[libraryCache.crumbs.length - 1];
@@ -5618,6 +5679,7 @@
     }
     currentPersonId = me.id;
     isAdmin = !!me.isAdmin;
+    document.getElementById("btn-library-switch")?.classList.toggle("hidden", !isAdmin);
     localStorage.setItem("sofianotes-person", currentPersonId);
     currentFolderId = new URLSearchParams(location.search).get("folder") || null;
     await refreshPeople();

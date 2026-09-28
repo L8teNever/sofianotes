@@ -138,6 +138,11 @@ def _init_sync() -> None:
     folder_cols = {row[1] for row in _conn.execute("PRAGMA table_info(folders)").fetchall()}
     if "color" not in folder_cols:
         _conn.execute(f"ALTER TABLE folders ADD COLUMN color TEXT DEFAULT '{DEFAULT_FOLDER_COLOR}'")
+    if "starred" not in folder_cols:
+        _conn.execute("ALTER TABLE folders ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    placement_cols = {row[1] for row in _conn.execute("PRAGMA table_info(placements)").fetchall()}
+    if "starred" not in placement_cols:
+        _conn.execute("ALTER TABLE placements ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
     _migrate_legacy_sync()
     _conn.commit()
 
@@ -390,24 +395,31 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     folders = []
     cur = _conn.execute(
         """
-        SELECT id, parent_id, name, sort_order, color FROM folders
+        SELECT id, parent_id, name, sort_order, color, starred FROM folders
         WHERE person_id = ? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)
-        ORDER BY sort_order ASC, name COLLATE NOCASE ASC
+        ORDER BY starred DESC, sort_order ASC, name COLLATE NOCASE ASC
         """,
         (person_id, folder_id, folder_id),
     )
     for row in cur.fetchall():
         folders.append(
-            {"id": row[0], "parentId": row[1], "name": row[2], "sortOrder": row[3], "color": row[4] or DEFAULT_FOLDER_COLOR}
+            {
+                "id": row[0],
+                "parentId": row[1],
+                "name": row[2],
+                "sortOrder": row[3],
+                "color": row[4] or DEFAULT_FOLDER_COLOR,
+                "starred": bool(row[5]),
+            }
         )
     boards = []
     cur = _conn.execute(
         """
-        SELECT b.id, b.owner_id, b.title, b.created_at, b.updated_at, p.folder_id, p.sort_order
+        SELECT b.id, b.owner_id, b.title, b.created_at, b.updated_at, p.folder_id, p.sort_order, p.starred
         FROM placements p
         JOIN boards b ON b.id = p.board_id
         WHERE p.person_id = ? AND ((p.folder_id IS NULL AND ? IS NULL) OR p.folder_id = ?)
-        ORDER BY p.sort_order ASC, b.updated_at DESC
+        ORDER BY p.starred DESC, p.sort_order ASC, b.updated_at DESC
         """,
         (person_id, folder_id, folder_id),
     )
@@ -425,6 +437,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
                 "updatedAt": row[4],
                 "folderId": row[5],
                 "sortOrder": row[6],
+                "starred": bool(row[7]),
                 "shared": row[1] != person_id,
                 "sharedWith": shared_with,
             }
@@ -658,6 +671,26 @@ def _place_board_sync(person_id: str, board_id: str, folder_id: str | None) -> b
         )
     _conn.commit()
     return True
+
+
+def _star_board_sync(person_id: str, board_id: str, starred: bool) -> bool:
+    if not _can_access_sync(person_id, board_id):
+        return False
+    cur = _conn.execute(
+        "UPDATE placements SET starred = ? WHERE person_id = ? AND board_id = ?",
+        (1 if starred else 0, person_id, board_id),
+    )
+    _conn.commit()
+    return cur.rowcount > 0
+
+
+def _star_folder_sync(person_id: str, folder_id: str, starred: bool) -> bool:
+    cur = _conn.execute(
+        "UPDATE folders SET starred = ? WHERE id = ? AND person_id = ?",
+        (1 if starred else 0, folder_id, person_id),
+    )
+    _conn.commit()
+    return cur.rowcount > 0
 
 
 def _people_sync() -> list[dict[str, Any]]:
@@ -901,3 +934,13 @@ async def delete_folder(person_id: str, folder_id: str) -> bool:
 async def place_board(person_id: str, board_id: str, folder_id: str | None) -> bool:
     async with _lock:
         return await asyncio.get_event_loop().run_in_executor(None, _place_board_sync, person_id, board_id, folder_id)
+
+
+async def star_board(person_id: str, board_id: str, starred: bool) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _star_board_sync, person_id, board_id, starred)
+
+
+async def star_folder(person_id: str, folder_id: str, starred: bool) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _star_folder_sync, person_id, folder_id, starred)
