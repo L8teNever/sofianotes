@@ -296,6 +296,7 @@ button {
 #status.offline #status-text { color: #5f6368; }
 #status.sync .dot { background: #f9ab00; }
 #status.sync #status-text { color: #b06000; }
+#status.hidden { display: none; }
 
 /* ---- undo/zoom dock ---- */
 #undo-redo-dock {
@@ -1157,6 +1158,8 @@ button {
   text-align: left;
 }
 .lib-add-opt:hover { background: rgba(103, 80, 164, 0.08); }
+.lib-add-opt.shared { background: #d3e3fd; font-weight: 700; }
+.lib-add-opt.shared:hover { background: #bdd3f7; }
 .lib-add-opt + .lib-add-opt { border-top: 1px solid rgba(0, 0, 0, 0.05); }
 .lib-add-opt i { width: 18px; height: 18px; color: #6750a4; flex-shrink: 0; }
 .lib-add-opt .material-symbols-rounded { font-size: 18px; color: #6750a4; flex-shrink: 0; }

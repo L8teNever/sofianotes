@@ -1413,6 +1413,7 @@
     statusEl.classList.toggle("connected", mode === "live");
     statusEl.classList.toggle("offline", mode === "offline");
     statusEl.classList.toggle("sync", mode === "sync");
+    statusEl.classList.toggle("hidden", mode !== "offline");
     statusTextEl.textContent = mode === "live" ? "Live" : mode === "sync" ? "Sync…" : "Offline";
   }
 
@@ -4888,6 +4889,26 @@
     libraryBackdrop.classList.add("hidden");
   }
 
+  function folderUrl(folderId) {
+    const url = new URL(location.href);
+    if (folderId) url.searchParams.set("folder", folderId);
+    else url.searchParams.delete("folder");
+    return url.pathname + url.search;
+  }
+
+  function navigateToFolder(folderId, push = true) {
+    currentFolderId = folderId || null;
+    if (push) history.pushState({ folderId: currentFolderId }, "", folderUrl(currentFolderId));
+    refreshLibrary();
+  }
+
+  window.addEventListener("popstate", (e) => {
+    if (!currentBoardId) {
+      currentFolderId = (e.state && e.state.folderId) || null;
+      refreshLibrary();
+    }
+  });
+
   async function refreshLibrary() {
     if (!currentPersonId) return;
     const key = "lib:" + currentPersonId + ":" + (currentFolderId || "");
@@ -4965,8 +4986,7 @@
     el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta">Ordner</span></div>`);
     el.querySelector("strong").textContent = folder.name;
     el.addEventListener("click", () => {
-      currentFolderId = folder.id;
-      refreshLibrary();
+      navigateToFolder(folder.id);
     });
     const row = document.createElement("div");
     row.className = "row";
@@ -5424,16 +5444,14 @@
     await refreshPeople();
   });
 
-  document.getElementById("btn-who-chip")?.addEventListener("click", openAdminPanel);
   document.getElementById("btn-open-library")?.addEventListener("click", showLibrary);
   document.getElementById("btn-library-close")?.addEventListener("click", hideLibrary);
   document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
   document.getElementById("btn-library-home")?.addEventListener("click", () => {
     if (currentFolderId && libraryCache && libraryCache.crumbs.length) {
       const prev = libraryCache.crumbs[libraryCache.crumbs.length - 1];
-      currentFolderId = prev.parentId || null;
-    } else currentFolderId = null;
-    refreshLibrary();
+      navigateToFolder(prev.parentId || null);
+    } else navigateToFolder(null);
   });
   const libAddMenu = document.getElementById("lib-add-menu");
   document.getElementById("btn-library-add")?.addEventListener("click", (e) => {
@@ -5500,7 +5518,8 @@
       const on = (board.sharedWith || []).includes(p.id);
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "lib-add-opt";
+      row.className = "lib-add-opt" + (on ? " shared" : "");
+      row.title = on ? "Freigabe entfernen" : "Freigeben";
       row.innerHTML =
         `<span class="material-symbols-rounded" style="visibility:${on ? "visible" : "hidden"};">check</span>` +
         `<span>${p.name}</span>`;
@@ -5600,6 +5619,7 @@
     currentPersonId = me.id;
     isAdmin = !!me.isAdmin;
     localStorage.setItem("sofianotes-person", currentPersonId);
+    currentFolderId = new URLSearchParams(location.search).get("folder") || null;
     await refreshPeople();
     hideWho();
     syncWhoChip();
