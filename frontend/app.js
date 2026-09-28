@@ -5383,8 +5383,6 @@
     currentPersonId = me.id;
     isAdmin = !!me.isAdmin;
     localStorage.setItem("sofianotes-person", currentPersonId);
-    whoChip.title = isAdmin ? "Personen verwalten" : "";
-    document.getElementById("btn-library-switch")?.classList.toggle("hidden", !isAdmin);
     await refreshPeople();
     hideWho();
     syncWhoChip();
