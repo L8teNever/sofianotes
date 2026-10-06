@@ -25,6 +25,7 @@ import logging
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any
@@ -188,3 +189,120 @@ async def current_lesson(person_id: str) -> dict[str, Any]:
     current = next((l for l in lessons if int(l.get("startTime") or 0) <= hm < int(l.get("endTime") or 0)), None)
     upcoming = next((l for l in lessons if int(l.get("startTime") or 0) > hm), None)
     return {"enabled": True, "linked": True, "current": pack(current), "next": pack(upcoming)}
+
+
+# ---- Hausaufgaben -------------------------------------------------------------
+def _send(method: str, path: str, act_as: str) -> Any:
+    headers = {"X-Internal-Token": _token(), "Accept": "application/json", "X-Act-As-Email": act_as}
+    req = urllib.request.Request(API_BASE + path, method=method, headers=headers, data=b"" if method == "POST" else None)
+    with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8") or "null")
+
+
+def _subject_by_id(sid: Any) -> dict[str, Any] | None:
+    for s in _subjects:
+        if s.get("id") == sid:
+            return s
+    return None
+
+
+def _att_list(hw: dict[str, Any]) -> list[dict[str, Any]]:
+    out = []
+    for a in hw.get("attachments") or []:
+        url = str(a.get("url") or "")
+        if not url.startswith("/uploads/"):
+            continue
+        name = a.get("name") or url.rsplit("/", 1)[-1]
+        kind = a.get("type") or "file"
+        if kind != "image" and url.lower().rsplit(".", 1)[-1] in ("jpg", "jpeg", "png", "gif", "webp", "heic"):
+            kind = "image"
+        out.append({"url": "/api/sofia/file?u=" + urllib.parse.quote(url, safe=""), "type": kind, "name": name})
+    return out
+
+
+def _pack_homework(hw: dict[str, Any], info: dict[str, Any], boards: dict[int, str]) -> dict[str, Any]:
+    subj = _subject_by_id(hw.get("subject_id")) or {}
+    sid = hw.get("subject_id")
+    return {
+        "id": hw.get("id"),
+        "subjectId": sid,
+        "subject": subj.get("name") or "",
+        "subjectShort": subj.get("short_name") or "",
+        "color": subj.get("color") or "#6750a4",
+        "description": hw.get("description") or "",
+        "due": hw.get("due_date") or "",
+        "done": info["sofiaUserId"] in (hw.get("checked_by") or []),
+        "attachments": _att_list(hw),
+        "folderId": info["folders"].get(sid),
+        "boardId": boards.get(hw.get("id")),
+    }
+
+
+async def _homework_ctx(person_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    if not enabled():
+        return None, "disabled"
+    info = await db.sofia_person(person_id)
+    if not info or not info.get("email"):
+        return None, "not_linked"
+    if not _subjects:
+        await sync_once()
+    return info, None
+
+
+async def homework_list(person_id: str) -> dict[str, Any]:
+    info, err = await _homework_ctx(person_id)
+    if err:
+        return {"enabled": err != "disabled", "error": err, "items": []}
+    try:
+        items = await asyncio.get_event_loop().run_in_executor(None, _get, "/homework/", info["email"])
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "error": type(exc).__name__, "items": []}
+    boards = await db.homework_boards(person_id)
+    today = datetime.now(ZoneInfo(TZ_NAME)).strftime("%Y-%m-%d")
+    out = []
+    for hw in items if isinstance(items, list) else []:
+        p = _pack_homework(hw, info, boards)
+        # erledigte nur, solange sie noch nicht vorbei sind; offene immer
+        if p["done"] and p["due"] and p["due"][:10] < today:
+            continue
+        out.append(p)
+    out.sort(key=lambda h: (h["done"], h["due"] or "9999", h["id"] or 0))
+    return {"enabled": True, "items": out, "today": today}
+
+
+async def homework_get(person_id: str, hw_id: int) -> dict[str, Any] | None:
+    info, err = await _homework_ctx(person_id)
+    if err:
+        return None
+    try:
+        hw = await asyncio.get_event_loop().run_in_executor(None, _get, f"/homework/{hw_id}", info["email"])
+    except Exception:  # noqa: BLE001
+        return None
+    boards = await db.homework_boards(person_id)
+    return _pack_homework(hw, info, boards)
+
+
+async def homework_toggle(person_id: str, hw_id: int) -> dict[str, Any] | None:
+    info, err = await _homework_ctx(person_id)
+    if err:
+        return None
+    try:
+        res = await asyncio.get_event_loop().run_in_executor(None, _send, "POST", f"/homework/{hw_id}/check", info["email"])
+    except Exception:  # noqa: BLE001
+        return None
+    return {"done": bool((res or {}).get("checked"))}
+
+
+def _fetch_file(path: str) -> tuple[bytes, str]:
+    req = urllib.request.Request(API_BASE.rsplit("/api/", 1)[0] + path, headers={"X-Internal-Token": _token()})
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
+        return resp.read(), resp.headers.get("Content-Type") or "application/octet-stream"
+
+
+async def fetch_file(path: str) -> tuple[bytes, str] | None:
+    if not enabled() or not path.startswith("/uploads/") or ".." in path:
+        return None
+    try:
+        return await asyncio.get_event_loop().run_in_executor(None, _fetch_file, path)
+    except Exception:  # noqa: BLE001
+        return None

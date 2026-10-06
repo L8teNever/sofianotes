@@ -203,6 +203,49 @@ async def sofia_status(_: dict = Depends(get_current_person)) -> dict:
     return {"enabled": sofia_sync.enabled(), **sofia_sync.state}
 
 
+@app.get("/api/sofia/homework")
+async def sofia_homework(person: dict = Depends(get_current_person)) -> dict:
+    return await sofia_sync.homework_list(person["id"])
+
+
+@app.get("/api/sofia/homework/{hw_id}")
+async def sofia_homework_one(hw_id: int, person: dict = Depends(get_current_person)) -> dict:
+    hw = await sofia_sync.homework_get(person["id"], hw_id)
+    if hw is None:
+        raise HTTPException(status_code=404, detail="Hausaufgabe nicht gefunden")
+    return hw
+
+
+@app.post("/api/sofia/homework/{hw_id}/check")
+async def sofia_homework_check(hw_id: int, person: dict = Depends(get_current_person)) -> dict:
+    res = await sofia_sync.homework_toggle(person["id"], hw_id)
+    if res is None:
+        raise HTTPException(status_code=502, detail="Sofia nicht erreichbar")
+    return res
+
+
+@app.post("/api/sofia/homework/{hw_id}/board")
+async def sofia_homework_board(hw_id: int, person: dict = Depends(get_current_person)) -> dict:
+    """Blatt zur Hausaufgabe oeffnen (bzw. beim ersten Mal im Fach-Ordner anlegen)."""
+    hw = await sofia_sync.homework_get(person["id"], hw_id)
+    if hw is None:
+        raise HTTPException(status_code=404, detail="Hausaufgabe nicht gefunden")
+    text = " ".join(hw["description"].split())
+    short = text[:40].rstrip() + ("…" if len(text) > 40 else "")
+    title = (hw["subject"] + " – " if hw["subject"] else "") + (short or "Hausaufgabe")
+    res = await db.homework_board(person["id"], hw_id, title, hw.get("folderId"))
+    return {"ok": True, "boardId": res["id"], "created": res["created"], "title": title}
+
+
+@app.get("/api/sofia/file")
+async def sofia_file(u: str, _: dict = Depends(get_current_person)) -> Response:
+    got = await sofia_sync.fetch_file(u)
+    if got is None:
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+    data, ctype = got
+    return Response(content=data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+
+
 @app.post("/api/sofia/sync")
 async def sofia_sync_now(_: dict = Depends(require_admin)) -> dict:
     return await sofia_sync.sync_once(force=True)

@@ -87,3 +87,40 @@ class SofiaSyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HomeworkTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+        run(db.add_person_email("simon", "l8tenever@gmail.com"))
+        run(db.apply_sofia_sync(snapshot()))
+        sofia_sync._subjects = snapshot()["subjects"]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_board_per_homework_in_subject_folder(self):
+        info = run(db.sofia_person("simon"))
+        folder = info["folders"][5]
+        a = run(db.homework_board("simon", 42, "Mathematik – S. 12", folder))
+        b = run(db.homework_board("simon", 42, "egal", folder))
+        self.assertTrue(a["created"])
+        self.assertFalse(b["created"])
+        self.assertEqual(a["id"], b["id"])
+        lib = run(db.library("simon", folder))
+        self.assertEqual([x["title"] for x in lib["boards"]], ["Mathematik – S. 12"])
+        self.assertEqual(run(db.get_board(a["id"]))["sofiaHomeworkId"], 42)
+
+    def test_pack_homework(self):
+        info = run(db.sofia_person("simon"))
+        hw = {
+            "id": 42, "subject_id": 5, "description": "S. 12 Nr. 3", "due_date": "2026-10-08",
+            "checked_by": [1], "attachments": [{"url": "/uploads/homework/a.png", "type": "image", "name": "Blatt"}, {"url": "http://evil/x", "type": "file"}],
+        }
+        p = sofia_sync._pack_homework(hw, info, {42: "board-1"})
+        self.assertTrue(p["done"])
+        self.assertEqual(p["subject"], "Mathematik")
+        self.assertEqual(p["boardId"], "board-1")
+        self.assertEqual(len(p["attachments"]), 1)
+        self.assertTrue(p["attachments"][0]["url"].startswith("/api/sofia/file?u="))

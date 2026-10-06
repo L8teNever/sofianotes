@@ -2062,6 +2062,7 @@
           currentBoardMeta = msg.board;
           if (filenameInput) filenameInput.value = msg.board.title || "Unbenannte Skizze";
           document.title = (msg.board.title || "sofianotes") + " – sofianotes";
+          syncHomeworkPanel(msg.board);
         }
         boardStrokes.clear();
         for (const s of msg.strokes) {
@@ -8711,15 +8712,21 @@
 
   function showLibrary(opts) {
     hideWho();
+    if (typeof hwPanel !== "undefined" && hwPanel) {
+      hwPanel.classList.add("hidden");
+      hwPill.classList.add("hidden");
+    }
     libraryBackdrop.classList.remove("hidden");
     document.getElementById("btn-library-close").classList.toggle("hidden", !currentBoardId);
     if (!(opts && opts.fromHistory)) syncUrl(true);
     refreshLibrary();
     startSofiaNow();
+    refreshHomework();
   }
 
   function hideLibrary(opts) {
     libraryBackdrop.classList.add("hidden");
+    if (typeof hwBoard !== "undefined" && hwBoard && currentBoardId) applyHwPanelState(hwPanelState(currentBoardId));
     if (!(opts && opts.fromHistory) && currentBoardId) syncUrl(true);
   }
 
@@ -8873,7 +8880,10 @@
     refreshSofiaNow();
     clearInterval(sofiaNowTimer);
     sofiaNowTimer = setInterval(() => {
-      if (!libraryBackdrop.classList.contains("hidden")) refreshSofiaNow();
+      if (!libraryBackdrop.classList.contains("hidden")) {
+        refreshSofiaNow();
+        refreshHomework();
+      }
     }, 60000);
   }
   // Welcher Ordner leuchtet: das laufende Fach, sonst das naechste (in den naechsten 20 Min.)
@@ -8892,6 +8902,450 @@
     }
     return null;
   }
+
+  // ---- Hausaufgaben aus Sofia ---------------------------------------------------
+  // Startseite: Knopf mit Anzahl offener Aufgaben -> Liste -> Detail (Text, Bilder).
+  // "Auf Blatt bearbeiten" legt pro Aufgabe ein Blatt im Fach-Ordner an; dort steht die
+  // Aufgabenstellung in einem verschiebbaren, minimierbaren Fenster neben dem Schreiben.
+  const hwBtn = document.getElementById("btn-library-homework");
+  const hwCountEl = document.getElementById("hw-count");
+  const hwScrim = document.getElementById("hw-scrim");
+  const hwListEl = document.getElementById("hw-list");
+  const hwDetailEl = document.getElementById("hw-detail");
+  let hwData = null;
+  let hwDetailId = null;
+
+  async function refreshHomework() {
+    try {
+      const r = await fetch("/api/sofia/homework", { credentials: "same-origin" });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!data.enabled || data.error === "not_linked") {
+        hwBtn?.classList.add("hidden");
+        return;
+      }
+      hwData = data;
+      hwBtn?.classList.remove("hidden");
+      syncHomeworkBadge();
+      if (!hwScrim.classList.contains("hidden")) {
+        if (hwDetailId != null) {
+          const hw = hwFind(hwDetailId);
+          if (hw) renderHwDetail(hw);
+        } else renderHwList();
+      }
+    } catch (err) {
+      /* offline: Knopf bleibt wie er ist */
+    }
+  }
+  function hwFind(id) {
+    return ((hwData && hwData.items) || []).find((h) => h.id === id) || null;
+  }
+  function syncHomeworkBadge() {
+    const open = ((hwData && hwData.items) || []).filter((h) => !h.done).length;
+    if (!hwCountEl) return;
+    hwCountEl.textContent = String(open);
+    hwCountEl.classList.toggle("hidden", open === 0);
+  }
+  function hwDueLabel(due) {
+    if (!due) return "Ohne Datum";
+    const d = new Date(due.slice(0, 10) + "T12:00:00");
+    const t = new Date();
+    t.setHours(12, 0, 0, 0);
+    const days = Math.round((d - t) / 86400000);
+    if (days < 0) return "Überfällig";
+    if (days === 0) return "Heute";
+    if (days === 1) return "Morgen";
+    return d.toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" });
+  }
+  function hwToggleDone(hw) {
+    const was = hw.done;
+    optimistic({
+      apply: () => {
+        hw.done = !was;
+        syncHomeworkBadge();
+        rerenderHw();
+      },
+      revert: () => {
+        hw.done = was;
+        syncHomeworkBadge();
+        rerenderHw();
+      },
+      request: () =>
+        api("/api/sofia/homework/" + hw.id + "/check", { method: "POST" }).then((res) => {
+          if (res && typeof res.done === "boolean" && res.done !== hw.done) {
+            hw.done = res.done;
+            syncHomeworkBadge();
+            rerenderHw();
+          }
+        }),
+      failText: "Abhaken hat nicht geklappt",
+    });
+  }
+  function rerenderHw() {
+    if (hwScrim.classList.contains("hidden")) return;
+    if (hwDetailId != null) {
+      const hw = hwFind(hwDetailId);
+      if (hw) renderHwDetail(hw);
+    } else renderHwList();
+  }
+  function hwCheckBtn(hw) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "hw-check" + (hw.done ? " done" : "");
+    b.title = hw.done ? "Wieder als offen markieren" : "Als erledigt abhaken";
+    b.innerHTML = '<span class="material-symbols-rounded">' + (hw.done ? "check_circle" : "radio_button_unchecked") + "</span>";
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hwToggleDone(hw);
+    });
+    return b;
+  }
+  function renderHwList() {
+    hwDetailId = null;
+    document.getElementById("hw-title").textContent = "Hausaufgaben";
+    document.getElementById("hw-back").classList.add("hidden");
+    hwDetailEl.classList.add("hidden");
+    hwListEl.classList.remove("hidden");
+    hwListEl.innerHTML = "";
+    const items = (hwData && hwData.items) || [];
+    if (!hwData) {
+      hwListEl.innerHTML = '<div class="hw-empty">Lädt…</div>';
+      return;
+    }
+    if (!items.length) {
+      hwListEl.innerHTML = '<div class="hw-empty"><span class="material-symbols-rounded">check_circle</span><strong>Alles erledigt</strong><span>Gerade gibt es keine offenen Hausaufgaben.</span></div>';
+      return;
+    }
+    let lastGroup = null;
+    for (const hw of items) {
+      const group = hw.done ? "Erledigt" : hwDueLabel(hw.due);
+      if (group !== lastGroup) {
+        const h = document.createElement("div");
+        h.className = "hw-group" + (group === "Überfällig" ? " late" : "");
+        h.textContent = group;
+        hwListEl.appendChild(h);
+        lastGroup = group;
+      }
+      const row = document.createElement("div");
+      row.className = "hw-item" + (hw.done ? " done" : "");
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.style.setProperty("--subj", hw.color);
+      row.appendChild(hwCheckBtn(hw));
+      const text = document.createElement("div");
+      text.className = "hw-item-text";
+      text.innerHTML = '<span class="hw-item-subj"></span><span class="hw-item-desc"></span><span class="hw-item-meta"></span>';
+      text.querySelector(".hw-item-subj").textContent = hw.subject || "Fach";
+      text.querySelector(".hw-item-desc").textContent = hw.description || "(ohne Text)";
+      const meta = [];
+      const imgs = hw.attachments.filter((a) => a.type === "image").length;
+      const files = hw.attachments.length - imgs;
+      if (imgs) meta.push(imgs === 1 ? "1 Bild" : imgs + " Bilder");
+      if (files) meta.push(files === 1 ? "1 Datei" : files + " Dateien");
+      if (hw.boardId) meta.push("Blatt angelegt");
+      text.querySelector(".hw-item-meta").textContent = meta.join(" · ");
+      row.appendChild(text);
+      row.insertAdjacentHTML("beforeend", '<span class="material-symbols-rounded hw-item-chev">chevron_right</span>');
+      row.addEventListener("click", () => renderHwDetail(hw));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") renderHwDetail(hw);
+      });
+      hwListEl.appendChild(row);
+    }
+  }
+  function hwAttachmentsHtml(container, hw) {
+    const imgs = hw.attachments.filter((a) => a.type === "image");
+    const files = hw.attachments.filter((a) => a.type !== "image");
+    if (imgs.length) {
+      const grid = document.createElement("div");
+      grid.className = "hw-images";
+      for (const a of imgs) {
+        const im = document.createElement("img");
+        im.src = a.url;
+        im.alt = a.name || "Bild";
+        im.loading = "lazy";
+        im.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openLightbox(a.url);
+        });
+        grid.appendChild(im);
+      }
+      container.appendChild(grid);
+    }
+    for (const a of files) {
+      const l = document.createElement("a");
+      l.className = "hw-file";
+      l.href = a.url;
+      l.target = "_blank";
+      l.rel = "noopener";
+      l.innerHTML = '<span class="material-symbols-rounded">attach_file</span><span></span>';
+      l.lastChild.textContent = a.name || "Datei";
+      container.appendChild(l);
+    }
+  }
+  function renderHwDetail(hw) {
+    hwDetailId = hw.id;
+    document.getElementById("hw-title").textContent = hw.subject || "Hausaufgabe";
+    document.getElementById("hw-back").classList.remove("hidden");
+    hwListEl.classList.add("hidden");
+    hwDetailEl.classList.remove("hidden");
+    hwDetailEl.innerHTML = "";
+    hwDetailEl.style.setProperty("--subj", hw.color);
+    const head = document.createElement("div");
+    head.className = "hw-detail-head";
+    head.innerHTML = '<span class="hw-subject-chip"></span><span class="hw-due"></span>';
+    head.firstChild.textContent = hw.subject || "Fach";
+    head.lastChild.textContent = "Fällig: " + hwDueLabel(hw.due) + (hw.due ? " (" + new Date(hw.due.slice(0, 10) + "T12:00:00").toLocaleDateString("de-DE") + ")" : "");
+    hwDetailEl.appendChild(head);
+    const desc = document.createElement("div");
+    desc.className = "hw-desc";
+    desc.textContent = hw.description || "(ohne Text)";
+    hwDetailEl.appendChild(desc);
+    hwAttachmentsHtml(hwDetailEl, hw);
+    const actions = document.createElement("div");
+    actions.className = "m3-sheet-actions hw-actions";
+    const done = document.createElement("button");
+    done.type = "button";
+    done.className = "m3-btn-outline";
+    done.textContent = hw.done ? "Wieder offen" : "Erledigt";
+    done.addEventListener("click", () => hwToggleDone(hw));
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "m3-btn-primary";
+    open.textContent = hw.boardId ? "Blatt öffnen" : "Auf Blatt bearbeiten";
+    open.addEventListener("click", () => openHomeworkBoard(hw, open));
+    actions.append(done, open);
+    hwDetailEl.appendChild(actions);
+  }
+  async function openHomeworkBoard(hw, btn) {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Öffne…";
+    }
+    try {
+      const res = await api("/api/sofia/homework/" + hw.id + "/board", { method: "POST" });
+      hw.boardId = res.boardId;
+      closeHomework();
+      libMem.clear();
+      await openBoard(res.boardId, res.title, { homework: hw });
+    } catch (err) {
+      showToast(navigator.onLine ? "Blatt konnte nicht geöffnet werden" : "Keine Verbindung");
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = hw.boardId ? "Blatt öffnen" : "Auf Blatt bearbeiten";
+      }
+    }
+  }
+  function openHomework() {
+    hwScrim.classList.remove("hidden");
+    renderHwList();
+    refreshHomework();
+  }
+  function closeHomework() {
+    hwScrim.classList.add("hidden");
+    hwDetailId = null;
+  }
+  hwBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openHomework();
+  });
+  document.getElementById("hw-close")?.addEventListener("click", closeHomework);
+  document.getElementById("hw-back")?.addEventListener("click", () => renderHwList());
+  hwScrim?.addEventListener("click", (e) => {
+    if (e.target === hwScrim) closeHomework();
+  });
+
+  // ---- Bild gross ansehen ----
+  const lightboxEl = document.getElementById("lightbox");
+  const lightboxImg = document.getElementById("lightbox-img");
+  function openLightbox(src) {
+    lightboxImg.src = src;
+    lightboxEl.classList.remove("zoomed");
+    lightboxEl.classList.remove("hidden");
+  }
+  function closeLightbox() {
+    lightboxEl.classList.add("hidden");
+    lightboxImg.removeAttribute("src");
+  }
+  lightboxEl?.addEventListener("click", (e) => {
+    if (e.target === lightboxImg) {
+      lightboxEl.classList.toggle("zoomed"); // antippen: Originalgroesse / einpassen
+      return;
+    }
+    closeLightbox();
+  });
+  lightboxEl?.addEventListener("pointerdown", (e) => e.stopPropagation());
+  document.getElementById("lightbox-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeLightbox();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!lightboxEl.classList.contains("hidden")) closeLightbox();
+    else if (!hwScrim.classList.contains("hidden")) {
+      if (hwDetailId != null) renderHwList();
+      else closeHomework();
+    }
+  });
+
+  // ---- Aufgaben-Fenster im Blatt ----
+  const hwPanel = document.getElementById("hw-panel");
+  const hwPanelBody = document.getElementById("hw-panel-body");
+  const hwPill = document.getElementById("hw-pill");
+  const hwPanelBtn = document.getElementById("btn-hw-panel");
+  let hwBoard = null; // Hausaufgabe des offenen Blatts
+  let hwPanelGeo = null;
+  try {
+    hwPanelGeo = JSON.parse(localStorage.getItem("sofianotes-hwpanel") || "null");
+  } catch (err) {}
+  function hwPanelState(boardId) {
+    try {
+      return localStorage.getItem("sofianotes-hwpanel-state:" + boardId) || "open";
+    } catch (err) {
+      return "open";
+    }
+  }
+  function setHwPanelState(state) {
+    if (!currentBoardId) return;
+    try {
+      localStorage.setItem("sofianotes-hwpanel-state:" + currentBoardId, state);
+    } catch (err) {}
+    applyHwPanelState(state);
+  }
+  function applyHwPanelState(state) {
+    const has = !!hwBoard;
+    hwPanel.classList.toggle("hidden", !has || state !== "open");
+    hwPill.classList.toggle("hidden", !has || state !== "min");
+    hwPanelBtn.classList.toggle("hidden", !has);
+    hwPanelBtn.classList.toggle("active", has && state === "open");
+    if (has && state === "open") placeHwPanel();
+  }
+  function placeHwPanel() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const w = Math.min(vw - 16, Math.max(240, (hwPanelGeo && hwPanelGeo.w) || Math.min(360, vw * 0.36)));
+    const h = Math.min(vh - 90, Math.max(160, (hwPanelGeo && hwPanelGeo.h) || Math.min(480, vh * 0.55)));
+    let x = hwPanelGeo && Number.isFinite(hwPanelGeo.x) ? hwPanelGeo.x : vw - w - 16;
+    let y = hwPanelGeo && Number.isFinite(hwPanelGeo.y) ? hwPanelGeo.y : 84;
+    x = Math.max(8, Math.min(vw - w - 8, x));
+    y = Math.max(8, Math.min(vh - 60, y));
+    Object.assign(hwPanel.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+  }
+  function saveHwPanelGeo() {
+    const r = hwPanel.getBoundingClientRect();
+    hwPanelGeo = { x: r.left, y: r.top, w: r.width, h: r.height };
+    try {
+      localStorage.setItem("sofianotes-hwpanel", JSON.stringify(hwPanelGeo));
+    } catch (err) {}
+  }
+  function renderHwPanel() {
+    if (!hwBoard) return;
+    hwPanel.style.setProperty("--subj", hwBoard.color || "#6750a4");
+    const chip = document.getElementById("hw-panel-subject");
+    chip.textContent = hwBoard.subject || "Aufgabe";
+    document.getElementById("hw-pill-text").textContent = hwBoard.subject ? hwBoard.subject + " – Aufgabe" : "Aufgabe";
+    hwPanelBody.innerHTML = "";
+    const due = document.createElement("div");
+    due.className = "hw-due";
+    due.textContent = "Fällig: " + hwDueLabel(hwBoard.due);
+    hwPanelBody.appendChild(due);
+    const desc = document.createElement("div");
+    desc.className = "hw-desc";
+    desc.textContent = hwBoard.description || "(ohne Text)";
+    hwPanelBody.appendChild(desc);
+    hwAttachmentsHtml(hwPanelBody, hwBoard);
+  }
+  // Blatt geoeffnet: gehoert es zu einer Hausaufgabe, Aufgabenstellung dazu holen
+  async function syncHomeworkPanel(board, known) {
+    const hid = board && board.sofiaHomeworkId;
+    if (!hid) {
+      hwBoard = null;
+      applyHwPanelState("closed");
+      return;
+    }
+    if (known && known.id === hid) {
+      hwBoard = known;
+      renderHwPanel();
+      applyHwPanelState(hwPanelState(board.id));
+    }
+    try {
+      const fresh = await api("/api/sofia/homework/" + hid);
+      if (!currentBoardMeta || currentBoardId !== board.id) return;
+      hwBoard = fresh;
+      renderHwPanel();
+      applyHwPanelState(hwPanelState(board.id));
+    } catch (err) {
+      if (!hwBoard) applyHwPanelState("closed");
+    }
+  }
+  document.getElementById("hw-panel-min")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setHwPanelState("min");
+  });
+  document.getElementById("hw-panel-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setHwPanelState("closed");
+  });
+  hwPill?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setHwPanelState("open");
+  });
+  hwPanelBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setHwPanelState(hwPanel.classList.contains("hidden") ? "open" : "min");
+  });
+  // Verschieben (Kopfzeile) und Groesse (Ecke) - mit Finger, Stift oder Maus
+  let hwDrag = null;
+  function hwStartDrag(e, kind) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = hwPanel.getBoundingClientRect();
+    hwDrag = { kind, id: e.pointerId, sx: e.clientX, sy: e.clientY, r };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {}
+    hwPanel.classList.add("dragging");
+  }
+  function hwMoveDrag(e) {
+    if (!hwDrag || hwDrag.id !== e.pointerId) return;
+    const dx = e.clientX - hwDrag.sx;
+    const dy = e.clientY - hwDrag.sy;
+    const r = hwDrag.r;
+    if (hwDrag.kind === "move") {
+      const x = Math.max(8 - r.width + 80, Math.min(window.innerWidth - 80, r.left + dx));
+      const y = Math.max(8, Math.min(window.innerHeight - 48, r.top + dy));
+      hwPanel.style.left = x + "px";
+      hwPanel.style.top = y + "px";
+    } else {
+      hwPanel.style.width = Math.max(240, Math.min(window.innerWidth - r.left - 8, r.width + dx)) + "px";
+      hwPanel.style.height = Math.max(160, Math.min(window.innerHeight - r.top - 8, r.height + dy)) + "px";
+    }
+  }
+  function hwEndDrag(e) {
+    if (!hwDrag || hwDrag.id !== e.pointerId) return;
+    hwDrag = null;
+    hwPanel.classList.remove("dragging");
+    saveHwPanelGeo();
+  }
+  const hwHead = document.getElementById("hw-panel-head");
+  const hwResize = document.getElementById("hw-panel-resize");
+  hwHead?.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    hwStartDrag(e, "move");
+  });
+  hwResize?.addEventListener("pointerdown", (e) => hwStartDrag(e, "size"));
+  for (const el of [hwHead, hwResize]) {
+    el?.addEventListener("pointermove", hwMoveDrag);
+    el?.addEventListener("pointerup", hwEndDrag);
+    el?.addEventListener("pointercancel", hwEndDrag);
+  }
+  // Im Fenster scrollen/tippen darf nichts aufs Blatt malen
+  hwPanel?.addEventListener("pointerdown", (e) => e.stopPropagation());
+  hwPill?.addEventListener("pointerdown", (e) => e.stopPropagation());
+  window.addEventListener("resize", () => {
+    if (hwBoard && !hwPanel.classList.contains("hidden")) placeHwPanel();
+  });
 
   function renderLibrary() {
     if (!libraryCache) return;
@@ -9163,6 +9617,8 @@
     }
     currentBoardId = id;
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
+    if (!opts || opts.homework === undefined) syncHomeworkPanel(null);
+    else syncHomeworkPanel({ id, sofiaHomeworkId: opts.homework.id }, opts.homework);
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
     if (title) document.title = title + " – sofianotes";
     hideLibrary({ fromHistory: true });

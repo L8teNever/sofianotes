@@ -140,6 +140,9 @@ def _init_sync() -> None:
         _conn.execute(f"ALTER TABLE folders ADD COLUMN color TEXT DEFAULT '{DEFAULT_FOLDER_COLOR}'")
     if "starred" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    board_cols = {row[1] for row in _conn.execute("PRAGMA table_info(boards)").fetchall()}
+    if "sofia_homework_id" not in board_cols:
+        _conn.execute("ALTER TABLE boards ADD COLUMN sofia_homework_id INTEGER")
     if "sofia_subject_id" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN sofia_subject_id INTEGER")
     people_cols = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
@@ -368,7 +371,7 @@ def valid_person(person_id: str | None) -> bool:
 
 def _board_row(board_id: str) -> dict[str, Any] | None:
     row = _conn.execute(
-        "SELECT id, owner_id, title, created_at, updated_at FROM boards WHERE id = ?",
+        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id FROM boards WHERE id = ?",
         (board_id,),
     ).fetchone()
     if not row:
@@ -384,6 +387,7 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
         "createdAt": row[3],
         "updatedAt": row[4],
         "sharedWith": shared_with,
+        "sofiaHomeworkId": row[5],
     }
 
 
@@ -965,6 +969,43 @@ def _sofia_person_sync(person_id: str) -> dict[str, Any] | None:
         ).fetchall()
     }
     return {"sofiaUserId": row[0], "email": row[1], "folders": folders}
+
+
+def _homework_boards_sync(person_id: str) -> dict[int, str]:
+    """Hausaufgabe -> Blatt dieser Person (eigenes Blatt, zuletzt bearbeitet zuerst)."""
+    rows = _conn.execute(
+        """SELECT b.sofia_homework_id, b.id FROM boards b
+           JOIN placements p ON p.board_id = b.id AND p.person_id = ?
+           WHERE b.owner_id = ? AND b.sofia_homework_id IS NOT NULL
+           ORDER BY b.updated_at ASC""",
+        (person_id, person_id),
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def _homework_board_sync(person_id: str, hw_id: int, title: str, folder_id: str | None) -> dict[str, Any]:
+    """Blatt zur Hausaufgabe holen oder neu anlegen (im Fach-Ordner, falls vorhanden)."""
+    existing = _homework_boards_sync(person_id).get(hw_id)
+    if existing:
+        return {"id": existing, "created": False}
+    if folder_id and not _conn.execute(
+        "SELECT 1 FROM folders WHERE id = ? AND person_id = ?", (folder_id, person_id)
+    ).fetchone():
+        folder_id = None
+    board = _create_board_sync(person_id, title, folder_id)
+    _conn.execute("UPDATE boards SET sofia_homework_id = ? WHERE id = ?", (hw_id, board["id"]))
+    _conn.commit()
+    return {"id": board["id"], "created": True}
+
+
+async def homework_boards(person_id: str) -> dict[int, str]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _homework_boards_sync, person_id)
+
+
+async def homework_board(person_id: str, hw_id: int, title: str, folder_id: str | None) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _homework_board_sync, person_id, hw_id, title, folder_id)
 
 
 async def apply_sofia_sync(snapshot: dict[str, Any]) -> dict[str, Any]:
