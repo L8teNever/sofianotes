@@ -1657,9 +1657,69 @@ button {
 #toolbar[data-mode="table"] [data-modes]:not([data-modes~="table"]) { display: none; }
 #toolbar[data-mode="ruler"] [data-modes]:not([data-modes~="ruler"]) { display: none; }
 #toolbar[data-mode="lasso"] [data-modes]:not([data-modes~="lasso"]) { display: none; }
-/* Winkel-Knoepfe nur, solange das Lineal an ist */
-#toolbar:not(.ruler-on) .ruler-group { display: none; }
 .eraser-dot { display: block; border-radius: 50%; background: #e2e6ea; box-shadow: inset 0 0 0 1.5px #80868b; }
 .eraser-size-btn.active .eraser-dot { background: #d3e3fd; box-shadow: inset 0 0 0 1.5px var(--accent); }
 .eraser-size-btn.active { background: var(--accent-soft); }
 #toolbar[data-mode="eraser"] [data-modes]:not([data-modes~="eraser"]) { display: none; }
+
+/* ---- zweite Leiste: Lineal / Geodreieck ---- */
+.ruler-bar {
+  position: fixed;
+  z-index: 61;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--bar-h);
+  padding: 6px;
+  border-radius: var(--radius-dock);
+  background: var(--dock-bg);
+  border: 1px solid var(--dock-border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+.ruler-bar.hidden { display: none; }
+.kind-btn.active { background: var(--accent); color: #fff; }
+.angle-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--bar-btn);
+  padding: 0 8px;
+  margin-left: 4px;
+  border-radius: 12px;
+  background: #f1f3f4;
+  font: 600 13px/1 Inter, sans-serif;
+  color: #3c4043;
+}
+.angle-field input {
+  width: 42px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: right;
+  outline: none;
+  -moz-appearance: textfield;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.angle-field input::-webkit-outer-spin-button,
+.angle-field input::-webkit-inner-spin-button,
+.ruler-angle-input::-webkit-outer-spin-button,
+.ruler-angle-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ruler-angle-input {
+  position: fixed;
+  z-index: 80;
+  width: 100px;
+  height: 40px;
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  background: #fff;
+  font: 700 18px/1 Inter, sans-serif;
+  text-align: center;
+  color: #1a73e8;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.ruler-angle-input.hidden { display: none; }

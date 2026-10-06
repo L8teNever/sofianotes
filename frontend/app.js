@@ -679,6 +679,7 @@
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
     drawZoomPane();
+    if (ruler.visible) positionRulerBar();
   }
 
   function tick() {
@@ -4814,7 +4815,8 @@
   // zwei Finger drehen; der Stift zieht an der naeheren Kante eine exakt gerade Linie.
   const RULER_HALF = 42; // halbe Linealbreite in Bildschirm-px
   const RULER_SNAP = 26; // so nah an der Kante (ausserhalb) rastet der Stift noch ein
-  const ruler = { visible: false, cx: window.innerWidth / 2, cy: window.innerHeight * 0.45, angle: 0 };
+  const TRI_HALF = 250; // Geodreieck: halbe Laenge der langen Kante (Bildschirm-px)
+  const ruler = { visible: false, kind: "ruler", cx: window.innerWidth / 2, cy: window.innerHeight * 0.45, angle: 0 };
   let rulerGesture = null; // {start: Map(id->{x,y}), cx, cy, angle}
   let mouseRulerDrag = null;
   const rulerBtn = document.getElementById("btn-ruler");
@@ -4828,24 +4830,116 @@
     const dy = y - ruler.cy;
     return { along: dx * u.x + dy * u.y, across: dx * n.x + dy * n.y };
   }
-  function rulerHit(x, y, extra = 6) {
-    return ruler.visible && Math.abs(rulerLocal(x, y).across) <= RULER_HALF + extra;
-  }
-  // Kante (+1 = unten/rechts, -1 = oben/links), an der der Stift gerade zeichnen wuerde
-  function rulerEdgeAt(x, y) {
-    if (!ruler.visible) return null;
-    const { across } = rulerLocal(x, y);
-    if (Math.abs(across) > RULER_HALF + RULER_SNAP) return null;
-    return { side: across >= 0 ? 1 : -1 };
-  }
-  function rulerProject(x, y, edge) {
+  // Kanten als Strecken im Bildschirm: {a, b, out} (out = nach aussen zeigende Normale).
+  // Lineal: zwei sehr lange Kanten. Geodreieck: lange Kante + zwei Schenkel (rechtwinklig,
+  // Spitze auf der Seite von n).
+  function rulerShape() {
     const { u, n } = rulerAxes();
-    const { along } = rulerLocal(x, y);
+    const c = { x: ruler.cx, y: ruler.cy };
+    const at = (along, across) => ({ x: c.x + u.x * along + n.x * across, y: c.y + u.y * along + n.y * across });
+    if (ruler.kind === "triangle") {
+      const A = at(-TRI_HALF, 0);
+      const B = at(TRI_HALF, 0);
+      const C = at(0, TRI_HALF);
+      const s2 = Math.SQRT1_2;
+      return {
+        poly: [A, B, C],
+        edges: [
+          { a: A, b: B, out: { x: -n.x, y: -n.y } },
+          { a: B, b: C, out: { x: (u.x + n.x) * s2, y: (u.y + n.y) * s2 } },
+          { a: C, b: A, out: { x: (-u.x + n.x) * s2, y: (-u.y + n.y) * s2 } },
+        ],
+      };
+    }
+    const L = Math.hypot(window.innerWidth, window.innerHeight) * 1.2;
+    return {
+      poly: [at(-L, -RULER_HALF), at(L, -RULER_HALF), at(L, RULER_HALF), at(-L, RULER_HALF)],
+      edges: [
+        { a: at(-L, -RULER_HALF), b: at(L, -RULER_HALF), out: { x: -n.x, y: -n.y } },
+        { a: at(-L, RULER_HALF), b: at(L, RULER_HALF), out: { x: n.x, y: n.y } },
+      ],
+    };
+  }
+
+  function rulerHit(x, y, extra = 6) {
+    if (!ruler.visible) return false;
+    const shape = rulerShape();
+    const q = { x, y };
+    if (pointInPolygon(q, shape.poly)) return true;
+    return shape.edges.some((e) => distPointToSeg(q, e.a, e.b) <= extra);
+  }
+
+  // Kante, an der der Stift gerade zeichnen wuerde: innen nahe an einer Kante oder knapp
+  // ausserhalb. Beim Lineal zaehlt das ganze Band (wie bisher).
+  function rulerEdgesAt(x, y) {
+    if (!ruler.visible) return [];
+    const shape = rulerShape();
+    const q = { x, y };
+    const inside = pointInPolygon(q, shape.poly);
+    const limit = inside ? (ruler.kind === "ruler" ? RULER_HALF + 1 : RULER_SNAP) : RULER_SNAP;
+    return shape.edges
+      .map((e) => ({ e, d: distPointToSeg(q, e.a, e.b) }))
+      .filter((c) => c.d <= limit)
+      .sort((a, b) => a.d - b.d)
+      .map((c) => c.e);
+  }
+  function rulerEdgeAt(x, y) {
+    return rulerEdgesAt(x, y)[0] || null;
+  }
+  // An einer Ecke des Geodreiecks liegen zwei Kanten nah: die Zugrichtung entscheidet.
+  function resolveRulerEdge(stroke, x, y) {
+    const c = stroke.rulerCands;
+    if (!c) return;
+    const mx = x - stroke.rulerStart.x;
+    const my = y - stroke.rulerStart.y;
+    const m = Math.hypot(mx, my);
+    if (m < 10) return;
+    stroke.rulerCands = null;
+    let best = stroke.rulerEdge;
+    let bestScore = -1;
+    for (const e of c) {
+      const dx = e.b.x - e.a.x;
+      const dy = e.b.y - e.a.y;
+      const score = Math.abs(dx * mx + dy * my) / ((Math.hypot(dx, dy) || 1) * m);
+      if (score > bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+    if (best === stroke.rulerEdge) return;
+    stroke.rulerEdge = best;
+    const q = rulerProject(stroke.rulerStart.x, stroke.rulerStart.y, best);
+    const w = screenToWorld(q.x, q.y);
+    const p0 = stroke.points[0];
+    stroke.points = [{ x: w.x, y: w.y, p: p0 ? p0.p : 0.5 }];
+    stroke.unsent = [];
+  }
+
+  function rulerProject(x, y, edge) {
+    const dx = edge.b.x - edge.a.x;
+    const dy = edge.b.y - edge.a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const t = (x - edge.a.x) * ux + (y - edge.a.y) * uy;
     // Strichmitte knapp ausserhalb der Kante, damit die Linie am Lineal anliegt
     const half = ((currentStroke && currentStroke.size) || activeSize()) * scale * 0.5;
-    const off = edge.side * (RULER_HALF + half);
-    return { x: ruler.cx + n.x * off + u.x * along, y: ruler.cy + n.y * off + u.y * along };
+    return { x: edge.a.x + ux * t + edge.out.x * half, y: edge.a.y + uy * t + edge.out.y * half };
   }
+
+  // Angezeigter/eingegebener Winkel: 0-179°, gegen den Uhrzeigersinn wie im Matheheft
+  function rulerDegrees() {
+    let deg = Math.round((-ruler.angle * 180) / Math.PI) % 180;
+    if (deg < 0) deg += 180;
+    return deg;
+  }
+  function setRulerDegrees(deg) {
+    if (!Number.isFinite(deg)) return;
+    ruler.angle = (-deg * Math.PI) / 180;
+    requestRedraw();
+    syncRulerBar();
+  }
+
   function snapRulerAngle(a) {
     const deg = ((a * 180) / Math.PI) % 360;
     for (const t of [-180, -135, -90, -45, 0, 45, 90, 135, 180]) {
@@ -4857,7 +4951,13 @@
   function startRulerGesture() {
     const start = new Map();
     for (const [id, p] of touchPointers) start.set(id, { x: p.x, y: p.y });
-    rulerGesture = { start, cx: ruler.cx, cy: ruler.cy, angle: ruler.angle };
+    const first = rulerGesture && rulerGesture.tap;
+    rulerGesture = { start, cx: ruler.cx, cy: ruler.cy, angle: ruler.angle, tap: first || null, moved: !!(rulerGesture && rulerGesture.moved) };
+    if (!rulerGesture.tap && touchPointers.size === 1) {
+      const [p] = touchPointers.values();
+      rulerGesture.tap = { x: p.x, y: p.y, t: performance.now() };
+    }
+    if (touchPointers.size >= 2) rulerGesture.moved = true;
     pinchState = null;
     panState = null;
   }
@@ -4866,6 +4966,7 @@
     if (!ids.length) return;
     const a0 = rulerGesture.start.get(ids[0]);
     const a1 = touchPointers.get(ids[0]);
+    if (Math.hypot(a1.x - a0.x, a1.y - a0.y) > 8) rulerGesture.moved = true;
     if (ids.length >= 2) {
       const b0 = rulerGesture.start.get(ids[1]);
       const b1 = touchPointers.get(ids[1]);
@@ -4880,7 +4981,7 @@
       ruler.cx = m1.x + rx * Math.cos(d) - ry * Math.sin(d);
       ruler.cy = m1.y + rx * Math.sin(d) + ry * Math.cos(d);
       ruler.angle = snapRulerAngle(rulerGesture.angle + d);
-      syncModeBar();
+      syncRulerBar();
     } else {
       ruler.cx = rulerGesture.cx + (a1.x - a0.x);
       ruler.cy = rulerGesture.cy + (a1.y - a0.y);
@@ -4888,9 +4989,33 @@
     requestRedraw();
   }
 
+  function drawRulerScale(ctx, from, to, edgeY, dirSign) {
+    // cm/mm-Striche entlang einer Kante (lokale x-Achse), Striche zeigen nach dirSign
+    const cm = 37.8 * scale; // 1 cm ~ 38 Welt-px (96 dpi)
+    const mm = cm / 10;
+    const showMm = mm >= 4;
+    const step = showMm ? mm : cm / 2;
+    const i0 = Math.ceil(from / step);
+    const i1 = Math.floor(to / step);
+    ctx.beginPath();
+    for (let i = i0; i <= i1; i++) {
+      const isCm = showMm ? i % 10 === 0 : i % 2 === 0;
+      const isHalf = showMm ? i % 5 === 0 : false;
+      const h = isCm ? 14 : isHalf ? 9 : 5;
+      ctx.moveTo(i * step, edgeY);
+      ctx.lineTo(i * step, edgeY + dirSign * h);
+    }
+    ctx.stroke();
+    for (let i = i0; i <= i1; i++) {
+      const isCm = showMm ? i % 10 === 0 : i % 2 === 0;
+      if (!isCm) continue;
+      const label = Math.round(Math.abs(i * step) / cm);
+      if (label !== 0) ctx.fillText(String(label), i * step, edgeY + dirSign * 25 + (dirSign > 0 ? 0 : 0));
+    }
+  }
+
   function drawRuler() {
     if (!ruler.visible) return;
-    const len = Math.hypot(window.innerWidth, window.innerHeight) * 1.2;
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.translate(ruler.cx, ruler.cy);
@@ -4898,48 +5023,77 @@
     ctx.fillStyle = "rgba(255,255,255,0.78)";
     ctx.strokeStyle = "rgba(60,64,67,0.55)";
     ctx.lineWidth = 1;
-    ctx.fillRect(-len, -RULER_HALF, len * 2, RULER_HALF * 2);
-    ctx.beginPath();
-    ctx.moveTo(-len, -RULER_HALF);
-    ctx.lineTo(len, -RULER_HALF);
-    ctx.moveTo(-len, RULER_HALF);
-    ctx.lineTo(len, RULER_HALF);
-    ctx.stroke();
-    // Skala in Papier-Massstab: 1 cm ~ 38 Welt-px (96 dpi), mm-Striche ab genug Zoom
-    const cm = 37.8 * scale;
-    const mm = cm / 10;
-    const showMm = mm >= 4;
-    const step = showMm ? mm : cm / 2;
-    const n = Math.ceil(len / step);
-    ctx.strokeStyle = "rgba(60,64,67,0.7)";
-    ctx.fillStyle = "rgba(60,64,67,0.85)";
     ctx.font = "600 10px Inter, sans-serif";
     ctx.textAlign = "center";
-    ctx.beginPath();
-    for (let i = -n; i <= n; i++) {
-      const x = i * step;
-      const isCm = showMm ? i % 10 === 0 : i % 2 === 0;
-      const isHalf = showMm ? i % 5 === 0 : false;
-      const h = isCm ? 14 : isHalf ? 9 : 5;
-      ctx.moveTo(x, -RULER_HALF);
-      ctx.lineTo(x, -RULER_HALF + h);
-      ctx.moveTo(x, RULER_HALF);
-      ctx.lineTo(x, RULER_HALF - h);
+    ctx.textBaseline = "middle";
+    const deg = rulerDegrees();
+    if (ruler.kind === "triangle") {
+      const H = TRI_HALF;
+      ctx.beginPath();
+      ctx.moveTo(-H, 0);
+      ctx.lineTo(H, 0);
+      ctx.lineTo(0, H);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(60,64,67,0.7)";
+      ctx.fillStyle = "rgba(60,64,67,0.85)";
+      // cm-Skala auf der langen Kante, 0 in der Mitte (wie beim echten Geodreieck)
+      drawRulerScale(ctx, -H + 8, H - 8, 0, 1);
+      // Winkelmesser: Halbkreis um die Mitte der langen Kante
+      const R = H * 0.62;
+      ctx.beginPath();
+      for (let a = 0; a <= 180; a++) {
+        const th = (a * Math.PI) / 180;
+        const len = a % 10 === 0 ? 12 : a % 5 === 0 ? 8 : 4;
+        const cx = Math.cos(th);
+        const cy = Math.sin(th);
+        ctx.moveTo(cx * R, cy * R);
+        ctx.lineTo(cx * (R - len), cy * (R - len));
+      }
+      ctx.stroke();
+      ctx.font = "600 9px Inter, sans-serif";
+      for (let a = 10; a < 180; a += 10) {
+        const th = (a * Math.PI) / 180;
+        ctx.fillText(String(a), Math.cos(th) * (R - 22), Math.sin(th) * (R - 22));
+      }
+      // Mittelmarke und Hilfslinie zur Spitze
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, H * 0.25);
+      ctx.stroke();
+      ctx.font = "700 13px Inter, sans-serif";
+      ctx.fillStyle = "#1a73e8";
+      ctx.fillText(deg + "°", 0, H * 0.78);
+    } else {
+      const len = Math.hypot(window.innerWidth, window.innerHeight) * 1.2;
+      ctx.fillRect(-len, -RULER_HALF, len * 2, RULER_HALF * 2);
+      ctx.beginPath();
+      ctx.moveTo(-len, -RULER_HALF);
+      ctx.lineTo(len, -RULER_HALF);
+      ctx.moveTo(-len, RULER_HALF);
+      ctx.lineTo(len, RULER_HALF);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(60,64,67,0.7)";
+      ctx.fillStyle = "rgba(60,64,67,0.85)";
+      drawRulerScale(ctx, -len, len, -RULER_HALF, 1);
+      ctx.beginPath();
+      const cm = 37.8 * scale;
+      const step = cm / 10 >= 4 ? cm / 10 : cm / 2;
+      const n = Math.ceil(len / step);
+      for (let i = -n; i <= n; i++) {
+        const isCm = cm / 10 >= 4 ? i % 10 === 0 : i % 2 === 0;
+        const isHalf = cm / 10 >= 4 ? i % 5 === 0 : false;
+        const h = isCm ? 14 : isHalf ? 9 : 5;
+        ctx.moveTo(i * step, RULER_HALF);
+        ctx.lineTo(i * step, RULER_HALF - h);
+      }
+      ctx.stroke();
+      ctx.font = "700 13px Inter, sans-serif";
+      ctx.fillStyle = "#1a73e8";
+      ctx.fillText(deg + "°", 0, 8);
     }
-    ctx.stroke();
-    for (let i = -n; i <= n; i++) {
-      const isCm = showMm ? i % 10 === 0 : i % 2 === 0;
-      if (!isCm) continue;
-      const label = Math.round((i * step) / cm);
-      if (label !== 0) ctx.fillText(String(label), i * step, -RULER_HALF + 26);
-    }
-    // Winkel in der Mitte
-    // Winkel zur Waagrechten, 0-90° (wie in GoodNotes)
-    let deg = Math.abs(Math.round((ruler.angle * 180) / Math.PI)) % 180;
-    if (deg > 90) deg = 180 - deg;
-    ctx.font = "700 13px Inter, sans-serif";
-    ctx.fillStyle = "#1a73e8";
-    ctx.fillText(deg + "°", 0, 6);
     ctx.restore();
   }
 
@@ -4951,11 +5105,106 @@
       ruler.cy = window.innerHeight * 0.45;
       ruler.angle = 0;
     }
-    rulerBtn.classList.toggle("active", ruler.visible);
-    toolbarEl.classList.toggle("ruler-on", ruler.visible);
-    syncModeBar();
-    requestRedraw();
+    setRulerVisible(ruler.visible);
   });
+
+  // ---- zweite Leiste fuer Lineal/Geodreieck ----------------------------------
+  const rulerBar = document.getElementById("ruler-bar");
+  const rulerBarInput = document.getElementById("ruler-bar-angle");
+  const rulerAngleOverlay = document.getElementById("ruler-angle-input");
+
+  function setRulerVisible(on) {
+    ruler.visible = on;
+    if (rulerBtn) rulerBtn.classList.toggle("active", on);
+    if (rulerBar) rulerBar.classList.toggle("hidden", !on);
+    if (!on && rulerAngleOverlay) rulerAngleOverlay.classList.add("hidden");
+    syncRulerBar();
+    requestRedraw();
+  }
+
+  function positionRulerBar() {
+    if (!rulerBar || rulerBar.classList.contains("hidden")) return;
+    const tb = toolbarEl.getBoundingClientRect();
+    const w = rulerBar.offsetWidth;
+    const dock = currentDock();
+    let left = tb.left + tb.width / 2 - w / 2;
+    let top;
+    if (dock === "bottom") top = tb.top - 10 - rulerBar.offsetHeight;
+    else if (dock === "top") top = tb.bottom + 10;
+    else {
+      left = window.innerWidth / 2 - w / 2;
+      top = window.innerHeight - rulerBar.offsetHeight - 20;
+    }
+    rulerBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, left)) + "px";
+    rulerBar.style.top = top + "px";
+  }
+
+  function syncRulerBar() {
+    if (!rulerBar) return;
+    const deg = rulerDegrees();
+    rulerBar.querySelectorAll(".kind-btn").forEach((b) => b.classList.toggle("active", b.dataset.kind === ruler.kind));
+    rulerBar.querySelectorAll(".angle-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.angle) === deg));
+    if (rulerBarInput && document.activeElement !== rulerBarInput) rulerBarInput.value = String(deg);
+    positionRulerBar();
+  }
+
+  if (rulerBar) {
+    rulerBar.addEventListener("pointerdown", (e) => e.stopPropagation());
+    rulerBar.querySelectorAll(".kind-btn").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        ruler.kind = b.dataset.kind;
+        syncRulerBar();
+        requestRedraw();
+      })
+    );
+    rulerBar.querySelectorAll(".angle-btn").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setRulerDegrees(Number(b.dataset.angle));
+      })
+    );
+    document.getElementById("ruler-bar-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setRulerVisible(false);
+    });
+  }
+  // Gradzahl eintippen: im Feld der Leiste oder direkt im Lineal (Antippen)
+  function bindAngleInput(input, onDone) {
+    if (!input) return;
+    const apply = () => {
+      const v = parseFloat(String(input.value).replace(",", "."));
+      if (Number.isFinite(v)) setRulerDegrees(((v % 360) + 360) % 360);
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        apply();
+        input.blur();
+      } else if (e.key === "Escape") {
+        input.value = String(rulerDegrees());
+        input.blur();
+      }
+    });
+    input.addEventListener("change", apply);
+    input.addEventListener("blur", () => {
+      apply();
+      if (onDone) onDone();
+    });
+    input.addEventListener("pointerdown", (e) => e.stopPropagation());
+  }
+  bindAngleInput(rulerBarInput);
+  bindAngleInput(rulerAngleOverlay, () => rulerAngleOverlay.classList.add("hidden"));
+
+  function openRulerAngleInput(x, y) {
+    if (!rulerAngleOverlay) return;
+    rulerAngleOverlay.value = String(rulerDegrees());
+    rulerAngleOverlay.classList.remove("hidden");
+    rulerAngleOverlay.style.left = Math.max(8, Math.min(window.innerWidth - 110, x - 50)) + "px";
+    rulerAngleOverlay.style.top = Math.max(8, y - 60) + "px";
+    rulerAngleOverlay.focus();
+    rulerAngleOverlay.select();
+  }
 
   // ---- Modi: Stift / Text / Tabelle / Lineal / Lasso -----------------------
   // Die Modus-Knoepfe sitzen oben neben dem Blattnamen; die Werkzeugleiste unten zeigt
@@ -5044,11 +5293,6 @@
       });
       toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) => b.classList.toggle("active", b === best));
     }
-    if (ruler.visible) {
-      let deg = Math.abs(Math.round((ruler.angle * 180) / Math.PI)) % 180;
-      if (deg > 90) deg = 180 - deg;
-      toolbarEl.querySelectorAll(".angle-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.angle) === deg));
-    }
   }
 
   modeButtons.forEach((b) =>
@@ -5111,15 +5355,6 @@
     clearAllInk();
   });
 
-  toolbarEl.querySelectorAll(".angle-btn").forEach((b) =>
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      // positive Winkel steigen nach rechts an (Bildschirm-y zeigt nach unten)
-      ruler.angle = (-Number(b.dataset.angle) * Math.PI) / 180;
-      requestRedraw();
-      syncModeBar();
-    })
-  );
 
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}
@@ -5871,6 +6106,15 @@
     syncSelectionToolbar();
   }
 
+  function deleteSelection() {
+    const clones = selectedStrokes().map(cloneStroke);
+    if (!clones.length) return;
+    removeStrokes(clones.map((s) => s.id));
+    pushUndo({ type: "erase", strokes: clones });
+    clearSelection();
+    requestRedraw();
+  }
+
   function cutSelection() {
     const clones = selectedStrokes().map(cloneStroke);
     if (!clones.length) return;
@@ -5934,6 +6178,8 @@
     if (kiBtn) kiBtn.classList.toggle("hidden", cropping || pens.length === 0);
     if (copyBtn) copyBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (cutBtn) cutBtn.classList.toggle("hidden", cropping || !selection.ids.size);
+    const delBtn = document.getElementById("btn-sel-delete");
+    if (delBtn) delBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
     if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
     const table = cropping ? null : selectedTable();
@@ -6166,6 +6412,10 @@
     e.stopPropagation();
     pasteClipboard();
   });
+  document.getElementById("btn-sel-delete")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteSelection();
+  });
   document.getElementById("btn-paste-here")?.addEventListener("click", (e) => {
     e.stopPropagation();
     pasteClipboard();
@@ -6174,6 +6424,12 @@
     if (e.key === "Escape" && cropState) {
       e.preventDefault();
       cancelCropMode();
+    }
+    // Entf/Backspace loescht die Auswahl (nicht beim Tippen in Feldern)
+    const typing = e.target && (e.target.isContentEditable || /^(INPUT|TEXTAREA)$/.test(e.target.tagName));
+    if (!typing && !textEdit && selection.ids.size && !cropState && (e.key === "Delete" || e.key === "Backspace")) {
+      e.preventDefault();
+      deleteSelection();
     }
   });
 
@@ -6338,12 +6594,36 @@
     return lastI > firstI || hits >= 2;
   }
 
+  // Durchkritzeln loescht nur Tinte, die das Gekritzel ueberwiegend ueberdeckt (mind. die
+  // Haelfte ihrer Punkte im Gekritzel-Bereich und tatsaechlich beruehrt) - lange Striche,
+  // die nur am Rand gestreift werden, bleiben.
+  function scribbleCovers(pts, stroke) {
+    const b = makeBBox(pts);
+    const pad = 6 + (stroke.size || 6) / 2;
+    const sp = stroke.points || [];
+    if (!sp.length) return false;
+    let inside = 0;
+    for (const p of sp) {
+      if (p.x >= b.minX - pad && p.x <= b.maxX + pad && p.y >= b.minY - pad && p.y <= b.maxY + pad) inside++;
+    }
+    if (inside / sp.length < 0.5) return false;
+    const hitR = 10 + (stroke.size || 6) * 0.65;
+    for (const q of pts) {
+      for (let j = 0; j < sp.length; j++) {
+        const d = j ? distPointToSeg(q, sp[j - 1], sp[j]) : Math.hypot(q.x - sp[0].x, q.y - sp[0].y);
+        if (d <= hitR) return true;
+      }
+    }
+    return false;
+  }
+
   function findStruckStrokes(pts) {
     if (!looksLikeStrikeGesture(pts)) return [];
+    const mouse = currentStroke && currentStroke.pointerType === "mouse";
     const hit = [];
     for (const stroke of boardStrokes.values()) {
       if (isObjectStroke(stroke)) continue;
-      if (strikeCrossesStroke(pts, stroke)) hit.push(stroke);
+      if (mouse ? strikeCrossesStroke(pts, stroke) : scribbleCovers(pts, stroke)) hit.push(stroke);
     }
     return hit;
   }
@@ -6602,12 +6882,17 @@
       eraseSegment(world.x, world.y, world.x, world.y);
       updateEraserCursor(e.clientX, e.clientY);
     } else {
-      const edge = e.pointerType === "touch" && !fingerDrawEnabled ? null : rulerEdgeAt(e.clientX, e.clientY);
+      const edges = e.pointerType === "touch" && !fingerDrawEnabled ? [] : rulerEdgesAt(e.clientX, e.clientY);
+      const edge = edges[0];
       if (edge) {
         const q = rulerProject(e.clientX, e.clientY, edge);
         const w0 = screenToWorld(q.x, q.y);
         startStroke(e.pointerId, e.pointerType, w0.x, w0.y, pointerPressure(e));
         currentStroke.rulerEdge = edge;
+        if (edges.length > 1) {
+          currentStroke.rulerCands = edges;
+          currentStroke.rulerStart = { x: e.clientX, y: e.clientY };
+        }
         clearHoldTimer();
       } else {
         startStroke(e.pointerId, e.pointerType, world.x, world.y, pointerPressure(e));
@@ -6694,7 +6979,7 @@
 
     tapState = null; // Stift/Maus beruehrt -> ein laufender Finger-Kontakt ist kein Tap mehr
     if (e.pointerType === "mouse" && e.button === 0 && ruler.visible && rulerHit(e.clientX, e.clientY, 0)) {
-      mouseRulerDrag = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+      mouseRulerDrag = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY, startX: e.clientX, startY: e.clientY };
       return;
     }
     if (e.pointerType === "mouse" && (spacePressed || e.button === 1)) {
@@ -6821,6 +7106,7 @@
       } else {
         for (const ev of coalescedEvents(e)) {
           // am Lineal: jeder Punkt wird exakt auf die Kante gelegt
+          if (currentStroke.rulerCands) resolveRulerEdge(currentStroke, ev.clientX, ev.clientY);
           const q = currentStroke.rulerEdge ? rulerProject(ev.clientX, ev.clientY, currentStroke.rulerEdge) : { x: ev.clientX, y: ev.clientY };
           const w = screenToWorld(q.x, q.y);
           extendStroke(w.x, w.y, pointerPressure(ev));
@@ -6862,8 +7148,12 @@
     if (e.pointerType === "touch") {
       touchPointers.delete(e.pointerId);
       if (rulerGesture) {
-        if (touchPointers.size === 0) rulerGesture = null;
-        else startRulerGesture(); // mit dem verbliebenen Finger nahtlos weiterschieben
+        if (touchPointers.size === 0) {
+          // kurzes Antippen ohne Verschieben: Gradzahl direkt eintippen
+          const g = rulerGesture;
+          rulerGesture = null;
+          if (g.tap && !g.moved && performance.now() - g.tap.t < 400) openRulerAngleInput(g.tap.x, g.tap.y);
+        } else startRulerGesture(); // mit dem verbliebenen Finger nahtlos weiterschieben
         return;
       }
       if (touchPointers.size < 2) pinchState = null;
@@ -6889,7 +7179,9 @@
       }
       // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Abschluss-Logik unten
     } else if (mouseRulerDrag && mouseRulerDrag.pointerId === e.pointerId) {
+      const md = mouseRulerDrag;
       mouseRulerDrag = null;
+      if (Math.hypot(e.clientX - md.startX, e.clientY - md.startY) < 4) openRulerAngleInput(e.clientX, e.clientY);
       return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       panState = null;
@@ -6967,6 +7259,7 @@
       // Shift + Mausrad ueber dem Lineal dreht es (Desktop)
       if (ruler.visible && e.shiftKey && rulerHit(e.clientX, e.clientY, 0)) {
         ruler.angle = snapRulerAngle(ruler.angle + Math.sign(e.deltaY || e.deltaX) * (Math.PI / 180));
+        syncRulerBar();
         requestRedraw();
         return;
       }

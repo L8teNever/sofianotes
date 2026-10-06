@@ -75,7 +75,94 @@
     return n;
   }
 
+  // Gleichmaessig nach Weglaenge verteilen - der Pencil liefert sehr dichte Punkte, deren
+  // Mini-Teilstuecke sonst jede Richtungsumkehr "verschlucken".
+  function resampleEven(pts, step) {
+    if (!pts || pts.length < 2) return pts || [];
+    const out = [{ x: pts[0].x, y: pts[0].y }];
+    let carry = 0;
+    for (let i = 1; i < pts.length; i++) {
+      let ax = pts[i - 1].x;
+      let ay = pts[i - 1].y;
+      const bx = pts[i].x;
+      const by = pts[i].y;
+      let seg = hypot(bx - ax, by - ay);
+      while (seg > 0 && carry + seg >= step) {
+        const t = (step - carry) / seg;
+        ax += (bx - ax) * t;
+        ay += (by - ay) * t;
+        out.push({ x: ax, y: ay });
+        seg = hypot(bx - ax, by - ay);
+        carry = 0;
+      }
+      carry += seg;
+    }
+    return out;
+  }
+
+  // Durchkritzeln zum Loeschen: mehrfach hin und her entlang einer Hauptrichtung.
+  // Zaehlt Umkehrpunkte entlang der Hauptachse (mit Mindestausschlag, damit Zittern nicht
+  // zaehlt) und verlangt, dass der Weg die Ausdehnung mehrfach ueberdeckt. Handschrift wie
+  // m, w, n laeuft entlang ihrer Hauptachse fast nur in eine Richtung und zaehlt nicht.
+  function scribbleInfo(pts) {
+    if (!pts || pts.length < 6) return null;
+    const path = strokePathLength(pts);
+    if (path < 40) return null;
+    const even = resampleEven(pts, Math.max(2, path / 120));
+    if (even.length < 8) return null;
+    let mx = 0;
+    let my = 0;
+    for (const p of even) {
+      mx += p.x;
+      my += p.y;
+    }
+    mx /= even.length;
+    my /= even.length;
+    let sxx = 0;
+    let syy = 0;
+    let sxy = 0;
+    for (const p of even) {
+      const dx = p.x - mx;
+      const dy = p.y - my;
+      sxx += dx * dx;
+      syy += dy * dy;
+      sxy += dx * dy;
+    }
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const ux = Math.cos(ang);
+    const uy = Math.sin(ang);
+    const proj = even.map((p) => (p.x - mx) * ux + (p.y - my) * uy);
+    const extent = Math.max(...proj) - Math.min(...proj);
+    if (extent < 14) return null;
+    const minSwing = Math.max(6, extent * 0.3);
+    let reversals = 0;
+    let dir = 0;
+    let anchor = proj[0];
+    for (const v of proj) {
+      if (dir >= 0 && v < anchor - minSwing) {
+        if (dir > 0) reversals++;
+        dir = -1;
+        anchor = v;
+      } else if (dir <= 0 && v > anchor + minSwing) {
+        if (dir < 0) reversals++;
+        dir = 1;
+        anchor = v;
+      } else if ((dir > 0 && v > anchor) || (dir < 0 && v < anchor)) {
+        anchor = v;
+      }
+    }
+    return { reversals, density: path / extent, extent };
+  }
+
+  function looksLikeScribble(pts) {
+    const info = scribbleInfo(pts);
+    return !!info && info.reversals >= 3 && info.density >= 3;
+  }
+
   function looksLikeStrikeGesture(pts, pointerType) {
+    // Stift/Finger: nur Durchkritzeln - ein einzelner Strich (t-Strich, Bruchstrich,
+    // Unterstreichen) darf beim Schreiben nie etwas loeschen
+    if (pointerType !== "mouse") return looksLikeScribble(pts);
     const mouse = pointerType === "mouse";
     if (!pts || pts.length < (mouse ? 3 : 4)) return false;
     const pathLength = strokePathLength(pts);
@@ -1770,6 +1857,8 @@
     strokePathLength,
     countDirectionReversals,
     looksLikeStrikeGesture,
+    looksLikeScribble,
+    scribbleInfo,
     bboxOfPoints,
     rasterizeGlyph,
     knnPredict,

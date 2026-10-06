@@ -37,9 +37,47 @@ test("mouse diagonal strikethrough is accepted", () => {
   assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), false);
 });
 
-test("pen still needs a longer strike", () => {
+test("a single straight pen stroke never erases (t-bar, fraction bar, underline)", () => {
   const pts = [pt(0, 0), pt(10, 1), pt(20, 2), pt(40, 3), pt(55, 4)];
+  assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), false);
+});
+
+// dicht abgetastete Zickzack-Kritzel wie vom Apple Pencil (alle ~1 px ein Punkt)
+function dense(corners) {
+  const out = [];
+  for (let i = 1; i < corners.length; i++) {
+    const [ax, ay] = corners[i - 1];
+    const [bx, by] = corners[i];
+    const n = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay)));
+    for (let k = 0; k < n; k++) out.push(pt(ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n));
+  }
+  out.push(pt(...corners[corners.length - 1]));
+  return out;
+}
+
+test("short pen scribble (two times back and forth) erases", () => {
+  const pts = dense([[0, 0], [60, 8], [2, 14], [62, 20], [4, 26]]);
   assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), true);
+});
+
+test("vertical scribble erases too", () => {
+  const pts = dense([[0, 0], [6, 50], [12, 0], [18, 50], [24, 2]]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), true);
+});
+
+test("handwritten m / w / wave are not scribbles", () => {
+  const m = dense([[0, 30], [0, 0], [12, 0], [14, 30], [16, 0], [28, 0], [30, 30]]);
+  const w = dense([[0, 0], [8, 30], [16, 4], [24, 30], [32, 0]]);
+  const wave = [];
+  for (let i = 0; i <= 120; i++) wave.push(pt(i, 10 * Math.sin(i / 8)));
+  assert.equal(SofiaInk.looksLikeStrikeGesture(m, "pen"), false);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(w, "pen"), false);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(wave, "pen"), false);
+});
+
+test("a single back-and-forth (like an n or a check mark) is not a scribble", () => {
+  const pts = dense([[0, 0], [50, 6], [2, 12]]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), false);
 });
 
 test("tiny mouse tick is not a strike", () => {

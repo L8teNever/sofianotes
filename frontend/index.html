@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,home,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_vert,note_add,open_with,palette,person,rectangle,redo,refresh,remove,reorder,shapes,share,straighten,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,view_column,zoom_in,zoom_in_map&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,home,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_vert,note_add,open_with,palette,person,rectangle,redo,refresh,remove,reorder,shapes,share,square_foot,straighten,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,view_column,zoom_in,zoom_in_map&display=block" rel="stylesheet" />
 <link rel="preload" href="models/emnist/model.json" as="fetch" crossorigin />
 <link rel="preload" href="models/emnist/group1-shard1of1.bin" as="fetch" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -34,6 +34,21 @@
 <canvas id="board"></canvas>
 <div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
+<!-- zweite Leiste: erscheint, solange Lineal/Geodreieck an ist -->
+<div id="ruler-bar" class="ruler-bar hidden" role="toolbar" aria-label="Lineal">
+  <button type="button" class="tool-btn kind-btn active" data-kind="ruler" title="Lineal"><span class="material-symbols-rounded">straighten</span></button>
+  <button type="button" class="tool-btn kind-btn" data-kind="triangle" title="Geodreieck"><span class="material-symbols-rounded">square_foot</span></button>
+  <span class="mode-sep"></span>
+  <button type="button" class="tool-btn angle-btn" data-angle="0" title="Waagrecht"><span class="angle-label">0°</span></button>
+  <button type="button" class="tool-btn angle-btn" data-angle="30"><span class="angle-label">30°</span></button>
+  <button type="button" class="tool-btn angle-btn" data-angle="45"><span class="angle-label">45°</span></button>
+  <button type="button" class="tool-btn angle-btn" data-angle="60"><span class="angle-label">60°</span></button>
+  <button type="button" class="tool-btn angle-btn" data-angle="90" title="Senkrecht"><span class="angle-label">90°</span></button>
+  <label class="angle-field" title="Winkel eintippen"><input id="ruler-bar-angle" type="number" inputmode="decimal" min="0" max="359" step="1" value="0" /><span>°</span></label>
+  <span class="mode-sep"></span>
+  <button type="button" id="ruler-bar-close" class="tool-btn" title="Lineal ausblenden"><span class="material-symbols-rounded">close</span></button>
+</div>
+<input id="ruler-angle-input" class="ruler-angle-input hidden" type="number" inputmode="decimal" min="0" max="359" step="1" aria-label="Winkel in Grad" />
 <div id="zoom-box" class="hidden">
   <div id="zoom-grip" class="zoom-handle" title="Rahmen verschieben"><span class="material-symbols-rounded">open_with</span></div>
   <div id="zoom-margin-left" class="zoom-margin" title="Linker Rand"></div>
@@ -74,6 +89,9 @@
   </button>
   <button type="button" id="btn-sel-paste" class="hidden" title="Einfügen">
     <span class="material-symbols-rounded">content_paste</span>
+  </button>
+  <button type="button" id="btn-sel-delete" title="Löschen (Entf)">
+    <span class="material-symbols-rounded">delete</span>
   </button>
   <button type="button" class="txt-btn hidden" data-flag="b" title="Fett"><span class="material-symbols-rounded">format_bold</span></button>
   <button type="button" class="txt-btn hidden" data-flag="i" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
@@ -259,12 +277,6 @@
       <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="55" title="Großer Radierer"><span class="eraser-dot" style="width:21px;height:21px"></span></button>
       <span class="mode-sep"></span>
       <button type="button" id="btn-bar-erase-all" class="tool-btn" title="Alle Striche löschen (Bilder, Texte und Tabellen bleiben)"><span class="material-symbols-rounded">delete_sweep</span></button>
-    </div>
-    <div class="mode-group ruler-group" data-modes="pen">
-      <span class="mode-sep"></span>
-      <button type="button" class="tool-btn angle-btn" data-angle="0" title="Lineal waagrecht"><span class="angle-label">0°</span></button>
-      <button type="button" class="tool-btn angle-btn" data-angle="45" title="Lineal 45°"><span class="angle-label">45°</span></button>
-      <button type="button" class="tool-btn angle-btn" data-angle="90" title="Lineal senkrecht"><span class="angle-label">90°</span></button>
     </div>
     <div class="tool-wrapper" data-modes="pen lasso">
       <button id="btn-import" class="tool-btn" type="button" title="Bild oder PDF importieren">
