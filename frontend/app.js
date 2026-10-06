@@ -738,7 +738,32 @@
     return penSize;
   }
 
+  // Stift-Einstellungen gelten fuer alle Blaetter und bleiben nach dem Neuladen
+  let prefsTimer = null;
+  function savePrefs() {
+    clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          "sofianotes-prefs",
+          JSON.stringify({
+            tool: currentTool === "marker" || (currentTool !== "pen" && lastInkToolPref === "marker") ? "marker" : "pen",
+            color: currentColor,
+            penSize,
+            markerSize,
+            eraserSize,
+            textSize,
+            shapes: shapeRecognitionEnabled,
+            finger: fingerDrawEnabled,
+          })
+        );
+      } catch (err) {}
+    }, 150);
+  }
+  let lastInkToolPref = "pen";
+
   function setActiveSize(v) {
+    savePrefs();
     const n = Number(v);
     if (currentTool === "text") {
       textSize = n;
@@ -883,7 +908,8 @@
       lastToolBeforeEraser = currentTool || "pen";
     }
     currentTool = tool;
-    if (tool === "pen" || tool === "marker") lastInkTool = tool;
+    if (tool === "pen" || tool === "marker") lastInkTool = lastInkToolPref = tool;
+    savePrefs();
     syncModeFromTool(tool);
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === tool);
@@ -939,23 +965,245 @@
       setTool(btn.dataset.tool, { openPopover: true });
     });
   });
-  toolbarEl.querySelectorAll(".swatch").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      currentColor = btn.dataset.color;
-      if (textEdit) applyTextEditStyle({ color: currentColor });
-      restyleSelection({ color: currentColor });
-      renderToolPopover();
+  // ---- Farben: 4 feste Plaetze + eigene Verknuepfungen (rechts, scrollbar) ----
+  // Gespeichert pro Geraet, gilt fuer alle Blaetter. Lange druecken (Rechtsklick)
+  // auf eine Farbe: aendern, verschieben, entfernen.
+  const DEFAULT_COLORS = ["#1E1F22", "#1A73E8", "#EA4335", "#34A853"];
+  const COLOR_NAMES = { "#1E1F22": "Schwarz", "#1A73E8": "Blau", "#EA4335": "Rot", "#34A853": "Grün", "#FBBC04": "Gelb" };
+  let palette = { base: DEFAULT_COLORS.slice(), custom: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem("sofianotes-colors") || "null");
+    if (raw && Array.isArray(raw.base) && raw.base.length === DEFAULT_COLORS.length) palette.base = raw.base.map(normColor);
+    if (raw && Array.isArray(raw.custom)) palette.custom = raw.custom.map(normColor).slice(0, 40);
+  } catch (err) {}
+  function normColor(c) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(c || "").trim());
+    return m ? "#" + m[1].toUpperCase() : "#1E1F22";
+  }
+  function savePalette() {
+    try {
+      localStorage.setItem("sofianotes-colors", JSON.stringify(palette));
+    } catch (err) {}
+  }
+  const swatchBaseEl = document.getElementById("swatch-base");
+  const swatchCustomEl = document.getElementById("swatch-custom");
+  const swatchMenu = document.getElementById("swatch-menu");
+  const swatchEditInput = document.getElementById("swatch-edit-input");
+  let swatchMenuTarget = null; // {group, index}
+
+  function pickColor(color) {
+    currentColor = normColor(color);
+    markActiveSwatch();
+    if (textEdit) applyTextEditStyle({ color: currentColor });
+    restyleSelection({ color: currentColor });
+    renderToolPopover();
+    savePrefs();
+  }
+  function markActiveSwatch() {
+    let found = null;
+    toolbarEl.querySelectorAll("#swatches-container .swatch").forEach((b) => {
+      const on = !found && b.dataset.color === normColor(currentColor);
+      b.classList.toggle("active", on);
+      if (on) found = b;
     });
-  });
+    if (found && found.parentElement === swatchCustomEl) {
+      const l = found.offsetLeft - swatchCustomEl.offsetLeft;
+      if (l < swatchCustomEl.scrollLeft || l + found.offsetWidth > swatchCustomEl.scrollLeft + swatchCustomEl.clientWidth) {
+        swatchCustomEl.scrollLeft = l - swatchCustomEl.clientWidth / 2;
+      }
+    }
+  }
+  function makeSwatch(color, group, index) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "swatch";
+    b.dataset.color = color;
+    b.dataset.group = group;
+    b.dataset.index = String(index);
+    b.style.background = color;
+    b.title = (COLOR_NAMES[color] || color) + " – lange drücken zum Ändern";
+    let hold = null;
+    let start = null;
+    b.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      start = { x: e.clientX, y: e.clientY };
+      clearTimeout(hold);
+      hold = setTimeout(() => {
+        hold = "fired";
+        openSwatchMenu(b);
+      }, 480);
+    });
+    b.addEventListener("pointermove", (e) => {
+      if (start && hold && hold !== "fired" && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 8) {
+        clearTimeout(hold);
+        hold = null;
+      }
+    });
+    const cancel = () => {
+      if (hold !== "fired") clearTimeout(hold);
+    };
+    b.addEventListener("pointerup", cancel);
+    b.addEventListener("pointercancel", () => {
+      clearTimeout(hold);
+      hold = null;
+    });
+    b.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openSwatchMenu(b);
+    });
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (hold === "fired" || swatchScrollDrag.moved) {
+        hold = null;
+        return;
+      }
+      hold = null;
+      pickColor(color);
+    });
+    return b;
+  }
+  function renderSwatches() {
+    if (!swatchBaseEl || !swatchCustomEl) return;
+    swatchBaseEl.textContent = "";
+    swatchCustomEl.textContent = "";
+    palette.base.forEach((c, i) => swatchBaseEl.appendChild(makeSwatch(c, "base", i)));
+    palette.custom.forEach((c, i) => swatchCustomEl.appendChild(makeSwatch(c, "custom", i)));
+    swatchCustomEl.classList.toggle("empty", palette.custom.length === 0);
+    markActiveSwatch();
+  }
+
+  // eigene Farben mit dem Finger/Stift seitlich durchschieben (die Leiste selbst
+  // faengt Gesten ab, deshalb hier von Hand)
+  const swatchScrollDrag = { id: null, x: 0, y: 0, sl: 0, st: 0, moved: false };
+  if (swatchCustomEl) {
+    swatchCustomEl.addEventListener("pointerdown", (e) => {
+      swatchScrollDrag.id = e.pointerId;
+      swatchScrollDrag.x = e.clientX;
+      swatchScrollDrag.y = e.clientY;
+      swatchScrollDrag.sl = swatchCustomEl.scrollLeft;
+      swatchScrollDrag.st = swatchCustomEl.scrollTop;
+      swatchScrollDrag.moved = false;
+    }, true);
+    window.addEventListener("pointermove", (e) => {
+      if (swatchScrollDrag.id !== e.pointerId) return;
+      const dx = e.clientX - swatchScrollDrag.x;
+      const dy = e.clientY - swatchScrollDrag.y;
+      if (!swatchScrollDrag.moved && Math.hypot(dx, dy) < 6) return;
+      swatchScrollDrag.moved = true;
+      swatchCustomEl.scrollLeft = swatchScrollDrag.sl - dx;
+      swatchCustomEl.scrollTop = swatchScrollDrag.st - dy;
+    });
+    const end = (e) => {
+      if (swatchScrollDrag.id !== e.pointerId) return;
+      swatchScrollDrag.id = null;
+      // click kommt nach pointerup - "moved" kurz stehen lassen
+      setTimeout(() => (swatchScrollDrag.moved = false), 0);
+    };
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    swatchCustomEl.addEventListener("wheel", (e) => {
+      if (swatchCustomEl.scrollWidth <= swatchCustomEl.clientWidth && swatchCustomEl.scrollHeight <= swatchCustomEl.clientHeight) return;
+      e.preventDefault();
+      e.stopPropagation();
+      swatchCustomEl.scrollLeft += e.deltaY + e.deltaX;
+      swatchCustomEl.scrollTop += e.deltaY + e.deltaX;
+    }, { passive: false });
+  }
+
+  function openSwatchMenu(btn) {
+    if (!swatchMenu) return;
+    swatchMenuTarget = { group: btn.dataset.group, index: Number(btn.dataset.index) };
+    const custom = swatchMenuTarget.group === "custom";
+    const list = palette[swatchMenuTarget.group];
+    document.getElementById("swatch-menu-remove").classList.toggle("hidden", !custom);
+    document.getElementById("swatch-menu-left").classList.toggle("hidden", !custom || swatchMenuTarget.index === 0);
+    document.getElementById("swatch-menu-right").classList.toggle("hidden", !custom || swatchMenuTarget.index >= list.length - 1);
+    swatchEditInput.value = list[swatchMenuTarget.index].toLowerCase();
+    swatchMenu.classList.remove("hidden");
+    const r = btn.getBoundingClientRect();
+    const mw = swatchMenu.offsetWidth;
+    const mh = swatchMenu.offsetHeight;
+    let top = r.top - mh - 10;
+    if (top < 8) top = r.bottom + 10;
+    swatchMenu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left + r.width / 2 - mw / 2)) + "px";
+    swatchMenu.style.top = top + "px";
+    try {
+      if (navigator.vibrate) navigator.vibrate(10);
+    } catch (err) {}
+  }
+  function closeSwatchMenu() {
+    if (swatchMenu) swatchMenu.classList.add("hidden");
+    swatchMenuTarget = null;
+  }
+  if (swatchMenu) {
+    swatchMenu.addEventListener("pointerdown", (e) => e.stopPropagation());
+    swatchEditInput.addEventListener("input", () => {
+      if (!swatchMenuTarget) return;
+      const list = palette[swatchMenuTarget.group];
+      const was = list[swatchMenuTarget.index];
+      const c = normColor(swatchEditInput.value);
+      list[swatchMenuTarget.index] = c;
+      savePalette();
+      if (normColor(currentColor) === was) currentColor = c;
+      renderSwatches();
+      if (normColor(currentColor) === c) pickColor(c);
+    });
+    swatchEditInput.addEventListener("change", () => closeSwatchMenu());
+    const move = (d) => {
+      if (!swatchMenuTarget) return;
+      const list = palette.custom;
+      const i = swatchMenuTarget.index;
+      const j = i + d;
+      if (j < 0 || j >= list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      savePalette();
+      renderSwatches();
+      const btn = swatchCustomEl.children[j];
+      if (btn) openSwatchMenu(btn);
+    };
+    document.getElementById("swatch-menu-left").addEventListener("click", (e) => {
+      e.stopPropagation();
+      move(-1);
+    });
+    document.getElementById("swatch-menu-right").addEventListener("click", (e) => {
+      e.stopPropagation();
+      move(1);
+    });
+    document.getElementById("swatch-menu-remove").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!swatchMenuTarget || swatchMenuTarget.group !== "custom") return;
+      palette.custom.splice(swatchMenuTarget.index, 1);
+      savePalette();
+      closeSwatchMenu();
+      renderSwatches();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!swatchMenu.classList.contains("hidden") && !e.target.closest("#swatch-menu")) closeSwatchMenu();
+    }, true);
+  }
+
+  // "+": neue Farbe waehlen -> wird rechts als eigene Verknuepfung angelegt
   const customColorInput = document.getElementById("custom-color-input");
   customColorInput.addEventListener("input", (e) => {
-    currentColor = e.target.value;
-    toolbarEl.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
+    currentColor = normColor(e.target.value);
+    markActiveSwatch();
     restyleSelection({ color: currentColor }, "color");
     renderToolPopover();
   });
+  customColorInput.addEventListener("change", (e) => {
+    const c = normColor(e.target.value);
+    if (!palette.base.includes(c) && !palette.custom.includes(c)) {
+      palette.custom.push(c);
+      savePalette();
+      renderSwatches();
+      swatchCustomEl.scrollLeft = swatchCustomEl.scrollWidth;
+      swatchCustomEl.scrollTop = swatchCustomEl.scrollHeight;
+    }
+    pickColor(c);
+  });
+  renderSwatches();
+
   sizeSlider.addEventListener("input", () => {
     setActiveSize(sizeSlider.value);
     restyleSelection({ size: Number(sizeSlider.value) }, "size");
@@ -981,12 +1229,14 @@
     e.stopPropagation();
     shapeRecognitionEnabled = !shapeRecognitionEnabled;
     shapeToggleEl.classList.toggle("active", shapeRecognitionEnabled);
+    savePrefs();
   });
 
   fingerDrawToggleEl.addEventListener("click", (e) => {
     e.stopPropagation();
     fingerDrawEnabled = !fingerDrawEnabled;
     fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
+    savePrefs();
   });
 
   const mathToggleEl = document.getElementById("math-toggle");
@@ -1247,7 +1497,7 @@
 
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop")) return;
+    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch")) return;
     e.preventDefault();
     const el = kind === "dock" ? toolbarEl : undoDock;
     dockDrag = {
@@ -1387,6 +1637,26 @@
     }
     hidePopovers();
   });
+
+  (function restorePrefs() {
+    let p = null;
+    try {
+      p = JSON.parse(localStorage.getItem("sofianotes-prefs") || "null");
+    } catch (err) {}
+    if (!p || typeof p !== "object") return;
+    const num = (v, cfg, d) => (Number.isFinite(Number(v)) ? Math.max(cfg.min, Math.min(cfg.max, Number(v))) : d);
+    penSize = num(p.penSize, toolConfigs.pen, penSize);
+    markerSize = num(p.markerSize, toolConfigs.marker, markerSize);
+    eraserSize = num(p.eraserSize, toolConfigs.eraser, eraserSize);
+    textSize = num(p.textSize, toolConfigs.text, textSize);
+    if (typeof p.color === "string" && /^#[0-9a-f]{6}$/i.test(p.color)) currentColor = p.color.toUpperCase();
+    if (typeof p.shapes === "boolean") shapeRecognitionEnabled = p.shapes;
+    if (typeof p.finger === "boolean") fingerDrawEnabled = p.finger;
+    shapeToggleEl.classList.toggle("active", shapeRecognitionEnabled);
+    fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
+    markActiveSwatch();
+    if (p.tool === "marker") setTool("marker");
+  })();
 
   const savedDock = localStorage.getItem("sofianotes-dock") || "bottom";
   const savedCorner = localStorage.getItem("sofianotes-undo-corner") || "top-left";
@@ -4366,8 +4636,16 @@
   function offerZoomContinuation(stroke) {
     if (!zoomWin || !stroke || !stroke.points || !stroke.points.length) return;
     const b = makeBBox(stroke.points);
+    // an (oder ueber) der rechten Randlinie: wie am Zeilenende -> naechste Zeile links
+    const atMargin = b.maxX >= zoomWin.right - zoomWin.w * 0.06 && b.minX < zoomWin.right + zoomWin.w * 0.1;
+    if (atMargin) {
+      zoomNext = { x: zoomWin.left, y: zoomWin.y + zoomBoxH() };
+      requestRedraw();
+      return;
+    }
     if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
     const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
+    // die Fortsetzung soll nicht ueber die Randlinie hinausragen
     if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: zoomWin.y + zoomBoxH() };
     else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
     requestRedraw();
@@ -5346,6 +5624,7 @@
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       eraserSize = Number(b.dataset.eraserSize);
+      savePrefs();
       updateEraserCursorVisibility();
       syncModeBar();
     })

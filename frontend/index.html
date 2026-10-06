@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,home,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_vert,note_add,open_with,palette,person,rectangle,redo,refresh,remove,reorder,shapes,share,square_foot,straighten,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,view_column,zoom_in,zoom_in_map&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_left,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,home,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_vert,note_add,open_with,palette,person,rectangle,redo,refresh,remove,reorder,shapes,share,square_foot,straighten,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,view_column,zoom_in,zoom_in_map&display=block" rel="stylesheet" />
 <link rel="preload" href="models/emnist/model.json" as="fetch" crossorigin />
 <link rel="preload" href="models/emnist/group1-shard1of1.bin" as="fetch" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -308,14 +308,11 @@
 
   <div class="dock-divider" data-modes="pen text lasso"></div>
   <div id="swatches-container" data-modes="pen text lasso">
-    <button class="swatch active" data-color="#1E1F22" style="background:#1E1F22" title="Schwarz"></button>
-    <button class="swatch" data-color="#EA4335" style="background:#EA4335" title="Rot"></button>
-    <button class="swatch" data-color="#1A73E8" style="background:#1A73E8" title="Blau"></button>
-    <button class="swatch" data-color="#34A853" style="background:#34A853" title="Grün"></button>
-    <button class="swatch" data-color="#FBBC04" style="background:#FBBC04" title="Gelb"></button>
-    <label class="custom-color" title="Eigene Farbe">
+    <div id="swatch-base" class="swatch-group"></div>
+    <div id="swatch-custom" class="swatch-group swatch-scroll"></div>
+    <label class="custom-color" title="Neue Farbe hinzufügen">
       <input id="custom-color-input" type="color" value="#8b5cf6" />
-      <span class="material-symbols-rounded">palette</span>
+      <span class="material-symbols-rounded">add</span>
     </label>
   </div>
 
@@ -504,6 +501,16 @@
   </div>
 </div>
 
+  <div id="swatch-menu" class="swatch-menu hidden" role="menu">
+    <label class="swatch-menu-btn" title="Farbe ändern">
+      <span class="material-symbols-rounded">palette</span>
+      <span>Ändern</span>
+      <input id="swatch-edit-input" type="color" value="#000000" />
+    </label>
+    <button id="swatch-menu-left" type="button" class="swatch-menu-btn" title="Nach links"><span class="material-symbols-rounded">chevron_left</span></button>
+    <button id="swatch-menu-right" type="button" class="swatch-menu-btn" title="Nach rechts"><span class="material-symbols-rounded">chevron_right</span></button>
+    <button id="swatch-menu-remove" type="button" class="swatch-menu-btn danger" title="Entfernen"><span class="material-symbols-rounded">delete</span><span>Entfernen</span></button>
+  </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
   if (window.pdfjsLib) {
