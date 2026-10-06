@@ -27,6 +27,10 @@
       return null;
     }
   }
+  let zoomStepDefault = (() => {
+    const v = parseFloat(lsGetRaw("sofianotes-zoom-step"));
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  })();
   let zoomRowsDefault = (() => {
     const v = parseFloat(lsGetRaw("sofianotes-zoom-rows"));
     return Number.isFinite(v) && v > 0 ? v : 1;
@@ -1390,7 +1394,7 @@
       if (el) el.textContent = t;
     };
     set("set-sum-paper", (currentBoardId ? "Dieses Blatt: " + (GRID_NAMES[gridStyle] || "Kariert") + " · " : "") + "Neue: " + (GRID_NAMES[mySettings.defaultPaper] || "Kariert"));
-    set("set-sum-zoom", ZOOM_ROW_NAMES[zoomRowsDefault] || zoomRowsDefault + " Kästchen hoch");
+    set("set-sum-zoom", (ZOOM_ROW_NAMES[zoomRowsDefault] || zoomRowsDefault + " Kästchen hoch") + (zoomStepDefault ? " · " + String(zoomStepDefault).replace(".5", "½") + " runter" : ""));
     set("set-sum-sofia", { auto: "Automatisch teilen", manual: "Nur per Knopf", off: "Nie teilen" }[mySettings.solutionMode] || "");
     renderZoomRowsSetting();
     const on = [];
@@ -1524,7 +1528,19 @@
   const ZOOM_ROW_NAMES = { 1: "1 Kästchen hoch", 1.5: "1½ Kästchen hoch", 2: "2 Kästchen hoch", 3: "3 Kästchen hoch" };
   function renderZoomRowsSetting() {
     document.querySelectorAll("#set-zoom-rows [data-rows]").forEach((b) => b.classList.toggle("active", parseFloat(b.dataset.rows) === zoomRowsDefault));
+    document.querySelectorAll("#set-zoom-step [data-step]").forEach((b) => b.classList.toggle("active", parseFloat(b.dataset.step) === zoomStepDefault));
   }
+  document.querySelectorAll("#set-zoom-step [data-step]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      zoomStepDefault = parseFloat(b.dataset.step) || 0;
+      try {
+        localStorage.setItem("sofianotes-zoom-step", String(zoomStepDefault));
+      } catch (err) {}
+      renderZoomRowsSetting();
+      syncSettingsSummary();
+    })
+  );
   document.querySelectorAll("#set-zoom-rows [data-rows]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -5253,6 +5269,10 @@
   }
   // Schreibhoehe in Kaestchen: das Fenster zeigt immer drei Zeilen dieser Hoehe, in der
   // mittleren wird geschrieben. Standard aus den Einstellungen, +/- gilt bis zum Schliessen.
+  // Zeilenwechsel: um wie viele Kaestchen es runtergeht (0 = so hoch wie die Schreibhoehe)
+  function zoomLineStep() {
+    return zoomStepDefault > 0 ? zoomStepDefault * GRID_SIZE : zoomRowH();
+  }
   function zoomRowH() {
     return (zoomWin && zoomWin.rows ? zoomWin.rows : zoomRowsDefault) * GRID_SIZE;
   }
@@ -5265,7 +5285,7 @@
   // Rahmen so legen, dass die mittlere Zeile auf einer Kaestchenlinie beginnt
   function snapZoomY(y) {
     const rh = zoomRowH();
-    const unit = Number.isInteger(zoomWin.rows) ? GRID_SIZE : GRID_SIZE / 2;
+    const unit = Number.isInteger(zoomWin.rows) && Number.isInteger(zoomStepDefault) ? GRID_SIZE : GRID_SIZE / 2;
     return Math.round((y + rh) / unit) * unit - rh;
   }
   function paneToWorld(clientX, clientY) {
@@ -5414,7 +5434,7 @@
   }
 
   function zoomNextLine(animate) {
-    moveZoomBox(zoomWin.left, snapZoomY(zoomWin.y + zoomRowH()), animate);
+    moveZoomBox(zoomWin.left, snapZoomY(zoomWin.y + zoomLineStep()), animate);
   }
   function zoomStep(dir) {
     const step = zoomWin.w * 0.6;
@@ -5423,7 +5443,7 @@
     if (dir < 0 && nx < zoomWin.left) {
       if (zoomWin.x <= zoomWin.left + 1) {
         // am linken Rand: zurueck ans Ende der vorigen Zeile
-        return moveZoomBox(Math.max(zoomWin.left, zoomWin.right - zoomWin.w), snapZoomY(zoomWin.y - zoomRowH()));
+        return moveZoomBox(Math.max(zoomWin.left, zoomWin.right - zoomWin.w), snapZoomY(zoomWin.y - zoomLineStep()));
       }
       nx = zoomWin.left;
     }
@@ -5438,14 +5458,14 @@
     // an (oder ueber) der rechten Randlinie: wie am Zeilenende -> naechste Zeile links
     const atMargin = b.maxX >= zoomWin.right - zoomWin.w * 0.06 && b.minX < zoomWin.right + zoomWin.w * 0.1;
     if (atMargin) {
-      zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomRowH()) };
+      zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
       requestRedraw();
       return;
     }
     if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
     const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
     // die Fortsetzung soll nicht ueber die Randlinie hinausragen
-    if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomRowH()) };
+    if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
     else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
     requestRedraw();
   }
