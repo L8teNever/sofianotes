@@ -3516,7 +3516,7 @@
       for (const child of Array.from(node.childNodes)) {
         if (child.nodeType === 3) {
           if (child.nodeValue) {
-            runs.push({ t: child.nodeValue.replace(/\u00a0/g, " "), ...styleOf(child) });
+            runs.push({ t: child.nodeValue.replace(/\u00a0/g, " ").replace(/\u200B/g, ""), ...styleOf(child) });
             any = true;
           }
         } else if (child.nodeName === "BR") {
@@ -3692,14 +3692,116 @@
 
   const textFormatBar = document.getElementById("text-format-bar");
 
+  // ---- Formatieren ohne "schwebenden" Browser-Zustand -----------------------
+  // execCommand merkt sich Fett & Co. fuer die naechsten Buchstaben nur als Typing-Style;
+  // den verwirft Safari auf dem iPad, sobald Wortvorschlaege/Autokorrektur eingreifen.
+  // Darum setzen wir bei Cursor ohne Markierung ein echtes Element (mit unsichtbarem
+  // Platzhalter \u200B) ein bzw. teilen es auf - das ueberlebt jede Tastatur.
+  const FMT = {
+    bold: { flag: "b", tag: "B", tags: ["B", "STRONG"] },
+    italic: { flag: "i", tag: "I", tags: ["I", "EM"] },
+    strikeThrough: { flag: "s", tag: "S", tags: ["S", "STRIKE", "DEL"] },
+    underline: { flag: "u", tag: "U", tags: ["U"] },
+  };
+  const ZWSP = "\u200B";
+
+  // Welche Formate setzt genau dieses Element (Tag oder Inline-Style)?
+  function elementFlags(el) {
+    const out = {};
+    const st = el.style || {};
+    for (const [cmd, f] of Object.entries(FMT)) {
+      if (f.tags.includes(el.tagName)) out[cmd] = true;
+    }
+    if (st.fontWeight && (st.fontWeight === "bold" || Number(st.fontWeight) >= 600)) out.bold = true;
+    if (st.fontStyle === "italic" || st.fontStyle === "oblique") out.italic = true;
+    const deco = (st.textDecorationLine || st.textDecoration || "") + "";
+    if (deco.includes("line-through")) out.strikeThrough = true;
+    if (deco.includes("underline")) out.underline = true;
+    return out;
+  }
+
+  function formatAt(node) {
+    const state = {};
+    for (let el = node && (node.nodeType === 1 ? node : node.parentElement); el && el !== textEditorEl; el = el.parentElement) {
+      Object.assign(state, elementFlags(el));
+    }
+    return state;
+  }
+
+  function placeCaret(textNode, offset) {
+    const r = document.createRange();
+    r.setStart(textNode, offset);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    editorRange = r.cloneRange();
+  }
+
+  function toggleAtCaret(cmd) {
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!textEditorEl.contains(range.startContainer)) return;
+    const on = !!formatAt(range.startContainer)[cmd];
+    const holder = document.createTextNode(ZWSP);
+    if (!on) {
+      const wrap = document.createElement(FMT[cmd].tag);
+      wrap.appendChild(holder);
+      range.insertNode(wrap);
+    } else {
+      // aeusserstes Element finden, das dieses Format setzt, und am Cursor aufteilen
+      let outer = null;
+      const between = [];
+      for (let el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement; el && el !== textEditorEl; el = el.parentElement) {
+        if (elementFlags(el)[cmd]) outer = el;
+      }
+      if (!outer) return;
+      for (let el = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement; el && el !== outer; el = el.parentElement) {
+        between.push(el);
+      }
+      const tail = document.createRange();
+      tail.setStart(range.startContainer, range.startOffset);
+      tail.setEndAfter(outer.lastChild || outer);
+      const rest = tail.extractContents();
+      // andere Formate innerhalb des aufgeteilten Elements beibehalten
+      let inner = holder;
+      for (const el of between) {
+        const flags = elementFlags(el);
+        if (flags[cmd] && Object.keys(flags).length === 1) continue;
+        const clone = el.cloneNode(false);
+        if (clone.style) {
+          if (cmd === "bold") clone.style.fontWeight = "";
+          if (cmd === "italic") clone.style.fontStyle = "";
+        }
+        clone.appendChild(inner);
+        inner = clone;
+      }
+      const after = outer.nextSibling;
+      outer.parentNode.insertBefore(inner, after);
+      // den Rest (falls nicht leer) wieder im alten Format dahinter
+      if (rest.textContent.replace(new RegExp(ZWSP, "g"), "")) {
+        const restWrap = outer.cloneNode(false);
+        restWrap.appendChild(rest);
+        outer.parentNode.insertBefore(restWrap, inner.nextSibling);
+      }
+    }
+    placeCaret(holder, 1);
+  }
+
+  function applyFormat(cmd) {
+    restoreEditorRange();
+    const sel = window.getSelection();
+    if (sel.rangeCount && sel.getRangeAt(0).collapsed) toggleAtCaret(cmd);
+    else document.execCommand(cmd, false, null);
+    rememberEditorRange();
+  }
+
   function syncFormatBar() {
     if (!textFormatBar || textFormatBar.classList.contains("hidden")) return;
-    const state = {
-      bold: document.queryCommandState("bold"),
-      italic: document.queryCommandState("italic"),
-      strikeThrough: document.queryCommandState("strikeThrough"),
-      underline: document.queryCommandState("underline"),
-    };
+    const sel = window.getSelection();
+    const node = sel && sel.rangeCount && textEditorEl.contains(sel.anchorNode) ? sel.anchorNode : null;
+    const state = node ? formatAt(node) : {};
     textFormatBar.querySelectorAll("[data-cmd]").forEach((b) => b.classList.toggle("active", !!state[b.dataset.cmd]));
   }
 
@@ -3722,9 +3824,7 @@
     const runFormatButton = (b) => {
       if (!textEdit) return;
       if (b.dataset.cmd) {
-        restoreEditorRange();
-        document.execCommand(b.dataset.cmd, false, null);
-        rememberEditorRange();
+        applyFormat(b.dataset.cmd);
       } else if (b.dataset.size) {
         const cfg = toolConfigs.text;
         const cur = textEdit.size * scale;
@@ -3797,7 +3897,11 @@
       // Strg/Cmd+B/I/U wie gewohnt; Tabellenzellen bleiben unformatiert
       const meta = e.ctrlKey || e.metaKey;
       if (meta && textEdit && textEdit.kind === "cell" && /^[biu]$/i.test(e.key)) e.preventDefault();
-      if (meta && textEdit && textEdit.kind === "text" && /^[biu]$/i.test(e.key)) setTimeout(syncFormatBar, 0);
+      if (meta && textEdit && textEdit.kind === "text" && /^[biu]$/i.test(e.key)) {
+        e.preventDefault();
+        applyFormat({ b: "bold", i: "italic", u: "underline" }[e.key.toLowerCase()]);
+        syncFormatBar();
+      }
     });
     textEditorEl.addEventListener("pointerdown", (e) => e.stopPropagation());
   }
