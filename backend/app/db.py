@@ -160,6 +160,9 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE people ADD COLUMN solution_mode TEXT NOT NULL DEFAULT 'auto'")
     if "default_paper" not in people_cols2:
         _conn.execute("ALTER TABLE people ADD COLUMN default_paper TEXT NOT NULL DEFAULT 'graph'")
+    if "prefs" not in people_cols2:
+        _conn.execute("ALTER TABLE people ADD COLUMN prefs TEXT")
+        _conn.execute("ALTER TABLE people ADD COLUMN prefs_at REAL")
     if "sofia_subject_id" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN sofia_subject_id INTEGER")
     people_cols = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
@@ -553,6 +556,34 @@ def _set_board_paper_sync(board_id: str, paper: str) -> bool:
     cur = _conn.execute("UPDATE boards SET paper = ? WHERE id = ?", (paper, board_id))
     _conn.commit()
     return cur.rowcount > 0
+
+
+def _person_prefs_sync(person_id: str) -> dict[str, Any]:
+    row = _conn.execute("SELECT prefs, prefs_at FROM people WHERE id = ?", (person_id,)).fetchone()
+    prefs: dict[str, Any] = {}
+    if row and row[0]:
+        try:
+            prefs = json.loads(row[0])
+        except ValueError:
+            prefs = {}
+    return {"prefs": prefs if isinstance(prefs, dict) else {}, "updatedAt": (row[1] if row else None) or 0}
+
+
+def _set_person_prefs_sync(person_id: str, prefs: dict[str, Any]) -> dict[str, Any]:
+    now = time.time()
+    _conn.execute("UPDATE people SET prefs = ?, prefs_at = ? WHERE id = ?", (json.dumps(prefs), now, person_id))
+    _conn.commit()
+    return {"prefs": prefs, "updatedAt": now}
+
+
+async def person_prefs(person_id: str) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _person_prefs_sync, person_id)
+
+
+async def set_person_prefs(person_id: str, prefs: dict[str, Any]) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _set_person_prefs_sync, person_id, prefs)
 
 
 async def person_settings(person_id: str) -> dict[str, Any]:

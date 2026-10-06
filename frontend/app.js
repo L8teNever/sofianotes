@@ -18,6 +18,139 @@
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 4;
   const GRID_SIZE = 32;
+  // ---- Geraete-Einstellungen mit dem Konto abgleichen ----
+  // Stift, Farben, Leisten, Zoom usw. liegen lokal im Browser und zusaetzlich am Konto.
+  // Aenderungen gehen kurz verzoegert hoch; ab und an (und beim Zurueckkehren in die App)
+  // wird nachgesehen, ob ein anderes Geraet etwas geaendert hat.
+  const PREF_KEYS = [
+    "sofianotes-prefs",
+    "sofianotes-colors",
+    "sofianotes-dock",
+    "sofianotes-undo-corner",
+    "sofianotes-topbar-pos",
+    "sofianotes-topbar-hidden",
+    "sofianotes-rulerbar-pos",
+    "sofianotes-zoom-rows",
+    "sofianotes-zoom-step",
+    "sofianotes-zoompane-pos",
+    "sofianotes-math",
+    "sofianotes-eraser-return",
+    "sofianotes-hwpanel-layout",
+    "sofianotes-hwpanel",
+    "sofianotes-hwpill-pos",
+  ];
+  const PREF_META = "sofianotes-prefs-sync"; // {at, dirty}
+  const prefSync = (() => {
+    let meta = { at: 0, dirty: false };
+    try {
+      meta = Object.assign(meta, JSON.parse(localStorage.getItem(PREF_META) || "{}"));
+    } catch (err) {}
+    let pushTimer = null;
+    let applying = false;
+    const saveMeta = () => {
+      try {
+        origSet.call(localStorage, PREF_META, JSON.stringify(meta));
+      } catch (err) {}
+    };
+    const proto = window.Storage && Storage.prototype;
+    const origSet = proto.setItem;
+    const origRemove = proto.removeItem;
+    const touched = (store, key) => {
+      if (applying || store !== window.localStorage || !PREF_KEYS.includes(key)) return;
+      meta.dirty = true;
+      saveMeta();
+      clearTimeout(pushTimer);
+      pushTimer = setTimeout(push, 3000);
+    };
+    proto.setItem = function (key, value) {
+      const before = this === window.localStorage ? this.getItem(key) : null;
+      origSet.call(this, key, value);
+      if (before !== String(value)) touched(this, key);
+    };
+    proto.removeItem = function (key) {
+      origRemove.call(this, key);
+      touched(this, key);
+    };
+    function localPrefs() {
+      const out = {};
+      for (const k of PREF_KEYS) {
+        const v = localStorage.getItem(k);
+        if (v != null) out[k] = v;
+      }
+      return out;
+    }
+    async function push() {
+      clearTimeout(pushTimer);
+      try {
+        const r = await fetch("/api/me/prefs", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prefs: localPrefs() }),
+        });
+        if (!r.ok) throw new Error(r.status);
+        const res = await r.json();
+        meta = { at: res.updatedAt || Date.now() / 1000, dirty: false };
+        saveMeta();
+      } catch (err) {
+        /* offline: beim naechsten Mal */
+      }
+    }
+    // Rueckgabe: true, wenn sich lokal etwas geaendert hat
+    async function pull() {
+      let res;
+      try {
+        const r = await fetch("/api/me/prefs", { cache: "no-store" });
+        if (!r.ok) return false;
+        res = await r.json();
+      } catch (err) {
+        return false;
+      }
+      if (meta.dirty || !res.updatedAt) {
+        push();
+        return false;
+      }
+      if (res.updatedAt <= meta.at) return false;
+      const remote = res.prefs || {};
+      let changed = false;
+      applying = true;
+      try {
+        for (const k of PREF_KEYS) {
+          const v = Object.prototype.hasOwnProperty.call(remote, k) ? remote[k] : null;
+          if (localStorage.getItem(k) === v) continue;
+          changed = true;
+          if (v == null) localStorage.removeItem(k);
+          else localStorage.setItem(k, v);
+        }
+      } finally {
+        applying = false;
+      }
+      meta = { at: res.updatedAt, dirty: false };
+      saveMeta();
+      return changed;
+    }
+    // Neu laden nur, wenn gerade kein Blatt offen ist (sonst beim naechsten Start)
+    async function check(force) {
+      const boardOpen = typeof currentBoardId === "string" && currentBoardId && libraryBackdrop.classList.contains("hidden");
+      if (boardOpen && !force) {
+        if (meta.dirty) push();
+        return;
+      }
+      if (await pull()) {
+        try {
+          if (sessionStorage.getItem("sofianotes-prefs-reload") === String(meta.at)) return;
+          sessionStorage.setItem("sofianotes-prefs-reload", String(meta.at));
+        } catch (err) {}
+        location.reload();
+      }
+    }
+    setInterval(() => check(false), 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") check(false);
+      else if (meta.dirty) push();
+    });
+    return { check, push };
+  })();
+
   // Persoenliche Einstellungen vom Server (gelten auf allen Geraeten)
   const mySettings = { solutionMode: "auto", defaultPaper: "graph" };
   function lsGetRaw(k) {
@@ -11565,6 +11698,7 @@
     const startParams = new URLSearchParams(location.search);
     currentFolderId = startParams.get("folder") || null;
     loadMySettings();
+    prefSync.check(true);
     await refreshPeople();
     hideWho();
     syncWhoChip();

@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import time
@@ -302,6 +303,22 @@ async def sofia_sync_now(_: dict = Depends(require_admin)) -> dict:
 def _people_from_sofia() -> None:
     if sofia_sync.enabled():
         raise HTTPException(status_code=409, detail="Personen kommen automatisch aus Sofia - dort aendern.")
+
+
+@app.get("/api/me/prefs")
+async def my_prefs(person: dict = Depends(get_current_person)) -> dict:
+    """Geraete-Einstellungen (Stift, Farben, Leisten, Zoom ...) fuer alle Geraete des Kontos."""
+    return await db.person_prefs(person["id"])
+
+
+@app.put("/api/me/prefs")
+async def set_my_prefs(request: Request, person: dict = Depends(get_current_person)) -> dict:
+    body = await _json_body(request)
+    prefs = body.get("prefs")
+    if not isinstance(prefs, dict) or len(json.dumps(prefs)) > 200_000:
+        raise HTTPException(status_code=400, detail="bad prefs")
+    prefs = {str(k)[:80]: v for k, v in prefs.items() if isinstance(v, str)}
+    return await db.set_person_prefs(person["id"], prefs)
 
 
 @app.get("/api/me/settings")
