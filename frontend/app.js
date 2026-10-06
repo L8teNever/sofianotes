@@ -6563,8 +6563,13 @@
   const PEN_GRACE_MS = 650;
   let lastPenActivity = -Infinity;
   let touchGestureView = null; // {scale, offsetX, offsetY} beim Start der Finger-Geste
+  // Groesse allein ist auf dem iPad unzuverlaessig (Finger melden teils grosse Flaechen):
+  // nur kurz nach Stift-Benutzung zaehlt eine breite Beruehrung als Handballen.
+  function penRecentlyUsed() {
+    return performance.now() - lastPenActivity < 4000;
+  }
   function looksLikePalm(e) {
-    if ((e.width || 0) >= PALM_CONTACT_PX || (e.height || 0) >= PALM_CONTACT_PX) return true;
+    if (penRecentlyUsed() && ((e.width || 0) >= PALM_CONTACT_PX || (e.height || 0) >= PALM_CONTACT_PX)) return true;
     for (const p of activePointers.values()) if (p.type === "pen") return true;
     return performance.now() - lastPenActivity < PEN_GRACE_MS;
   }
@@ -8318,7 +8323,7 @@
 
   canvas.addEventListener("pointermove", (e) => {
     if (palmIds.has(e.pointerId)) return;
-    if (e.pointerType === "touch" && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
+    if (e.pointerType === "touch" && penRecentlyUsed() && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
       // Kontakt ist beim Auflegen gewachsen -> doch Handballen: Geste abbrechen
       palmIds.add(e.pointerId);
       penTookOverTouchOnly(e.pointerId);
