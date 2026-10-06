@@ -864,7 +864,7 @@
       lastToolBeforeEraser = currentTool || "pen";
     }
     currentTool = tool;
-    if (tool === "pen" || tool === "marker" || tool === "eraser") lastInkTool = tool;
+    if (tool === "pen" || tool === "marker") lastInkTool = tool;
     syncModeFromTool(tool);
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === tool);
@@ -3321,17 +3321,20 @@
     };
     putStroke(t);
     pushUndo({ type: "replace", before: null, after: cloneStroke(t) });
-    setTool("select");
-    selectStrokeIds([t.id]);
-    syncSelectionToolbar();
+    lastTableId = t.id;
+    // direkt in die erste Zelle schreiben (Text-Modus bleibt)
+    if (currentTool !== "text") setTool("text");
+    openCellEditor(boardStrokes.get(t.id), { r: 0, c: 0 });
+    syncModeBar();
     requestRedraw();
   }
 
   // Zeile/Spalte anfuegen oder die letzte entfernen. Gewichte werden dabei in absolute
   // Weltgroessen umgerechnet, damit die vorhandenen Zellen ihre Groesse behalten.
-  function changeTable(kind, delta) {
-    const t = selectedTable();
+  function changeTable(kind, delta, explicit) {
+    const t = explicit || selectedTable();
     if (!t) return;
+    lastTableId = t.id;
     const before = cloneStroke(t);
     const g = tableGeom(t);
     const ex = JSON.parse(JSON.stringify(t.extra || {}));
@@ -3364,8 +3367,19 @@
     t.bbox = strokeWorldBBox(t);
     wsSend({ type: "stroke_move", stroke: serializeStroke(t) });
     pushUndo({ type: "replace", before, after: cloneStroke(t) });
-    selectStrokeIds(Array.from(selection.ids));
+    if (selection.ids.size) selectStrokeIds(Array.from(selection.ids));
     syncSelectionToolbar();
+  }
+
+  // Tabelle, auf die sich die Zeilen/Spalten-Knoepfe beziehen: ausgewaehlt (Lasso), gerade in
+  // einer Zelle in Bearbeitung, oder zuletzt eingefuegt/angetippt
+  let lastTableId = null;
+  function activeTable() {
+    const sel = typeof selectedTable === "function" ? selectedTable() : null;
+    if (sel) return sel;
+    if (textEdit && textEdit.kind === "cell") return boardStrokes.get(textEdit.tableId) || null;
+    const last = lastTableId && boardStrokes.get(lastTableId);
+    return last && last.tool === "table" ? last : null;
   }
 
   // Waechst der Text in einer Zelle ueber ihre Hoehe hinaus, wird die Zeile hoeher.
@@ -3471,6 +3485,7 @@
 
   function openCellEditor(t, cell) {
     if (!cell) return;
+    lastTableId = t.id;
     clearSelection();
     textEdit = { kind: "cell", tableId: t.id, r: cell.r, c: cell.c, before: cloneStroke(t), size: t.size, color: "#1E1F22" };
     const text = ((t.extra && t.extra.cells) || {})[cell.r + "," + cell.c] || "";
@@ -4830,11 +4845,13 @@
   function setMode(mode) {
     if (textEdit) commitTextEditor();
     // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Text aufheben
-    if ((mode === "pen" || mode === "text") && selection.ids.size) clearSelection();
+    if (mode !== "lasso" && selection.ids.size) clearSelection();
     modeSyncing = true;
     try {
       if (mode === "pen") {
-        if (!["pen", "marker", "eraser"].includes(currentTool)) setTool(lastInkTool || "pen");
+        if (!["pen", "marker"].includes(currentTool)) setTool(lastInkTool || "pen");
+      } else if (mode === "eraser") {
+        if (currentTool !== "eraser") setTool("eraser");
       } else if (mode === "text") {
         if (currentTool !== "text") setTool("text");
       } else if (currentTool !== "select") {
@@ -4852,9 +4869,10 @@
   function syncModeFromTool(tool) {
     if (modeSyncing || !toolbarEl.dataset) return;
     let mode = currentMode;
-    if (tool === "pen" || tool === "marker" || tool === "eraser") mode = "pen";
+    if (tool === "pen" || tool === "marker") mode = "pen";
+    else if (tool === "eraser") mode = "eraser";
     else if (tool === "text") mode = "text";
-    else if (tool === "select") mode = currentMode === "table" ? "table" : "lasso";
+    else if (tool === "select") mode = "lasso";
     if (mode !== currentMode) showMode(mode);
   }
 
@@ -4881,13 +4899,17 @@
         else on = !!textDefaults[f];
         b.classList.toggle("active", on);
       });
-    } else if (mode === "table") {
-      const table = typeof selectedTable === "function" ? selectedTable() : null;
+      const table = activeTable();
       toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) => {
         b.disabled = !table;
       });
-      const hint = document.getElementById("tbl-hint");
-      if (hint) hint.classList.toggle("hidden", !!table);
+    } else if (mode === "eraser") {
+      let best = null;
+      toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) => {
+        const v = Number(b.dataset.eraserSize);
+        if (!best || Math.abs(v - eraserSize) < Math.abs(Number(best.dataset.eraserSize) - eraserSize)) best = b;
+      });
+      toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) => b.classList.toggle("active", b === best));
     }
     if (ruler.visible) {
       let deg = Math.abs(Math.round((ruler.angle * 180) / Math.PI)) % 180;
@@ -4921,13 +4943,40 @@
     })
   );
 
-  toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) =>
+  toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) => {
+    // Tippt man gerade in einer Zelle, bleibt man nach dem Aendern in derselben Zelle
+    b.addEventListener("pointerdown", (e) => {
+      if (textEdit && e.cancelable) e.preventDefault();
+      e.stopPropagation();
+    });
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      changeTable(b.dataset.tbl, Number(b.dataset.delta));
+      const t = activeTable();
+      if (!t) return;
+      const cell = textEdit && textEdit.kind === "cell" ? { r: textEdit.r, c: textEdit.c } : null;
+      if (textEdit) commitTextEditor();
+      changeTable(b.dataset.tbl, Number(b.dataset.delta), t);
+      const fresh = boardStrokes.get(t.id);
+      if (cell && fresh) {
+        const ex = fresh.extra || {};
+        openCellEditor(fresh, { r: Math.min(cell.r, (ex.rows || 1) - 1), c: Math.min(cell.c, (ex.cols || 1) - 1) });
+      }
+      syncModeBar();
+    });
+  });
+
+  toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      eraserSize = Number(b.dataset.eraserSize);
+      updateEraserCursorVisibility();
       syncModeBar();
     })
   );
+  document.getElementById("btn-bar-erase-all")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    clearAllInk();
+  });
 
   toolbarEl.querySelectorAll(".angle-btn").forEach((b) =>
     b.addEventListener("click", (e) => {
@@ -5755,7 +5804,7 @@
     if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
     const table = cropping ? null : selectedTable();
     // im Tabellen-/Text-Modus stehen diese Knoepfe schon unten in der Leiste
-    const inTableMode = toolbarEl.dataset.mode === "table";
+    const inTableMode = toolbarEl.dataset.mode === "text";
     document.querySelectorAll(".tbl-btn").forEach((b) => b.classList.toggle("hidden", !table || inTableMode));
     syncModeBar();
     const texts = cropping ? [] : selectedTextBoxes();

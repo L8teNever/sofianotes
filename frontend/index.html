@@ -159,8 +159,8 @@
   <!-- Modus: bestimmt, was die Werkzeugleiste unten zeigt -->
   <div id="mode-switch" class="mode-switch" role="tablist" aria-label="Modus">
     <button type="button" class="icon-btn mode-btn active" data-mode="pen" title="Stift: Stift, Marker, Radierer, Farben"><span class="material-symbols-rounded">ink_pen</span></button>
-    <button type="button" class="icon-btn mode-btn" data-mode="text" title="Text: Textfelder, Größe, Fett/Kursiv/…"><span class="material-symbols-rounded">text_fields</span></button>
-    <button type="button" class="icon-btn mode-btn" data-mode="table" title="Tabelle: einfügen, Zeilen/Spalten"><span class="material-symbols-rounded">table</span></button>
+    <button type="button" class="icon-btn mode-btn" data-mode="eraser" title="Radierer: Größe, alle Striche löschen"><span class="material-symbols-rounded">ink_eraser</span></button>
+    <button type="button" class="icon-btn mode-btn" data-mode="text" title="Text: Textfelder, Tabellen, Größe, Fett/Kursiv/…"><span class="material-symbols-rounded">text_fields</span></button>
     <button type="button" class="icon-btn mode-btn" data-mode="lasso" title="Lasso: auswählen, verschieben, umfärben"><span class="material-symbols-rounded">lasso_select</span></button>
   </div>
   <div class="bar-divider"></div>
@@ -209,17 +209,17 @@
 
 <nav id="toolbar" class="dock-bottom" data-mode="pen" title="Lange drücken, dann an einen Rand ziehen">
   <div class="tools-container">
-    <div class="tool-wrapper" data-modes="pen ruler">
+    <div class="tool-wrapper" data-modes="pen">
       <button class="tool-btn active" data-tool="pen" title="Stift">
         <span class="material-symbols-rounded">ink_pen</span>
       </button>
     </div>
-    <div class="tool-wrapper" data-modes="pen ruler">
+    <div class="tool-wrapper" data-modes="pen">
       <button class="tool-btn" data-tool="marker" title="Textmarker">
         <span class="material-symbols-rounded">ink_highlighter</span>
       </button>
     </div>
-    <div class="tool-wrapper" data-modes="pen ruler">
+    <div class="tool-wrapper" data-modes="eraser">
       <button class="tool-btn" data-tool="eraser" title="Radiergummi">
         <span class="material-symbols-rounded">ink_eraser</span>
       </button>
@@ -244,14 +244,21 @@
       <button type="button" class="tool-btn fmt-btn" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
       <button type="button" class="tool-btn fmt-btn" data-cmd="underline" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
     </div>
-    <div class="mode-group" data-modes="table">
-      <button id="btn-insert-table" class="tool-btn" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">add_box</span></button>
+    <div class="mode-group" data-modes="text">
       <span class="mode-sep"></span>
+      <button id="btn-insert-table" class="tool-btn" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">table</span></button>
       <button type="button" class="tool-btn tbl-bar-btn" data-tbl="row" data-delta="1" title="Zeile unten anfügen"><span class="material-symbols-rounded">table_rows</span><span class="mini-badge">+</span></button>
       <button type="button" class="tool-btn tbl-bar-btn" data-tbl="col" data-delta="1" title="Spalte rechts anfügen"><span class="material-symbols-rounded">view_column</span><span class="mini-badge">+</span></button>
       <button type="button" class="tool-btn tbl-bar-btn" data-tbl="row" data-delta="-1" title="Letzte Zeile entfernen"><span class="material-symbols-rounded">table_rows</span><span class="mini-badge">−</span></button>
       <button type="button" class="tool-btn tbl-bar-btn" data-tbl="col" data-delta="-1" title="Letzte Spalte entfernen"><span class="material-symbols-rounded">view_column</span><span class="mini-badge">−</span></button>
-      <span id="tbl-hint" class="mode-hint">Tabelle einfügen oder antippen</span>
+    </div>
+    <div class="mode-group" data-modes="eraser">
+      <span class="mode-sep"></span>
+      <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="12" title="Kleiner Radierer"><span class="eraser-dot" style="width:8px;height:8px"></span></button>
+      <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="28" title="Mittlerer Radierer"><span class="eraser-dot" style="width:14px;height:14px"></span></button>
+      <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="55" title="Großer Radierer"><span class="eraser-dot" style="width:21px;height:21px"></span></button>
+      <span class="mode-sep"></span>
+      <button type="button" id="btn-bar-erase-all" class="tool-btn" title="Alle Striche löschen (Bilder, Texte und Tabellen bleiben)"><span class="material-symbols-rounded">delete_sweep</span></button>
     </div>
     <div class="mode-group ruler-group" data-modes="pen">
       <span class="mode-sep"></span>
@@ -287,8 +294,8 @@
     </div>
   </div>
 
-  <div class="dock-divider" data-modes="pen ruler text lasso"></div>
-  <div id="swatches-container" data-modes="pen ruler text lasso">
+  <div class="dock-divider" data-modes="pen text lasso"></div>
+  <div id="swatches-container" data-modes="pen text lasso">
     <button class="swatch active" data-color="#1E1F22" style="background:#1E1F22" title="Schwarz"></button>
     <button class="swatch" data-color="#EA4335" style="background:#EA4335" title="Rot"></button>
     <button class="swatch" data-color="#1A73E8" style="background:#1A73E8" title="Blau"></button>

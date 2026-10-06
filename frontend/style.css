@@ -1659,3 +1659,7 @@ button {
 #toolbar[data-mode="lasso"] [data-modes]:not([data-modes~="lasso"]) { display: none; }
 /* Winkel-Knoepfe nur, solange das Lineal an ist */
 #toolbar:not(.ruler-on) .ruler-group { display: none; }
+.eraser-dot { display: block; border-radius: 50%; background: #e2e6ea; box-shadow: inset 0 0 0 1.5px #80868b; }
+.eraser-size-btn.active .eraser-dot { background: #d3e3fd; box-shadow: inset 0 0 0 1.5px var(--accent); }
+.eraser-size-btn.active { background: var(--accent-soft); }
+#toolbar[data-mode="eraser"] [data-modes]:not([data-modes~="eraser"]) { display: none; }
