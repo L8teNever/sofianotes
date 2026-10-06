@@ -6193,6 +6193,43 @@
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}
   const touchPointers = new Map(); // pointerId -> {x,y}
+  // ---- Handballen-Erkennung ----
+  // Ein aufgelegter Handballen darf weder zoomen noch verschieben:
+  //  - grosse Kontaktflaeche (Safari meldet width/height der Beruehrung) -> Handballen
+  //  - solange der Stift aufliegt und kurz danach zaehlen Beruehrungen nicht
+  //  - setzt der Stift auf, waehrend noch eine Finger-Geste laeuft, war das der Ballen:
+  //    Ansicht auf den Stand vor der Geste zuruecksetzen
+  const palmIds = new Set();
+  const PALM_CONTACT_PX = 38;
+  const PEN_GRACE_MS = 650;
+  let lastPenActivity = -Infinity;
+  let touchGestureView = null; // {scale, offsetX, offsetY} beim Start der Finger-Geste
+  function looksLikePalm(e) {
+    if ((e.width || 0) >= PALM_CONTACT_PX || (e.height || 0) >= PALM_CONTACT_PX) return true;
+    for (const p of activePointers.values()) if (p.type === "pen") return true;
+    return performance.now() - lastPenActivity < PEN_GRACE_MS;
+  }
+  function notePenActivity() {
+    lastPenActivity = performance.now();
+  }
+  // Stift setzt auf: alle aufliegenden Finger sind ab jetzt Handballen; eine laufende
+  // Zoom-/Verschiebe-Geste wird rueckgaengig gemacht.
+  function penTookOver() {
+    notePenActivity();
+    if (!touchPointers.size) return;
+    if (touchGestureView && (pinchState || panState)) {
+      scale = touchGestureView.scale;
+      offsetX = touchGestureView.offsetX;
+      offsetY = touchGestureView.offsetY;
+      requestRedraw();
+    }
+    for (const id of touchPointers.keys()) palmIds.add(id);
+    touchPointers.clear();
+    pinchState = null;
+    if (panState && panState.pointerId === undefined) panState = null;
+    tapState = null;
+    touchGestureView = null;
+  }
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
   let tapState = null; // {pointerId, x, y, t} - moeglicher Finger-Tap (kurz, kaum bewegt)
@@ -7497,19 +7534,20 @@
   // Durchkritzeln loescht nur Tinte, die das Gekritzel ueberwiegend ueberdeckt (mind. die
   // Haelfte ihrer Punkte im Gekritzel-Bereich und tatsaechlich beruehrt) - lange Striche,
   // die nur am Rand gestreift werden, bleiben.
-  function scribbleCovers(pts, stroke) {
-    return SofiaInk.scribbleHitsStroke(pts, stroke.points, stroke.size);
-  }
-
   function findStruckStrokes(pts) {
     if (!looksLikeStrikeGesture(pts)) return [];
     const mouse = currentStroke && currentStroke.pointerType === "mouse";
-    const hit = [];
-    for (const stroke of boardStrokes.values()) {
-      if (isObjectStroke(stroke)) continue;
-      if (mouse ? strikeCrossesStroke(pts, stroke) : scribbleCovers(pts, stroke)) hit.push(stroke);
-    }
-    return hit;
+    const ink = [];
+    for (const stroke of boardStrokes.values()) if (!isObjectStroke(stroke)) ink.push(stroke);
+    if (mouse) return ink.filter((stroke) => strikeCrossesStroke(pts, stroke));
+    // nur Tinte in der Naehe pruefen (schnell auch bei vollen Blaettern)
+    const sb = makeBBox(pts);
+    const m = 40;
+    const near = ink.filter((st) => {
+      const b = st.bbox || strokeWorldBBox(st);
+      return b && b.maxX >= sb.minX - m && b.minX <= sb.maxX + m && b.maxY >= sb.minY - m && b.minY <= sb.maxY + m;
+    });
+    return SofiaInk.scribbleTargets(pts, near);
   }
 
   function endStroke() {
@@ -7823,9 +7861,15 @@
     } catch (err) {
       // manche Browser/synthetische Events lehnen Pointer Capture ab - Zeichnen soll trotzdem funktionieren
     }
+    if (e.pointerType === "touch" && looksLikePalm(e)) {
+      palmIds.add(e.pointerId);
+      return;
+    }
+    if (e.pointerType === "pen") penTookOver();
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
 
     if (e.pointerType === "touch") {
+      if (!touchPointers.size) touchGestureView = { scale, offsetX, offsetY };
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (rulerGesture && touchPointers.size === 2) {
         // zweiter Finger zum ersten aufs Lineal: drehen statt zoomen
@@ -7906,6 +7950,14 @@
   }, { passive: false });
 
   canvas.addEventListener("pointermove", (e) => {
+    if (palmIds.has(e.pointerId)) return;
+    if (e.pointerType === "touch" && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
+      // Kontakt ist beim Auflegen gewachsen -> doch Handballen: Geste abbrechen
+      palmIds.add(e.pointerId);
+      penTookOverTouchOnly(e.pointerId);
+      return;
+    }
+    if (e.pointerType === "pen") notePenActivity();
     notePasteHoldMove(e);
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
     if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
@@ -8037,7 +8089,28 @@
     sendCursor(world.x, world.y, currentTool, activeSize());
   });
 
+  // ein einzelner Finger stellt sich als Handballen heraus: seine Geste zuruecknehmen
+  function penTookOverTouchOnly(id) {
+    if (!touchPointers.has(id)) return;
+    if (touchGestureView && (pinchState || panState)) {
+      scale = touchGestureView.scale;
+      offsetX = touchGestureView.offsetX;
+      offsetY = touchGestureView.offsetY;
+      requestRedraw();
+    }
+    touchPointers.delete(id);
+    activePointers.delete(id);
+    pinchState = null;
+    if (panState && panState.pointerId === undefined) panState = null;
+    tapState = null;
+  }
+
   function endPointer(e) {
+    if (palmIds.has(e.pointerId)) {
+      palmIds.delete(e.pointerId);
+      return;
+    }
+    if (e.pointerType === "pen") notePenActivity();
     const consumed = pasteHoldConsumed;
     clearPasteHold();
     activePointers.delete(e.pointerId);
@@ -8189,6 +8262,7 @@
   window.addEventListener("pointercancel", dropTouch, true);
   const resetTouches = (e) => {
     if (e.touches && e.touches.length > 0) return;
+    palmIds.clear();
     if (!touchPointers.size) return;
     touchPointers.clear();
     for (const [id, p] of activePointers) if (p.type === "touch") activePointers.delete(id);

@@ -100,44 +100,16 @@
     return out;
   }
 
-  // Durchkritzeln zum Loeschen: mehrfach hin und her entlang einer Hauptrichtung.
-  // Zaehlt Umkehrpunkte entlang der Hauptachse (mit Mindestausschlag, damit Zittern nicht
-  // zaehlt) und verlangt, dass der Weg die Ausdehnung mehrfach ueberdeckt. Handschrift wie
-  // m, w, n laeuft entlang ihrer Hauptachse fast nur in eine Richtung und zaehlt nicht.
-  function scribbleInfo(pts) {
-    if (!pts || pts.length < 6) return null;
-    const path = strokePathLength(pts);
-    if (path < 40) return null;
-    const even = resampleEven(pts, Math.max(2, path / 120));
-    if (even.length < 8) return null;
-    let mx = 0;
-    let my = 0;
-    for (const p of even) {
-      mx += p.x;
-      my += p.y;
-    }
-    mx /= even.length;
-    my /= even.length;
-    let sxx = 0;
-    let syy = 0;
-    let sxy = 0;
-    for (const p of even) {
-      const dx = p.x - mx;
-      const dy = p.y - my;
-      sxx += dx * dx;
-      syy += dy * dy;
-      sxy += dx * dy;
-    }
-    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
-    const ux = Math.cos(ang);
-    const uy = Math.sin(ang);
+  // Durchkritzeln zum Loeschen: mehrfach hin und her. Gezaehlt werden Umkehrpunkte entlang
+  // einer Richtung (mit Mindestausschlag, damit Zittern nicht zaehlt) und die Zuege dazwischen:
+  // beim Kritzeln lange, fast gerade Striche ueber die ganze Breite. Buchstaben wie g, b, a, e
+  // kehren in Boegen und unterschiedlich langen Stuecken um. Geprueft wird entlang der
+  // Hauptrichtung UND quer dazu (hoch-runter ueber ein breites Wort).
+  function axisRuns(even, mx, my, ux, uy) {
     const proj = even.map((p) => (p.x - mx) * ux + (p.y - my) * uy);
     const extent = Math.max(...proj) - Math.min(...proj);
-    if (extent < 14) return null;
-    const minSwing = Math.max(6, extent * 0.3);
-    // Zuege zwischen den Umkehrpunkten sammeln: Beim Kritzeln sind das lange, fast gerade
-    // Hin-und-her-Striche ueber die ganze Breite. Buchstaben wie g, b, a, e, 8 kehren zwar
-    // auch mehrmals um, aber in Boegen und unterschiedlich langen Stuecken.
+    if (extent < 10) return null;
+    const minSwing = Math.max(5, extent * 0.3);
     const runs = [];
     let reversals = 0;
     let dir = 0;
@@ -175,14 +147,67 @@
       const chord = Math.abs(proj[b] - proj[a]);
       let len = 0;
       for (let i = a + 1; i <= b; i++) len += hypot(even[i].x - even[i - 1].x, even[i].y - even[i - 1].y);
-      if (chord >= extent * 0.45 && len > 0 && chord / len >= 0.72) good++;
+      if (chord >= extent * 0.45 && len > 0 && chord / len >= 0.7) good++;
     }
-    return { reversals, density: path / extent, extent, runs: runs.length, good };
+    return { extent, reversals, runs: runs.length, good };
+  }
+
+  function scribbleInfo(pts) {
+    if (!pts || pts.length < 6) return null;
+    const path = strokePathLength(pts);
+    if (path < 30) return null;
+    const even = resampleEven(pts, Math.max(1.5, path / 160));
+    if (even.length < 8) return null;
+    let mx = 0;
+    let my = 0;
+    for (const p of even) {
+      mx += p.x;
+      my += p.y;
+    }
+    mx /= even.length;
+    my /= even.length;
+    let sxx = 0;
+    let syy = 0;
+    let sxy = 0;
+    for (const p of even) {
+      const dx = p.x - mx;
+      const dy = p.y - my;
+      sxx += dx * dx;
+      syy += dy * dy;
+      sxy += dx * dy;
+    }
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const ux = Math.cos(ang);
+    const uy = Math.sin(ang);
+    let best = null;
+    for (const [ax, ay, cross] of [[ux, uy, false], [-uy, ux, true]]) {
+      const r = axisRuns(even, mx, my, ax, ay);
+      if (!r || r.extent < 12) continue;
+      r.density = path / r.extent;
+      r.cross = cross;
+      if (!best || scribbleScore(r) > scribbleScore(best)) best = r;
+    }
+    return best;
+  }
+
+  function scribbleOk(info) {
+    if (!info) return false;
+    if (info.cross) {
+      // quer zur Hauptrichtung (hoch-runter ueber ein breites Wort): mehr Zuege verlangen,
+      // sonst waeren m, w, u, n genau so ein Zickzack
+      return info.reversals >= 4 && info.density >= 3 && info.good >= 5 && info.good >= info.runs * 0.8;
+    }
+    // 2x hin und her (oder mehr): der Grossteil der Zuege lang und gerade
+    if (info.reversals >= 3 && info.density >= 3 && info.good >= 4 && info.good >= info.runs * 0.75) return true;
+    // hin - her - hin reicht auch, wenn alle drei Zuege sauber durchgezogen sind
+    return info.reversals >= 2 && info.runs >= 3 && info.good >= 3 && info.good >= info.runs && info.density >= 2.6;
+  }
+  function scribbleScore(r) {
+    return (scribbleOk(r) ? 1000 : 0) + r.good * 10 + r.reversals;
   }
 
   function looksLikeScribble(pts) {
-    const info = scribbleInfo(pts);
-    return !!info && info.reversals >= 3 && info.density >= 3 && info.good >= 4 && info.good >= info.runs * 0.75;
+    return scribbleOk(scribbleInfo(pts));
   }
 
   function segsCross(a, b, c, d) {
@@ -194,41 +219,123 @@
     return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
   }
 
-  // Trifft ein Kritzel-Strich diese Tinte wirklich? Er muss sie ueberdecken (der Grossteil
-  // liegt in seiner Flaeche) UND mehrfach darueber hinweggehen. Beim normalen Schreiben
-  // kreuzt ein neuer Buchstabe (auch ein M oder W, das wie ein Zickzack aussieht) die
-  // Buchstaben daneben praktisch nie mehrfach.
+  function convexHull(points) {
+    const pts = points.map((p) => [p.x, p.y]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (pts.length < 3) return pts;
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    upper.pop();
+    lower.pop();
+    return lower.concat(upper);
+  }
+  // < 0: innerhalb der Huelle, sonst Abstand zum Rand
+  function distToHull(q, hull) {
+    let inside = hull.length >= 3;
+    let best = Infinity;
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i];
+      const b = hull[(i + 1) % hull.length];
+      const dx = b[0] - a[0];
+      const dy = b[1] - a[1];
+      const L = dx * dx + dy * dy;
+      let t = L ? ((q.x - a[0]) * dx + (q.y - a[1]) * dy) / L : 0;
+      t = Math.max(0, Math.min(1, t));
+      best = Math.min(best, hypot(q.x - a[0] - t * dx, q.y - a[1] - t * dy));
+      if (dx * (q.y - a[1]) - dy * (q.x - a[0]) < 0) inside = false;
+    }
+    return inside ? -best : best;
+  }
+
+  // Trifft ein Kritzel-Strich diese Tinte? Geloescht wird, was in der Flaeche des Gekritzels
+  // liegt (konvexe Huelle, etwas Rand) und vom Gekritzel beruehrt wird - so verschwindet ein
+  // durchgekritzeltes Wort komplett, samt i-Punkten und kurzen Strichen. Ragt Tinte weit
+  // heraus (Unterlaengen, lange Linien), muss das Gekritzel sie mehrfach kreuzen. Beim
+  // normalen Schreiben liegt ein Buchstabe praktisch nie in der Flaeche eines neuen Strichs.
   function scribbleHitsStroke(scribble, target, size) {
     const sp = target || [];
     if (!scribble || scribble.length < 2 || !sp.length) return false;
     const sz = size || 6;
-    const b = bboxOfPoints(scribble);
-    const pad = 4 + sz / 2;
+    const hull = convexHull(scribble);
+    const sb = bboxOfPoints(scribble);
+    const pad = 3 + sz / 2 + Math.min(8, 0.04 * Math.max(sb.maxX - sb.minX, sb.maxY - sb.minY));
     let inside = 0;
-    for (const p of sp) {
-      if (p.x >= b.minX - pad && p.x <= b.maxX + pad && p.y >= b.minY - pad && p.y <= b.maxY + pad) inside++;
-    }
-    if (inside / sp.length < 0.6) return false;
+    for (const p of sp) if (distToHull(p, hull) <= pad) inside++;
+    const frac = inside / sp.length;
+    if (frac < 0.3) return false;
     const tb = bboxOfPoints(sp);
-    const small = Math.hypot(tb.maxX - tb.minX, tb.maxY - tb.minY) < Math.max(16, sz * 3);
-    const sc = resampleEven(scribble, 3);
-    if (small) {
-      // Punkt / Mini-Strich: es reicht, wenn das Gekritzel direkt darueber geht
-      const hitR = 4 + sz * 0.6;
-      for (const q of sc) for (const p of sp) if (hypot(q.x - p.x, q.y - p.y) <= hitR) return true;
-      return false;
-    }
-    const tp = sp.length > 2 ? resampleEven(sp, 3) : sp;
+    const small = Math.hypot(tb.maxX - tb.minX, tb.maxY - tb.minY) < Math.max(14, sz * 2.5);
+    if (small) return frac >= 0.99; // Punkt / Mini-Strich mitten im Gekritzel
+    if (frac >= 0.95) return true; // liegt ganz in der Kritzel-Flaeche (z. B. f-/t-Querstrich zwischen zwei Zuegen)
+    const sc = resampleEven(scribble, 2.5);
+    const tp = sp.length > 2 ? resampleEven(sp, 2.5) : sp;
     let crossings = 0;
-    for (let i = 1; i < sc.length; i++) {
+    for (let i = 1; i < sc.length && crossings < 3; i++) {
       for (let j = 1; j < tp.length; j++) {
         if (segsCross(sc[i - 1], sc[i], tp[j - 1], tp[j])) {
           crossings++;
-          if (crossings >= 3) return true;
+          if (crossings >= 3) break;
         }
       }
     }
-    return false;
+    if (frac >= 0.8) {
+      if (crossings >= 1) return true;
+      // nicht gekreuzt, aber direkt darueber gekritzelt (kleine Buchstaben zwischen den Zuegen)
+      const hitR = 3 + sz * 0.6;
+      for (const q of sc) for (const p of tp) if (hypot(q.x - p.x, q.y - p.y) <= hitR) return true;
+      return false;
+    }
+    // ragt heraus (hohe Buchstaben, Unterlaengen, halb ueberkritzelter Endbuchstabe):
+    // dann muss das Gekritzel wirklich mehrfach darueber gegangen sein
+    return crossings >= 2;
+  }
+
+  function coverFraction(scribble, target, size) {
+    const hull = convexHull(scribble);
+    const sb = bboxOfPoints(scribble);
+    const pad = 3 + (size || 6) / 2 + Math.min(8, 0.04 * Math.max(sb.maxX - sb.minX, sb.maxY - sb.minY));
+    let inside = 0;
+    for (const p of target) if (distToHull(p, hull) <= pad) inside++;
+    return target.length ? inside / target.length : 0;
+  }
+
+  // Welche Striche ein Gekritzel loescht: alles, was es trifft (scribbleHitsStroke), plus
+  // Buchstaben desselben Worts, die nur halb darunter liegen und direkt an einem
+  // getroffenen Buchstaben haengen (z. B. ein nicht ganz ueberkritzelter Endbuchstabe).
+  function scribbleTargets(scribble, strokes) {
+    const hit = new Set();
+    for (const s of strokes) if (scribbleHitsStroke(scribble, s.points, s.size)) hit.add(s);
+    if (!hit.size) return [];
+    const boxes = new Map(strokes.map((s) => [s, bboxOfPoints(s.points)]));
+    const sb = bboxOfPoints(scribble);
+    const hitBoxes = () => Array.from(hit).map((s) => boxes.get(s));
+    for (let round = 0; round < 2; round++) {
+      const hb = hitBoxes();
+      for (const s of strokes) {
+        if (hit.has(s) || !s.points.length) continue;
+        const b = boxes.get(s);
+        const gap = 4 + (s.size || 6);
+        const touching = hb.some(
+          (h) => b.minX <= h.maxX + gap && b.maxX >= h.minX - gap && b.minY <= h.maxY + gap && b.maxY >= h.minY - gap
+        );
+        if (!touching) continue;
+        // i-/Umlaut-Punkte knapp ueber dem Gekritzel gehoeren zum Wort
+        const small = Math.hypot(b.maxX - b.minX, b.maxY - b.minY) < Math.max(14, (s.size || 6) * 2.5);
+        const cx = (b.minX + b.maxX) / 2;
+        if (small && cx >= sb.minX && cx <= sb.maxX) hit.add(s);
+        else if (coverFraction(scribble, s.points, s.size) >= 0.25) hit.add(s);
+      }
+    }
+    return Array.from(hit);
   }
 
   function looksLikeStrikeGesture(pts, pointerType) {
@@ -1932,6 +2039,7 @@
     looksLikeScribble,
     scribbleInfo,
     scribbleHitsStroke,
+    scribbleTargets,
     bboxOfPoints,
     rasterizeGlyph,
     knnPredict,

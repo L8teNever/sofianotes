@@ -565,3 +565,25 @@ test("scribble over written ink hits it, writing next to it does not", () => {
   const dotUnder = [pt(20, 12.5)];
   assert.equal(SofiaInk.scribbleHitsStroke(scr, dotUnder, 6), true);
 });
+
+test("three passes (hin-her-hin) and vertical scribbles are recognized", () => {
+  const three = dense([[0, 0], [80, 6], [2, 14], [82, 22]]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(three, "pen"), true, "3 Zuege");
+  // hoch-runter ueber ein breites Wort
+  const corners = [];
+  for (let k = 0; k <= 8; k++) corners.push([k * 14, k % 2 ? 30 : 0]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(dense(corners), "pen"), true, "senkrecht");
+  // ein einzelnes m/w (4 Zuege quer) bleibt Schrift
+  const m = dense([[0, 30], [0, 0], [12, 0], [14, 30], [16, 0], [28, 0], [30, 30]]);
+  assert.equal(SofiaInk.scribbleTargets(m, [stroke("a", path(...shift(L.a, -40)).map((p) => pt(p.x, p.y)))]).length, 0);
+});
+
+test("scribbling a word removes every letter of it, even a half covered last one", () => {
+  const letters = ["g", "a", "b", "e"].map((ch, i) => stroke("l" + i, path(...shift(L[ch], i * 26))));
+  const dot = stroke("dot", [pt(30, -6)]);
+  const next = stroke("next", path(...shift(L.a, 4 * 26 + 60))); // naechstes Wort mit Abstand
+  // schlampig: hoert vor dem letzten Buchstaben auf (deckt ihn nur halb)
+  const sc = dense([[-4, 4], [90, 8], [-2, 14], [92, 20], [0, 26], [90, 32]]);
+  const gone = SofiaInk.scribbleTargets(sc, [...letters, dot, next]).map((s) => s.id).sort();
+  assert.deepEqual(gone, ["dot", "l0", "l1", "l2", "l3"]);
+});
