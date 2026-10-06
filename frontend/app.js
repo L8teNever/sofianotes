@@ -8725,9 +8725,20 @@
     else history.replaceState(state, "", next);
   }
 
-  function navigateToFolder(folderId, push = true) {
+  function navigateToFolder(folderId, push = true, hint) {
+    const from = libraryCache;
     currentFolderId = folderId || null;
     if (push) syncUrl(true);
+    closeItemMenu();
+    const box = document.getElementById("library-backdrop");
+    if (box) box.scrollTop = 0;
+    // Noch nichts im Speicher: sofort Titel + Platzhalter zeigen, Inhalt kommt gleich
+    if (!hint && currentFolderId && from) hint = (from.allFolders || []).find((f) => f.id === currentFolderId) || null;
+    if (!libMem.has(libKey(currentFolderId)) && (hint || !currentFolderId)) {
+      const crumbs = currentFolderId ? [...((from && from.crumbs) || []).filter((c) => c.id !== currentFolderId), { id: currentFolderId, parentId: hint.parentId || null, name: hint.name }] : [];
+      libraryCache = { personId: currentPersonId, folderId: currentFolderId, folders: [], boards: [], crumbs, allFolders: (from && from.allFolders) || [], loading: true };
+      renderLibrary();
+    }
     refreshLibrary();
   }
 
@@ -8743,31 +8754,84 @@
     }
   });
 
+  // Bibliothek: Ordnerinhalte liegen im Speicher (und offline in IndexedDB). Angezeigt wird
+  // sofort, was da ist; der Server wird im Hintergrund gefragt und nur bei Aenderungen neu
+  // gezeichnet. Unterordner werden vorgeladen, damit sie beim Antippen sofort offen sind.
+  const libMem = new Map(); // key -> library data
+  let libSeq = 0;
+  function libKey(folderId) {
+    return "lib:" + currentPersonId + ":" + (folderId || "");
+  }
+  function libUrl(folderId) {
+    return "/api/library?person=" + encodeURIComponent(currentPersonId) + (folderId ? "&folder=" + encodeURIComponent(folderId) : "");
+  }
+  const libInflight = new Map(); // key -> Promise
+  function fetchLibrary(folderId) {
+    const key = libKey(folderId);
+    if (libInflight.has(key)) return libInflight.get(key);
+    const pr = api(libUrl(folderId))
+      .then((data) => {
+        libMem.set(key, data);
+        if (window.SofiaOffline) SofiaOffline.setKv(key, data).catch(() => {});
+        return data;
+      })
+      .finally(() => libInflight.delete(key));
+    libInflight.set(key, pr);
+    return pr;
+  }
+  let prefetchTimer = null;
+  function prefetchSubfolders() {
+    clearTimeout(prefetchTimer);
+    prefetchTimer = setTimeout(async () => {
+      const ids = ((libraryCache && libraryCache.folders) || []).map((f) => f.id).filter((id) => !libMem.has(libKey(id)));
+      // ein paar gleichzeitig, der Rest danach - die Antworten sind klein
+      for (let i = 0; i < ids.length; i += 4) {
+        await Promise.all(ids.slice(i, i + 4).map((id) => fetchLibrary(id).catch(() => null)));
+      }
+    }, 150);
+  }
+
   async function refreshLibrary() {
     if (!currentPersonId) return;
-    const key = "lib:" + currentPersonId + ":" + (currentFolderId || "");
-    const q = currentFolderId ? "&folder=" + encodeURIComponent(currentFolderId) : "";
+    const folderId = currentFolderId;
+    const key = libKey(folderId);
+    const seq = ++libSeq;
+    let shown = libMem.get(key);
+    if (!shown && window.SofiaOffline) {
+      try {
+        shown = await SofiaOffline.getKv(key);
+        if (shown) libMem.set(key, shown);
+      } catch (err) {}
+    }
+    if (shown && seq === libSeq) {
+      libraryCache = shown;
+      renderLibrary();
+      prefetchSubfolders();
+    }
     try {
-      libraryCache = await api("/api/library?person=" + encodeURIComponent(currentPersonId) + q);
-      if (window.SofiaOffline) await SofiaOffline.setKv(key, libraryCache);
+      const fresh = await fetchLibrary(folderId);
+      if (seq !== libSeq || (currentFolderId || null) !== (folderId || null)) return;
+      if (!shown || JSON.stringify(fresh) !== JSON.stringify(shown)) {
+        libraryCache = fresh;
+        renderLibrary();
+      }
+      prefetchSubfolders();
     } catch (err) {
-      libraryCache = (window.SofiaOffline && (await SofiaOffline.getKv(key))) || {
-        personId: currentPersonId,
-        folderId: currentFolderId,
-        folders: [],
-        boards: [],
-        crumbs: [],
-        allFolders: [],
-      };
+      if (seq !== libSeq) return;
+      if (!shown) {
+        libraryCache = { personId: currentPersonId, folderId, folders: [], boards: [], crumbs: (libraryCache && libraryCache.crumbs) || [], allFolders: [] };
+        renderLibrary();
+      }
       setConnState("offline");
     }
-    renderLibrary();
   }
 
   // Zeichnet die Bibliothek aus libraryCache (ohne Netz) - so koennen Aenderungen sofort
   // sichtbar werden und laufen im Hintergrund zum Server
   function persistLibraryCache() {
-    if (!libraryCache || !window.SofiaOffline) return;
+    if (!libraryCache) return;
+    libMem.set(libKey(currentFolderId), libraryCache);
+    if (!window.SofiaOffline) return;
     SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache).catch(() => {});
   }
   function renderLibrary() {
@@ -8810,7 +8874,13 @@
       const grid = section("Blätter", boards.length, "lib-grid-boards");
       for (const board of boards) grid.appendChild(boardCard(board));
     }
-    if (!folders.length && !boards.length) {
+    if (!folders.length && !boards.length && libraryCache.loading) {
+      // Inhalt kommt gleich: Platzhalter statt "leer"
+      const grid = document.createElement("div");
+      grid.className = "lib-grid lib-grid-boards lib-skeleton-grid";
+      for (let i = 0; i < 6; i++) grid.insertAdjacentHTML("beforeend", '<div class="lib-skeleton"><span></span><span></span></div>');
+      list.appendChild(grid);
+    } else if (!folders.length && !boards.length) {
       const empty = document.createElement("div");
       empty.className = "library-empty";
       empty.innerHTML = searchQ
@@ -8896,7 +8966,7 @@
       title: folder.name,
       meta: "Ordner",
       starred: folder.starred,
-      onOpen: () => navigateToFolder(folder.id),
+      onOpen: () => navigateToFolder(folder.id, true, folder),
       onStar: () => {
         const want = !folder.starred;
         optimistic({
@@ -8917,7 +8987,7 @@
         });
       },
       menu: [
-        { icon: "folder-open", label: "Öffnen", run: () => navigateToFolder(folder.id) },
+        { icon: "folder-open", label: "Öffnen", run: () => navigateToFolder(folder.id, true, folder) },
         { icon: "pencil", label: "Umbenennen & Farbe", run: () => renameFolder(folder) },
         { icon: "folder-input", label: "Verschieben", run: () => openMove("folder", folder.id) },
         { icon: "trash-2", label: "Löschen", danger: true, run: () => deleteFolder(folder) },
@@ -9631,17 +9701,19 @@
     } else {
       libSearchInput.value = "";
       librarySearchQuery = "";
-      refreshLibrary();
+      renderLibrary();
     }
   });
   libSearchInput?.addEventListener("input", () => {
     librarySearchQuery = libSearchInput.value;
-    refreshLibrary();
+    renderLibrary();
   });
   document.getElementById("btn-library-home")?.addEventListener("click", () => {
     if (currentFolderId && libraryCache && libraryCache.crumbs.length) {
-      const prev = libraryCache.crumbs[libraryCache.crumbs.length - 1];
-      navigateToFolder(prev.parentId || null);
+      const crumbs = libraryCache.crumbs;
+      const prev = crumbs[crumbs.length - 1];
+      const parent = crumbs[crumbs.length - 2];
+      navigateToFolder(prev.parentId || null, true, parent ? { name: parent.name, parentId: parent.parentId } : null);
     } else navigateToFolder(null);
   });
   const libAddMenu = document.getElementById("lib-add-menu");

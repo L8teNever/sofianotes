@@ -2334,3 +2334,41 @@ button {
 .set-dlg .btn-dock-quick.active { border-color: #6750a4; }
 .set-dlg .btn-dock-quick .material-symbols-rounded { color: #6750a4; }
 .set-dlg .version-card { margin: 0; border-radius: 18px; background: #f3edf7; border: none; }
+
+/* Ladeplatzhalter beim Oeffnen eines noch nicht geladenen Ordners */
+.lib-skeleton-grid { margin-top: 18px; }
+.lib-skeleton {
+  height: 72px;
+  border-radius: 20px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px 0 72px;
+  position: relative;
+  overflow: hidden;
+}
+.lib-skeleton::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 13px;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: #f1ecf6;
+}
+.lib-skeleton span { display: block; height: 10px; border-radius: 5px; background: #f1ecf6; }
+.lib-skeleton span:first-child { width: 60%; }
+.lib-skeleton span:last-child { width: 35%; }
+.lib-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+  transform: translateX(-100%);
+  animation: lib-shimmer 1.1s infinite;
+}
+@keyframes lib-shimmer { to { transform: translateX(100%); } }
