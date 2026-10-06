@@ -54,14 +54,69 @@
     return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
   }
 
+  // Sichtbarer Zeichenbereich: ohne Seitenleiste das ganze Fenster. Ist die Aufgabe als
+  // Seitenleiste angedockt, wird die Zeichenflaeche schmaler (und rutscht bei einer Leiste
+  // links nach rechts). Bildschirm-Koordinaten bleiben Fenster-Koordinaten - nur beim
+  // Zeichnen wird um viewLeft verschoben.
+  let viewLeft = 0;
+  let viewRight = 0;
+  function viewWidth() {
+    return Math.max(120, window.innerWidth - viewLeft - viewRight);
+  }
   function resizeCanvas() {
     dpr = Math.max(1, window.devicePixelRatio || 1);
-    canvas.width = Math.round(window.innerWidth * dpr);
+    const w = viewWidth();
+    canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(window.innerHeight * dpr);
-    canvas.style.width = window.innerWidth + "px";
+    canvas.style.width = w + "px";
     canvas.style.height = window.innerHeight + "px";
+    canvas.style.left = viewLeft + "px";
     requestRedraw();
   }
+  function setViewInsets(left, right) {
+    left = Math.max(0, Math.round(left || 0));
+    right = Math.max(0, Math.round(right || 0));
+    if (left === viewLeft && right === viewRight) return;
+    // was vorher in der Mitte des Sichtbereichs lag, bleibt dort
+    const oldMid = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2;
+    viewLeft = left;
+    viewRight = right;
+    const newMid = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2;
+    offsetX += newMid - oldMid;
+    document.documentElement.style.setProperty("--view-left", viewLeft + "px");
+    document.documentElement.style.setProperty("--view-right", viewRight + "px");
+    resizeCanvas();
+    layoutTopBar();
+    // die Rueckgaengig-Knoepfe gleiten animiert an ihren Platz -> danach nochmal einpassen
+    setTimeout(layoutTopBar, 420);
+    if (typeof positionToolPopover === "function") positionToolPopover();
+  }
+  // Obere Leiste bei schmalem Zeichenbereich (Seitenleiste angedockt) in den freien Platz
+  // neben den Rueckgaengig-Knoepfen einpassen; der Blattname wird dafuer gekuerzt.
+  function layoutTopBar() {
+    const bar = document.getElementById("top-filename-bar");
+    const undo = document.getElementById("undo-redo-dock");
+    if (!bar) return;
+    document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
+    if (!viewLeft && !viewRight) {
+      bar.style.left = "";
+      bar.style.transform = "";
+      bar.style.maxWidth = "";
+      return;
+    }
+    let from = viewLeft + 12;
+    let to = window.innerWidth - viewRight - 12;
+    const u = undo && !undo.classList.contains("free-drag") ? undo.getBoundingClientRect() : null;
+    if (u && u.top < 80 && u.width) {
+      if (u.left < (from + to) / 2) from = Math.max(from, u.right + 10);
+      else to = Math.min(to, u.left - 10);
+    }
+    bar.style.maxWidth = Math.max(200, to - from) + "px";
+    const w = Math.min(bar.scrollWidth, to - from);
+    bar.style.transform = "none";
+    bar.style.left = Math.round(from + Math.max(0, (to - from - w) / 2)) + "px";
+  }
+  window.addEventListener("resize", () => layoutTopBar());
   window.addEventListener("resize", () => {
     resizeCanvas();
     positionToolPopover();
@@ -657,11 +712,11 @@
   }
 
   function draw() {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#f8f9fa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
     drawGrid();
 
     for (const stroke of boardStrokes.values()) if (stroke.tool === "image") drawStroke(stroke);
@@ -673,16 +728,16 @@
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
     // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
     syncMarkerLayer();
-    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
+    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
     for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
     if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
     ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 0.38;
-    ctx.drawImage(markerLayer, 0, 0, window.innerWidth, window.innerHeight);
+    ctx.drawImage(markerLayer, 0, 0, canvas.width, canvas.height);
     ctx.restore();
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
 
     for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker" && stroke.tool !== "image" && stroke.tool !== "table") drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
@@ -5763,7 +5818,7 @@
   function drawRuler() {
     if (!ruler.visible) return;
     ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, -viewLeft * dpr, 0);
     ctx.translate(ruler.cx, ruler.cy);
     ctx.rotate(ruler.angle);
     ctx.fillStyle = "rgba(255,255,255,0.78)";
@@ -8789,6 +8844,7 @@
     if (typeof hwPanel !== "undefined" && hwPanel) {
       hwPanel.classList.add("hidden");
       hwPill.classList.add("hidden");
+      setViewInsets(0, 0);
     }
     libraryBackdrop.classList.remove("hidden");
     document.getElementById("btn-library-close").classList.toggle("hidden", !currentBoardId);
@@ -9187,9 +9243,94 @@
     open.type = "button";
     open.className = "m3-btn-primary";
     open.textContent = hw.boardId ? "Blatt öffnen" : "Auf Blatt bearbeiten";
-    open.addEventListener("click", () => openHomeworkBoard(hw, open));
+    open.addEventListener("click", () => (hw.boardId ? openHomeworkBoard(hw, open) : renderHwBoardChoice(hw)));
     actions.append(done, open);
     hwDetailEl.appendChild(actions);
+    if (hw.boardId) {
+      const other = document.createElement("button");
+      other.type = "button";
+      other.className = "hw-link-btn";
+      other.textContent = "Anderes Blatt für diese Aufgabe nehmen";
+      other.addEventListener("click", () => renderHwBoardChoice(hw));
+      hwDetailEl.appendChild(other);
+    }
+  }
+  // Neues Blatt anlegen oder ein vorhandenes mit der Aufgabe verknuepfen
+  function renderHwBoardChoice(hw) {
+    hwDetailEl.innerHTML = "";
+    document.getElementById("hw-title").textContent = "Blatt wählen";
+    const mk = (icon, title, sub, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "dlg-choice hw-choice";
+      b.innerHTML = '<span class="dlg-folder-ico"><span class="material-symbols-rounded"></span></span><span class="dlg-choice-text"><strong></strong><small></small></span><span class="material-symbols-rounded hw-item-chev">chevron_right</span>';
+      b.querySelector(".dlg-folder-ico .material-symbols-rounded").textContent = icon;
+      b.querySelector("strong").textContent = title;
+      b.querySelector("small").textContent = sub;
+      b.addEventListener("click", () => fn(b));
+      return b;
+    };
+    hwDetailEl.appendChild(
+      mk("note_add", "Neues Blatt", "Wird im Ordner „" + (hw.subject || "Fach") + "“ angelegt", (b) => openHomeworkBoard(hw, b))
+    );
+    hwDetailEl.appendChild(mk("description", "Vorhandenes Blatt", "Ein Blatt, auf dem du schon angefangen hast", () => renderHwBoardPicker(hw)));
+  }
+  async function renderHwBoardPicker(hw) {
+    hwDetailEl.innerHTML = "";
+    document.getElementById("hw-title").textContent = "Blatt verknüpfen";
+    const search = document.createElement("input");
+    search.type = "text";
+    search.className = "m3-input";
+    search.placeholder = "Blatt suchen…";
+    search.autocomplete = "off";
+    hwDetailEl.appendChild(search);
+    const list = document.createElement("div");
+    list.className = "share-choices hw-board-list";
+    list.innerHTML = '<div class="hw-empty">Lädt…</div>';
+    hwDetailEl.appendChild(list);
+    let boards = [];
+    try {
+      boards = (await api("/api/boards/recent")).boards || [];
+    } catch (err) {
+      list.innerHTML = '<div class="hw-empty">Konnte die Blätter nicht laden.</div>';
+      return;
+    }
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      list.innerHTML = "";
+      const shown = boards.filter((b) => !q || (b.title || "").toLowerCase().includes(q) || (b.folder || "").toLowerCase().includes(q));
+      if (!shown.length) list.innerHTML = '<div class="hw-empty">Kein passendes Blatt.</div>';
+      for (const b of shown.slice(0, 40)) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "dlg-choice";
+        row.innerHTML = '<span class="dlg-folder-ico"><span class="material-symbols-rounded">description</span></span><span class="dlg-choice-text"><strong></strong><small></small></span>';
+        row.querySelector("strong").textContent = b.title || "Unbenanntes Blatt";
+        const meta = [b.folder || "Ohne Ordner", relTime(b.updatedAt)];
+        if (b.sofiaHomeworkId && b.sofiaHomeworkId !== hw.id) meta.push("gehört schon zu einer anderen Aufgabe");
+        row.querySelector("small").textContent = meta.filter(Boolean).join(" · ");
+        row.addEventListener("click", async () => {
+          row.disabled = true;
+          try {
+            const res = await api("/api/sofia/homework/" + hw.id + "/link", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ boardId: b.id }),
+            });
+            hw.boardId = res.boardId;
+            closeHomework();
+            libMem.clear();
+            await openBoard(res.boardId, res.title, { homework: hw });
+          } catch (err) {
+            row.disabled = false;
+            showToast("Verknüpfen hat nicht geklappt");
+          }
+        });
+        list.appendChild(row);
+      }
+    };
+    search.addEventListener("input", draw);
+    draw();
   }
   async function openHomeworkBoard(hw, btn) {
     if (btn) {
@@ -9224,7 +9365,12 @@
     openHomework();
   });
   document.getElementById("hw-close")?.addEventListener("click", closeHomework);
-  document.getElementById("hw-back")?.addEventListener("click", () => renderHwList());
+  document.getElementById("hw-back")?.addEventListener("click", () => {
+    const hw = hwDetailId != null ? hwFind(hwDetailId) : null;
+    const t = document.getElementById("hw-title").textContent;
+    if (hw && (t === "Blatt wählen" || t === "Blatt verknüpfen")) renderHwDetail(hw);
+    else renderHwList();
+  });
   hwScrim?.addEventListener("click", (e) => {
     if (e.target === hwScrim) closeHomework();
   });
@@ -9263,15 +9409,35 @@
   });
 
   // ---- Aufgaben-Fenster im Blatt ----
+  // Zwei Arten: schwebendes Fenster (frei verschieb- und vergroesserbar) oder Seitenleiste
+  // (links/rechts angedockt, Breite ziehbar - das Blatt wird dann schmaler statt verdeckt).
+  // Minimiert bleibt eine kleine, verschiebbare Leiste. Bilder lassen sich im Fenster zoomen
+  // und bleiben so stehen (pro Blatt gemerkt). Unten: Blatt als PDF-Loesung in Sofia teilen.
   const hwPanel = document.getElementById("hw-panel");
   const hwPanelBody = document.getElementById("hw-panel-body");
   const hwPill = document.getElementById("hw-pill");
   const hwPanelBtn = document.getElementById("btn-hw-panel");
+  const hwViewer = document.getElementById("hw-viewer");
+  const hwViewerStage = document.getElementById("hw-viewer-stage");
+  const hwViewerImg = document.getElementById("hw-viewer-img");
+  const hwFoot = document.getElementById("hw-panel-foot");
   let hwBoard = null; // Hausaufgabe des offenen Blatts
-  let hwPanelGeo = null;
-  try {
-    hwPanelGeo = JSON.parse(localStorage.getItem("sofianotes-hwpanel") || "null");
-  } catch (err) {}
+  let hwPanelCurrent = "closed";
+  const lsGet = (k, d) => {
+    try {
+      const v = JSON.parse(localStorage.getItem(k) || "null");
+      return v == null ? d : v;
+    } catch (err) {
+      return d;
+    }
+  };
+  const lsSet = (k, v) => {
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch (err) {}
+  };
+  let hwPanelGeo = lsGet("sofianotes-hwpanel", null);
+  let hwLayout = lsGet("sofianotes-hwpanel-layout", { mode: "float", side: "right", width: 380 });
   function hwPanelState(boardId) {
     try {
       return localStorage.getItem("sofianotes-hwpanel-state:" + boardId) || "open";
@@ -9286,13 +9452,36 @@
     } catch (err) {}
     applyHwPanelState(state);
   }
+  function hwDockWidth() {
+    return Math.round(Math.max(260, Math.min(window.innerWidth * 0.7, hwLayout.width || 380)));
+  }
   function applyHwPanelState(state) {
-    const has = !!hwBoard;
-    hwPanel.classList.toggle("hidden", !has || state !== "open");
+    const has = !!hwBoard && libraryBackdrop.classList.contains("hidden");
+    hwPanelCurrent = state;
+    const open = has && state === "open";
+    const docked = open && hwLayout.mode === "dock";
+    hwPanel.classList.toggle("hidden", !open);
     hwPill.classList.toggle("hidden", !has || state !== "min");
-    hwPanelBtn.classList.toggle("hidden", !has);
-    hwPanelBtn.classList.toggle("active", has && state === "open");
-    if (has && state === "open") placeHwPanel();
+    hwPanelBtn.classList.toggle("hidden", !hwBoard);
+    hwPanelBtn.classList.toggle("active", open);
+    hwPanel.classList.toggle("docked", docked);
+    hwPanel.classList.toggle("dock-left", docked && hwLayout.side === "left");
+    hwPanel.classList.toggle("dock-right", docked && hwLayout.side !== "left");
+    document.getElementById("hw-panel-side").classList.toggle("hidden", !docked);
+    const modeBtn = document.getElementById("hw-panel-mode");
+    modeBtn.title = docked ? "Als schwebendes Fenster lösen" : "Als Seitenleiste andocken";
+    modeBtn.firstElementChild.textContent = docked ? "picture_in_picture" : hwLayout.side === "left" ? "dock_to_left" : "dock_to_right";
+    if (docked) {
+      const w = hwDockWidth();
+      Object.assign(hwPanel.style, { top: "0px", height: window.innerHeight + "px", width: w + "px", left: hwLayout.side === "left" ? "0px" : window.innerWidth - w + "px" });
+      setViewInsets(hwLayout.side === "left" ? w : 0, hwLayout.side === "left" ? 0 : w);
+    } else {
+      setViewInsets(0, 0);
+      if (open) placeHwPanel();
+    }
+    if (state === "min") placeHwPill();
+    if (open && hwViewerState().open) openHwViewer(hwViewerState().i, true);
+    if (open) refreshSolutionStatus();
   }
   function placeHwPanel() {
     const vw = window.innerWidth;
@@ -9306,17 +9495,21 @@
     Object.assign(hwPanel.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
   }
   function saveHwPanelGeo() {
+    if (hwLayout.mode === "dock") return;
     const r = hwPanel.getBoundingClientRect();
     hwPanelGeo = { x: r.left, y: r.top, w: r.width, h: r.height };
-    try {
-      localStorage.setItem("sofianotes-hwpanel", JSON.stringify(hwPanelGeo));
-    } catch (err) {}
+    lsSet("sofianotes-hwpanel", hwPanelGeo);
+  }
+  function setHwLayout(patch) {
+    hwLayout = Object.assign({}, hwLayout, patch);
+    lsSet("sofianotes-hwpanel-layout", hwLayout);
+    applyHwPanelState(hwPanelCurrent);
   }
   function renderHwPanel() {
     if (!hwBoard) return;
     hwPanel.style.setProperty("--subj", hwBoard.color || "#6750a4");
-    const chip = document.getElementById("hw-panel-subject");
-    chip.textContent = hwBoard.subject || "Aufgabe";
+    hwPill.style.setProperty("--subj", hwBoard.color || "#6750a4");
+    document.getElementById("hw-panel-subject").textContent = hwBoard.subject || "Aufgabe";
     document.getElementById("hw-pill-text").textContent = hwBoard.subject ? hwBoard.subject + " – Aufgabe" : "Aufgabe";
     hwPanelBody.innerHTML = "";
     const due = document.createElement("div");
@@ -9328,10 +9521,29 @@
     desc.textContent = hwBoard.description || "(ohne Text)";
     hwPanelBody.appendChild(desc);
     hwAttachmentsHtml(hwPanelBody, hwBoard);
+    // Bilder im Fenster: Antippen -> im Fenster zoomen (statt Vollbild)
+    const imgs = hwBoard.attachments.filter((a) => a.type === "image");
+    hwPanelBody.querySelectorAll(".hw-images img").forEach((im, i) => {
+      im.replaceWith(im.cloneNode(true));
+    });
+    hwPanelBody.querySelectorAll(".hw-images img").forEach((im, i) => {
+      im.title = "Antippen: im Fenster vergrößern";
+      im.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openHwViewer(i);
+      });
+    });
+    if (imgs.length) {
+      const hint = document.createElement("div");
+      hint.className = "hw-hint";
+      hint.textContent = "Bild antippen, um es hier zu vergrößern – es bleibt so offen, während du schreibst.";
+      hwPanelBody.appendChild(hint);
+    }
   }
   // Blatt geoeffnet: gehoert es zu einer Hausaufgabe, Aufgabenstellung dazu holen
   async function syncHomeworkPanel(board, known) {
     const hid = board && board.sofiaHomeworkId;
+    closeHwViewer(true);
     if (!hid) {
       hwBoard = null;
       applyHwPanelState("closed");
@@ -9360,22 +9572,27 @@
     e.stopPropagation();
     setHwPanelState("closed");
   });
-  hwPill?.addEventListener("click", (e) => {
+  document.getElementById("hw-panel-mode")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    setHwPanelState("open");
+    setHwLayout({ mode: hwLayout.mode === "dock" ? "float" : "dock" });
+  });
+  document.getElementById("hw-panel-side")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setHwLayout({ side: hwLayout.side === "left" ? "right" : "left" });
   });
   hwPanelBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     setHwPanelState(hwPanel.classList.contains("hidden") ? "open" : "min");
   });
-  // Verschieben (Kopfzeile) und Groesse (Ecke) - mit Finger, Stift oder Maus
+
+  // Verschieben (Kopfzeile), Groesse (Ecke), Breite der Seitenleiste (Kante)
   let hwDrag = null;
   function hwStartDrag(e, kind) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const r = hwPanel.getBoundingClientRect();
-    hwDrag = { kind, id: e.pointerId, sx: e.clientX, sy: e.clientY, r };
+    hwDrag = { kind, id: e.pointerId, sx: e.clientX, sy: e.clientY, r, w0: hwDockWidth() };
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch (err) {}
@@ -9386,11 +9603,29 @@
     const dx = e.clientX - hwDrag.sx;
     const dy = e.clientY - hwDrag.sy;
     const r = hwDrag.r;
-    if (hwDrag.kind === "move") {
+    if (hwDrag.kind === "edge") {
+      const w = Math.max(260, Math.min(window.innerWidth * 0.7, hwDrag.w0 + (hwLayout.side === "left" ? dx : -dx)));
+      hwLayout.width = w;
+      applyHwPanelState("open");
+    } else if (hwDrag.kind === "move") {
+      if (hwLayout.mode === "dock") {
+        // angedockte Leiste an der Kopfzeile ziehen: weit genug weg -> wieder schwebend
+        if (Math.abs(dx) > 60 || Math.abs(dy) > 60) {
+          hwPanelGeo = { x: e.clientX - 140, y: Math.max(8, e.clientY - 20), w: (hwPanelGeo && hwPanelGeo.w) || 360, h: (hwPanelGeo && hwPanelGeo.h) || 480 };
+          setHwLayout({ mode: "float" });
+          hwDrag.r = hwPanel.getBoundingClientRect();
+          hwDrag.sx = e.clientX;
+          hwDrag.sy = e.clientY;
+        }
+        return;
+      }
       const x = Math.max(8 - r.width + 80, Math.min(window.innerWidth - 80, r.left + dx));
       const y = Math.max(8, Math.min(window.innerHeight - 48, r.top + dy));
       hwPanel.style.left = x + "px";
       hwPanel.style.top = y + "px";
+      // an den Rand gezogen -> als Seitenleiste andocken
+      hwPanel.classList.toggle("dock-hint-left", e.clientX < 24);
+      hwPanel.classList.toggle("dock-hint-right", e.clientX > window.innerWidth - 24);
     } else {
       hwPanel.style.width = Math.max(240, Math.min(window.innerWidth - r.left - 8, r.width + dx)) + "px";
       hwPanel.style.height = Math.max(160, Math.min(window.innerHeight - r.top - 8, r.height + dy)) + "px";
@@ -9398,27 +9633,309 @@
   }
   function hwEndDrag(e) {
     if (!hwDrag || hwDrag.id !== e.pointerId) return;
+    const kind = hwDrag.kind;
     hwDrag = null;
     hwPanel.classList.remove("dragging");
+    const toLeft = hwPanel.classList.contains("dock-hint-left");
+    const toRight = hwPanel.classList.contains("dock-hint-right");
+    hwPanel.classList.remove("dock-hint-left", "dock-hint-right");
+    if (kind === "edge") {
+      lsSet("sofianotes-hwpanel-layout", hwLayout);
+      return;
+    }
     saveHwPanelGeo();
+    if (kind === "move" && (toLeft || toRight)) setHwLayout({ mode: "dock", side: toLeft ? "left" : "right" });
   }
   const hwHead = document.getElementById("hw-panel-head");
   const hwResize = document.getElementById("hw-panel-resize");
+  const hwEdge = document.getElementById("hw-dock-edge");
   hwHead?.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button")) return;
     hwStartDrag(e, "move");
   });
   hwResize?.addEventListener("pointerdown", (e) => hwStartDrag(e, "size"));
-  for (const el of [hwHead, hwResize]) {
+  hwEdge?.addEventListener("pointerdown", (e) => hwStartDrag(e, "edge"));
+  for (const el of [hwHead, hwResize, hwEdge]) {
     el?.addEventListener("pointermove", hwMoveDrag);
     el?.addEventListener("pointerup", hwEndDrag);
     el?.addEventListener("pointercancel", hwEndDrag);
   }
+
+  // Minimierte Leiste: antippen oeffnet, ziehen verschiebt
+  let hwPillPos = lsGet("sofianotes-hwpill-pos", null);
+  let hwPillDrag = null;
+  function placeHwPill() {
+    if (!hwPillPos) {
+      hwPill.style.left = "";
+      hwPill.style.top = "";
+      hwPill.style.right = "";
+      return;
+    }
+    const w = hwPill.offsetWidth || 220;
+    const h = hwPill.offsetHeight || 44;
+    hwPill.style.right = "auto";
+    hwPill.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, hwPillPos.x)) + "px";
+    hwPill.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, hwPillPos.y)) + "px";
+  }
+  hwPill?.addEventListener("pointerdown", (e) => {
+    e.stopPropagation();
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const r = hwPill.getBoundingClientRect();
+    hwPillDrag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x0: r.left, y0: r.top, moved: false };
+    try {
+      hwPill.setPointerCapture(e.pointerId);
+    } catch (err) {}
+  });
+  hwPill?.addEventListener("pointermove", (e) => {
+    const d = hwPillDrag;
+    if (!d || d.id !== e.pointerId) return;
+    const dx = e.clientX - d.sx;
+    const dy = e.clientY - d.sy;
+    if (!d.moved && Math.hypot(dx, dy) < 6) return;
+    d.moved = true;
+    hwPillPos = { x: d.x0 + dx, y: d.y0 + dy };
+    placeHwPill();
+  });
+  const endPill = (e) => {
+    const d = hwPillDrag;
+    if (!d || d.id !== e.pointerId) return;
+    hwPillDrag = null;
+    if (d.moved) lsSet("sofianotes-hwpill-pos", hwPillPos);
+    else if (e.type === "pointerup") setHwPanelState("open");
+  };
+  hwPill?.addEventListener("pointerup", endPill);
+  hwPill?.addEventListener("pointercancel", endPill);
+
+  // ---- Bild im Fenster zoomen und so stehen lassen ----
+  let hwView = null; // {i, s, tx, ty}
+  const hwPtrs = new Map();
+  let hwPinch = null;
+  function hwViewerKey() {
+    return "sofianotes-hwviewer:" + currentBoardId;
+  }
+  function hwViewerState() {
+    return lsGet(hwViewerKey(), { open: false, i: 0 });
+  }
+  function saveHwViewer() {
+    if (!hwView) return lsSet(hwViewerKey(), { open: false, i: 0 });
+    lsSet(hwViewerKey(), { open: true, i: hwView.i, s: hwView.s, tx: hwView.tx, ty: hwView.ty });
+  }
+  function hwApplyView() {
+    if (!hwView) return;
+    hwViewerImg.style.transform = `translate(${hwView.tx}px, ${hwView.ty}px) scale(${hwView.s})`;
+  }
+  function hwFit() {
+    const r = hwViewerStage.getBoundingClientRect();
+    const iw = hwViewerImg.naturalWidth || 1;
+    const ih = hwViewerImg.naturalHeight || 1;
+    const s = Math.min(r.width / iw, r.height / ih);
+    hwView.s = s;
+    hwView.tx = (r.width - iw * s) / 2;
+    hwView.ty = (r.height - ih * s) / 2;
+    hwApplyView();
+    saveHwViewer();
+  }
+  function hwZoomAt(px, py, f) {
+    const s = Math.max(0.05, Math.min(12, hwView.s * f));
+    const k = s / hwView.s;
+    hwView.tx = px - (px - hwView.tx) * k;
+    hwView.ty = py - (py - hwView.ty) * k;
+    hwView.s = s;
+    hwApplyView();
+  }
+  function openHwViewer(i, restore) {
+    if (!hwBoard) return;
+    const imgs = hwBoard.attachments.filter((a) => a.type === "image");
+    if (!imgs.length) return;
+    i = Math.max(0, Math.min(imgs.length - 1, i || 0));
+    const saved = restore ? hwViewerState() : null;
+    hwView = { i, s: 1, tx: 0, ty: 0 };
+    hwPanelBody.classList.add("hidden");
+    hwViewer.classList.remove("hidden");
+    document.getElementById("hw-viewer-name").textContent = imgs[i].name || "Bild";
+    const done = () => {
+      if (saved && saved.s && saved.i === i) {
+        Object.assign(hwView, { s: saved.s, tx: saved.tx, ty: saved.ty });
+        hwApplyView();
+      } else hwFit();
+      saveHwViewer();
+    };
+    if (hwViewerImg.getAttribute("src") === imgs[i].url && hwViewerImg.complete) done();
+    else {
+      hwViewerImg.onload = done;
+      hwViewerImg.src = imgs[i].url;
+    }
+  }
+  function closeHwViewer(keep) {
+    hwView = null;
+    hwViewer.classList.add("hidden");
+    hwPanelBody.classList.remove("hidden");
+    if (!keep && currentBoardId) saveHwViewer();
+  }
+  document.getElementById("hw-viewer-back")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeHwViewer();
+  });
+  const stageMid = () => {
+    const r = hwViewerStage.getBoundingClientRect();
+    return [r.width / 2, r.height / 2];
+  };
+  document.getElementById("hw-viewer-in")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    hwZoomAt(...stageMid(), 1.35);
+    saveHwViewer();
+  });
+  document.getElementById("hw-viewer-out")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    hwZoomAt(...stageMid(), 1 / 1.35);
+    saveHwViewer();
+  });
+  document.getElementById("hw-viewer-fit")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    hwFit();
+  });
+  hwViewerStage?.addEventListener(
+    "wheel",
+    (e) => {
+      if (!hwView) return;
+      e.preventDefault();
+      const r = hwViewerStage.getBoundingClientRect();
+      if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) > Math.abs(e.deltaX)) hwZoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
+      else {
+        hwView.tx -= e.deltaX;
+        hwApplyView();
+      }
+      saveHwViewer();
+    },
+    { passive: false }
+  );
+  hwViewerStage?.addEventListener("pointerdown", (e) => {
+    if (!hwView) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      hwViewerStage.setPointerCapture(e.pointerId);
+    } catch (err) {}
+    hwPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (hwPtrs.size === 2) {
+      const [a, b] = Array.from(hwPtrs.values());
+      hwPinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: hwView.s, tx: hwView.tx, ty: hwView.ty, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+    }
+  });
+  hwViewerStage?.addEventListener("pointermove", (e) => {
+    if (!hwView || !hwPtrs.has(e.pointerId)) return;
+    const prev = hwPtrs.get(e.pointerId);
+    hwPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const r = hwViewerStage.getBoundingClientRect();
+    if (hwPtrs.size >= 2 && hwPinch) {
+      const [a, b] = Array.from(hwPtrs.values());
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const s = Math.max(0.05, Math.min(12, hwPinch.s * (d / Math.max(1, hwPinch.d))));
+      const k = s / hwPinch.s;
+      const ox = hwPinch.mx - r.left;
+      const oy = hwPinch.my - r.top;
+      hwView.s = s;
+      hwView.tx = ox - (ox - hwPinch.tx) * k + (mx - hwPinch.mx);
+      hwView.ty = oy - (oy - hwPinch.ty) * k + (my - hwPinch.my);
+      hwApplyView();
+    } else if (hwPtrs.size === 1) {
+      hwView.tx += e.clientX - prev.x;
+      hwView.ty += e.clientY - prev.y;
+      hwApplyView();
+    }
+  });
+  const hwPtrEnd = (e) => {
+    if (!hwPtrs.has(e.pointerId)) return;
+    hwPtrs.delete(e.pointerId);
+    if (hwPtrs.size < 2) hwPinch = null;
+    saveHwViewer();
+  };
+  hwViewerStage?.addEventListener("pointerup", hwPtrEnd);
+  hwViewerStage?.addEventListener("pointercancel", hwPtrEnd);
+  hwViewerStage?.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    const r = hwViewerStage.getBoundingClientRect();
+    hwZoomAt(e.clientX - r.left, e.clientY - r.top, 2);
+    saveHwViewer();
+  });
+
+  // ---- Blatt als Loesung in Sofia teilen ----
+  const hwShareBtn = document.getElementById("hw-share-toggle");
+  let hwSolution = null;
+  let hwSolutionTimer = null;
+  function renderSolution() {
+    const st = hwSolution;
+    hwFoot.classList.toggle("hidden", !st || !st.owner);
+    if (!st || !st.owner) return;
+    hwShareBtn.classList.toggle("active", !!st.share);
+    const icon = document.getElementById("hw-share-icon");
+    const text = document.getElementById("hw-share-status");
+    let t;
+    if (!st.share) {
+      icon.textContent = "cloud_upload";
+      t = "Aus – das Blatt bleibt nur bei dir";
+    } else if (st.pending) {
+      icon.textContent = "cloud_upload";
+      t = "Wird gleich als PDF hochgeladen…";
+    } else if (st.error) {
+      icon.textContent = "sync_problem";
+      t = "Hochladen hat nicht geklappt – wird beim nächsten Schreiben erneut versucht";
+    } else if (st.syncedAt) {
+      icon.textContent = "cloud_done";
+      t = "In Sofia geteilt · zuletzt " + new Date(st.syncedAt * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    } else {
+      icon.textContent = "cloud_upload";
+      t = "Wird nach dem Schreiben als PDF hochgeladen";
+    }
+    text.textContent = t;
+  }
+  async function refreshSolutionStatus() {
+    clearTimeout(hwSolutionTimer);
+    const bid = currentBoardId;
+    if (!hwBoard || !bid) return;
+    try {
+      const st = await api("/api/boards/" + encodeURIComponent(bid) + "/solution");
+      if (bid !== currentBoardId) return;
+      hwSolution = st;
+      renderSolution();
+    } catch (err) {
+      /* offline */
+    }
+    if (!hwPanel.classList.contains("hidden")) hwSolutionTimer = setTimeout(refreshSolutionStatus, 15000);
+  }
+  hwShareBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!hwSolution || !currentBoardId) return;
+    const was = hwSolution.share;
+    const bid = currentBoardId;
+    optimistic({
+      apply: () => {
+        hwSolution.share = !was;
+        hwSolution.pending = !was;
+        renderSolution();
+      },
+      revert: () => {
+        hwSolution.share = was;
+        renderSolution();
+      },
+      request: () =>
+        api("/api/boards/" + encodeURIComponent(bid) + "/solution", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ share: !was }),
+        }).then(() => setTimeout(refreshSolutionStatus, 4000)),
+      failText: "Umschalten hat nicht geklappt",
+    });
+  });
+
   // Im Fenster scrollen/tippen darf nichts aufs Blatt malen
   hwPanel?.addEventListener("pointerdown", (e) => e.stopPropagation());
-  hwPill?.addEventListener("pointerdown", (e) => e.stopPropagation());
   window.addEventListener("resize", () => {
-    if (hwBoard && !hwPanel.classList.contains("hidden")) placeHwPanel();
+    if (!hwBoard) return;
+    if (!hwPanel.classList.contains("hidden")) applyHwPanelState(hwPanelCurrent);
+    if (!hwPill.classList.contains("hidden")) placeHwPill();
   });
 
   function renderLibrary() {

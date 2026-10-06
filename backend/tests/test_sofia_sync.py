@@ -124,3 +124,53 @@ class HomeworkTests(unittest.TestCase):
         self.assertEqual(p["boardId"], "board-1")
         self.assertEqual(len(p["attachments"]), 1)
         self.assertTrue(p["attachments"][0]["url"].startswith("/api/sofia/file?u="))
+
+
+class SolutionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+        run(db.add_person_email("simon", "l8tenever@gmail.com"))
+        run(db.apply_sofia_sync(snapshot()))
+        self.calls = []
+        self._orig = (sofia_sync.enabled, sofia_sync._upload_pdf, sofia_sync._send_json)
+        sofia_sync.enabled = lambda: True
+        sofia_sync._upload_pdf = lambda email, name, data: self.calls.append(("upload", email, name, data[:4])) or {"url": "/uploads/homework/x.pdf", "type": "file", "name": name}
+
+        def send(method, path, email, payload=None):
+            self.calls.append((method, path, email))
+            return {"id": 77}
+
+        sofia_sync._send_json = send
+
+    def tearDown(self):
+        sofia_sync.enabled, sofia_sync._upload_pdf, sofia_sync._send_json = self._orig
+        self.tmp.cleanup()
+
+    def test_link_existing_board(self):
+        a = run(db.create_board("simon", "Alt", None))
+        b = run(db.create_board("simon", "Neu", None))
+        self.assertTrue(run(db.link_homework_board("simon", 5, a["id"])))
+        self.assertTrue(run(db.link_homework_board("simon", 5, b["id"])))
+        self.assertEqual(run(db.homework_boards("simon")), {5: b["id"]})
+        self.assertFalse(run(db.link_homework_board("simon", 5, "fremd")))
+        titles = [x["title"] for x in run(db.recent_boards("simon"))]
+        self.assertIn("Alt", titles)
+
+    def test_upload_creates_then_updates_solution(self):
+        b = run(db.homework_board("simon", 42, "Mathe – S. 12", None))
+        bid = b["id"]
+        # leeres Blatt: nichts hochladen
+        self.assertEqual(run(sofia_sync.upload_solution(bid))["error"], "empty")
+        run(db.insert_stroke({"id": "s1", "tool": "pen", "color": "#000", "size": 4, "points": [{"x": 0, "y": 0, "p": 0.5}, {"x": 40, "y": 30, "p": 0.5}], "board_id": bid}))
+        r1 = run(sofia_sync.upload_solution(bid))
+        self.assertTrue(r1["ok"])
+        self.assertEqual(self.calls[0][0], "upload")
+        self.assertEqual(self.calls[0][3], b"%PDF")
+        self.assertEqual(self.calls[1][:2], ("POST", "/homework/42/solutions"))
+        self.assertEqual(run(db.get_board(bid))["sofiaSolutionId"], 77)
+        run(sofia_sync.upload_solution(bid))
+        self.assertEqual(self.calls[-1][:2], ("PUT", "/homework/42/solutions/77"))
+        # abgeschaltet -> keine Uploads mehr
+        run(db.solution_state(bid, share=0))
+        self.assertEqual(run(sofia_sync.upload_solution(bid))["error"], "off")

@@ -306,3 +306,136 @@ async def fetch_file(path: str) -> tuple[bytes, str] | None:
         return await asyncio.get_event_loop().run_in_executor(None, _fetch_file, path)
     except Exception:  # noqa: BLE001
         return None
+
+
+# ---- Blatt als Loesung in Sofia ------------------------------------------------
+# Ein Blatt, das zu einer Hausaufgabe gehoert, wird nach dem Schreiben (kurz warten, bis
+# Ruhe ist) als PDF zu Sofia hochgeladen und dort als Loesung der Person eingetragen bzw.
+# aktualisiert - so sehen die anderen in Sofia die Loesung. Pro Blatt abschaltbar.
+SOLUTION_DELAY = float(os.environ.get("SOFIA_SOLUTION_DELAY", "45") or 45)
+_solution_tasks: dict[str, asyncio.Task] = {}
+
+
+def _upload_pdf(email: str, filename: str, data: bytes) -> dict[str, Any]:
+    boundary = "----sofianotes" + os.urandom(8).hex()
+    safe = filename.replace('"', "").replace("\r", "").replace("\n", "") or "loesung.pdf"
+    body = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{safe}\"\r\n"
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    req = urllib.request.Request(
+        API_BASE + "/homework/upload",
+        data=body,
+        method="POST",
+        headers={
+            "X-Internal-Token": _token(),
+            "X-Act-As-Email": email,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _send_json(method: str, path: str, email: str, payload: Any | None = None) -> Any:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(
+        API_BASE + path,
+        data=data,
+        method=method,
+        headers={
+            "X-Internal-Token": _token(),
+            "X-Act-As-Email": email,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
+        raw = resp.read().decode("utf-8")
+        return json.loads(raw) if raw else None
+
+
+async def upload_solution(board_id: str) -> dict[str, Any]:
+    from . import goodnotes_export
+
+    if not enabled():
+        return {"ok": False, "error": "disabled"}
+    board = await db.get_board(board_id)
+    if not board or not board.get("sofiaHomeworkId"):
+        return {"ok": False, "error": "no_homework"}
+    if not board.get("solutionShare"):
+        return {"ok": False, "error": "off"}
+    email = await db.owner_email(board_id)
+    if not email:
+        return {"ok": False, "error": "not_linked"}
+    strokes = await db.load_all(board_id)
+    if not strokes:
+        return {"ok": False, "error": "empty"}
+    hw = board["sofiaHomeworkId"]
+    loop = asyncio.get_event_loop()
+    try:
+        pdf = await loop.run_in_executor(None, goodnotes_export.build_pdf, strokes)
+        title = (board.get("title") or "Loesung").strip()
+        att = await loop.run_in_executor(None, _upload_pdf, email, title + ".pdf", pdf)
+        payload = {"text": "Mit sofianotes geschrieben – " + title, "attachments": [att]}
+        sol = None
+        sid = board.get("sofiaSolutionId")
+        if sid:
+            try:
+                sol = await loop.run_in_executor(None, _send_json, "PUT", f"/homework/{hw}/solutions/{sid}", email, payload)
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (403, 404):
+                    raise
+                sol = None
+        if sol is None:
+            sol = await loop.run_in_executor(None, _send_json, "POST", f"/homework/{hw}/solutions", email, payload)
+        await db.solution_state(board_id, solutionId=(sol or {}).get("id"), syncedAt=time.time(), error=None)
+        return {"ok": True, "solutionId": (sol or {}).get("id")}
+    except Exception as exc:  # noqa: BLE001
+        msg = f"{type(exc).__name__}: {getattr(exc, 'code', '') or exc}"[:200]
+        log.warning("Loesung fuer Blatt %s nicht hochgeladen: %s", board_id, msg)
+        await db.solution_state(board_id, error=msg)
+        return {"ok": False, "error": msg}
+
+
+def schedule_solution(board_id: str, delay: float | None = None) -> None:
+    """Nach der letzten Aenderung kurz warten, dann einmal hochladen."""
+    if not enabled():
+        return
+    old = _solution_tasks.get(board_id)
+    if old and not old.done():
+        old.cancel()
+
+    async def later() -> None:
+        try:
+            await asyncio.sleep(SOLUTION_DELAY if delay is None else delay)
+            await upload_solution(board_id)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if _solution_tasks.get(board_id) is task:
+                _solution_tasks.pop(board_id, None)
+
+    task = asyncio.ensure_future(later())
+    _solution_tasks[board_id] = task
+
+
+def solution_pending(board_id: str) -> bool:
+    t = _solution_tasks.get(board_id)
+    return bool(t and not t.done())
+
+
+async def remove_solution(board_id: str) -> None:
+    board = await db.get_board(board_id)
+    if not board or not board.get("sofiaHomeworkId") or not board.get("sofiaSolutionId") or not enabled():
+        return
+    email = await db.owner_email(board_id)
+    if not email:
+        return
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None, _send_json, "DELETE", f"/homework/{board['sofiaHomeworkId']}/solutions/{board['sofiaSolutionId']}", email
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Loesung nicht entfernt: %s", exc)
+    await db.solution_state(board_id, solutionId=None, syncedAt=None)

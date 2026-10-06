@@ -143,6 +143,14 @@ def _init_sync() -> None:
     board_cols = {row[1] for row in _conn.execute("PRAGMA table_info(boards)").fetchall()}
     if "sofia_homework_id" not in board_cols:
         _conn.execute("ALTER TABLE boards ADD COLUMN sofia_homework_id INTEGER")
+    if "solution_share" not in board_cols:
+        _conn.execute("ALTER TABLE boards ADD COLUMN solution_share INTEGER NOT NULL DEFAULT 1")
+    if "sofia_solution_id" not in board_cols:
+        _conn.execute("ALTER TABLE boards ADD COLUMN sofia_solution_id INTEGER")
+    if "solution_synced_at" not in board_cols:
+        _conn.execute("ALTER TABLE boards ADD COLUMN solution_synced_at REAL")
+    if "solution_error" not in board_cols:
+        _conn.execute("ALTER TABLE boards ADD COLUMN solution_error TEXT")
     if "sofia_subject_id" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN sofia_subject_id INTEGER")
     people_cols = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
@@ -371,7 +379,7 @@ def valid_person(person_id: str | None) -> bool:
 
 def _board_row(board_id: str) -> dict[str, Any] | None:
     row = _conn.execute(
-        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id FROM boards WHERE id = ?",
+        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error FROM boards WHERE id = ?",
         (board_id,),
     ).fetchone()
     if not row:
@@ -388,6 +396,10 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
         "updatedAt": row[4],
         "sharedWith": shared_with,
         "sofiaHomeworkId": row[5],
+        "solutionShare": bool(row[6]),
+        "sofiaSolutionId": row[7],
+        "solutionSyncedAt": row[8],
+        "solutionError": row[9],
     }
 
 
@@ -996,6 +1008,66 @@ def _homework_board_sync(person_id: str, hw_id: int, title: str, folder_id: str 
     _conn.execute("UPDATE boards SET sofia_homework_id = ? WHERE id = ?", (hw_id, board["id"]))
     _conn.commit()
     return {"id": board["id"], "created": True}
+
+
+def _link_homework_board_sync(person_id: str, hw_id: int, board_id: str) -> bool:
+    """Vorhandenes eigenes Blatt als Blatt zu dieser Hausaufgabe festlegen."""
+    if not _conn.execute("SELECT 1 FROM boards WHERE id = ? AND owner_id = ?", (board_id, person_id)).fetchone():
+        return False
+    _conn.execute(
+        "UPDATE boards SET sofia_homework_id = NULL WHERE owner_id = ? AND sofia_homework_id = ? AND id != ?",
+        (person_id, hw_id, board_id),
+    )
+    _conn.execute("UPDATE boards SET sofia_homework_id = ? WHERE id = ?", (hw_id, board_id))
+    _conn.commit()
+    return True
+
+
+def _recent_boards_sync(person_id: str, limit: int) -> list[dict[str, Any]]:
+    rows = _conn.execute(
+        """SELECT b.id, b.title, b.updated_at, b.sofia_homework_id, f.name
+           FROM boards b JOIN placements p ON p.board_id = b.id AND p.person_id = ?
+           LEFT JOIN folders f ON f.id = p.folder_id
+           WHERE b.owner_id = ? ORDER BY b.updated_at DESC LIMIT ?""",
+        (person_id, person_id, limit),
+    ).fetchall()
+    return [{"id": r[0], "title": r[1], "updatedAt": r[2], "sofiaHomeworkId": r[3], "folder": r[4]} for r in rows]
+
+
+def _solution_state_sync(board_id: str, **fields: Any) -> None:
+    cols = {"share": "solution_share", "solutionId": "sofia_solution_id", "syncedAt": "solution_synced_at", "error": "solution_error"}
+    sets = [f"{cols[k]} = ?" for k in fields]
+    if not sets:
+        return
+    _conn.execute(f"UPDATE boards SET {', '.join(sets)} WHERE id = ?", (*fields.values(), board_id))
+    _conn.commit()
+
+
+def _owner_email_sync(board_id: str) -> str | None:
+    row = _conn.execute(
+        "SELECT p.sofia_email FROM boards b JOIN people p ON p.id = b.owner_id WHERE b.id = ?", (board_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+async def link_homework_board(person_id: str, hw_id: int, board_id: str) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _link_homework_board_sync, person_id, hw_id, board_id)
+
+
+async def recent_boards(person_id: str, limit: int = 60) -> list[dict[str, Any]]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _recent_boards_sync, person_id, limit)
+
+
+async def solution_state(board_id: str, **fields: Any) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, lambda: _solution_state_sync(board_id, **fields))
+
+
+async def owner_email(board_id: str) -> str | None:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _owner_email_sync, board_id)
 
 
 async def homework_boards(person_id: str) -> dict[int, str]:

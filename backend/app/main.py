@@ -246,6 +246,56 @@ async def sofia_file(u: str, _: dict = Depends(get_current_person)) -> Response:
     return Response(content=data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
 
 
+@app.get("/api/boards/recent")
+async def boards_recent(person: dict = Depends(get_current_person)) -> dict:
+    return {"boards": await db.recent_boards(person["id"])}
+
+
+@app.post("/api/sofia/homework/{hw_id}/link")
+async def sofia_homework_link(hw_id: int, request: Request, person: dict = Depends(get_current_person)) -> dict:
+    """Vorhandenes eigenes Blatt dieser Hausaufgabe zuordnen."""
+    body = await _json_body(request)
+    board_id = str(body.get("boardId") or "")
+    if not await db.link_homework_board(person["id"], hw_id, board_id):
+        raise HTTPException(status_code=404, detail="Blatt nicht gefunden")
+    board = await db.get_board(board_id)
+    return {"ok": True, "boardId": board_id, "title": board["title"] if board else ""}
+
+
+@app.get("/api/boards/{board_id}/solution")
+async def board_solution(board_id: str, person: dict = Depends(get_current_person)) -> dict:
+    board = await db.get_board(board_id)
+    if not board or not await db.can_access(person["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return {
+        "share": board.get("solutionShare"),
+        "solutionId": board.get("sofiaSolutionId"),
+        "syncedAt": board.get("solutionSyncedAt"),
+        "error": board.get("solutionError"),
+        "pending": sofia_sync.solution_pending(board_id),
+        "owner": board.get("ownerId") == person["id"],
+    }
+
+
+@app.post("/api/boards/{board_id}/solution")
+async def board_solution_set(board_id: str, request: Request, person: dict = Depends(get_current_person)) -> dict:
+    """share an/aus; upload=true laedt sofort hoch."""
+    board = await db.get_board(board_id)
+    if not board or board.get("ownerId") != person["id"] or not board.get("sofiaHomeworkId"):
+        raise HTTPException(status_code=404, detail="not found")
+    body = await _json_body(request)
+    if "share" in body:
+        share = bool(body.get("share"))
+        await db.solution_state(board_id, share=1 if share else 0)
+        if share:
+            sofia_sync.schedule_solution(board_id, delay=2)
+        else:
+            await sofia_sync.remove_solution(board_id)
+    if body.get("upload"):
+        return await sofia_sync.upload_solution(board_id)
+    return {"ok": True}
+
+
 @app.post("/api/sofia/sync")
 async def sofia_sync_now(_: dict = Depends(require_admin)) -> dict:
     return await sofia_sync.sync_once(force=True)
@@ -725,11 +775,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             if persist_changed:
                 bid = room
                 await goodnotes_export.schedule_write(lambda: db.load_all(bid))
+                if sofia_sync.enabled():
+                    b = await db.get_board(bid)
+                    if b and b.get("sofiaHomeworkId") and b.get("solutionShare"):
+                        sofia_sync.schedule_solution(bid)
 
     except WebSocketDisconnect:
         pass
     finally:
         manager.disconnect(websocket)
+        # Blatt verlassen: anstehende Loesung gleich hochladen statt zu warten
+        if sofia_sync.solution_pending(board_id):
+            sofia_sync.schedule_solution(board_id, delay=3)
         await manager.broadcast({"type": "presence_leave", "id": client.id}, board_id=board_id)
 
 
