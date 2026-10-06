@@ -3493,7 +3493,7 @@
 
   // Liest den Editor-Inhalt als Runs: Stil aus den umgebenden Tags/Styles, Zeilen aus
   // <br> und Block-Elementen (Chrome/Safari legen pro Zeile ein <div> an).
-  function serializeEditor() {
+  function serializeEditor(trim = true) {
     const root = textEditorEl;
     const runs = [];
     const styleOf = (node) => {
@@ -3520,9 +3520,11 @@
             any = true;
           }
         } else if (child.nodeName === "BR") {
+          // <div><br></div> ist nur der Platzhalter einer leeren Zeile (die zaehlt schon
+          // ueber den Block) - ein <br> allein in <u>/<b> & Co. ist dagegen ein echter Umbruch
           const parent = child.parentNode;
-          const onlyChild = parent !== root && parent.childNodes.length === 1;
-          if (!onlyChild) runs.push({ t: "\n" });
+          const placeholder = parent !== root && /^(DIV|P)$/.test(parent.nodeName) && parent.childNodes.length === 1;
+          if (!placeholder) runs.push({ t: "\n" });
         } else if (child.nodeType === 1) {
           const block = /^(DIV|P)$/.test(child.nodeName);
           if (block && any) runs.push({ t: "\n" });
@@ -3533,6 +3535,7 @@
     };
     walk(root);
     const out = normalizeRuns(runs);
+    if (!trim) return out;
     // trailing Leerraum/Umbrueche weg
     while (out.length) {
       const last = out[out.length - 1];
@@ -3789,11 +3792,164 @@
     placeCaret(holder, 1);
   }
 
-  function applyFormat(cmd) {
-    restoreEditorRange();
+  // Zeichen-Position eines DOM-Punkts im Editor - zaehlt genau wie serializeEditor
+  // (Text ohne \u200B, <br> = 1, neuer Block = 1).
+  function editorOffsetOf(targetNode, targetOffset) {
+    const root = textEditorEl;
+    let count = 0;
+    let any = false;
+    let found = null;
+    const walk = (node) => {
+      for (let idx = 0; idx <= node.childNodes.length; idx++) {
+        if (found !== null) return;
+        if (node === targetNode && idx === targetOffset) {
+          found = count;
+          return;
+        }
+        const child = node.childNodes[idx];
+        if (!child) return;
+        if (child.nodeType === 3) {
+          const v = child.nodeValue || "";
+          if (child === targetNode) {
+            found = count + v.slice(0, targetOffset).replace(/\u200B/g, "").length;
+            return;
+          }
+          if (v) {
+            count += v.replace(/\u200B/g, "").length;
+            any = true;
+          }
+        } else if (child.nodeName === "BR") {
+          const parent = child.parentNode;
+          if (!(parent !== root && /^(DIV|P)$/.test(parent.nodeName) && parent.childNodes.length === 1)) count += 1;
+        } else if (child.nodeType === 1) {
+          const block = /^(DIV|P)$/.test(child.nodeName);
+          if (block && any) count += 1;
+          walk(child);
+          if (block) any = true;
+        }
+      }
+    };
+    walk(root);
+    return found === null ? count : found;
+  }
+
+  // DOM-Punkt zu einer Zeichen-Position im (von runsToHtml erzeugten) Editor-Inhalt
+  function editorPointAt(off) {
+    const root = textEditorEl;
+    let count = 0;
+    let result = null;
+    const walk = (node) => {
+      for (let idx = 0; idx < node.childNodes.length && !result; idx++) {
+        const child = node.childNodes[idx];
+        if (child.nodeType === 3) {
+          const len = child.nodeValue.length;
+          if (off <= count + len) result = { node: child, offset: off - count };
+          count += len;
+        } else if (child.nodeName === "BR") {
+          if (off === count) result = { node, offset: idx };
+          count += 1;
+        } else if (child.nodeType === 1) {
+          walk(child);
+        }
+      }
+    };
+    walk(root);
+    return result || { node: root, offset: root.childNodes.length };
+  }
+
+  // Format fuer einen markierten Bereich selbst umschalten (statt execCommand): alle
+  // markierten Zeichen haben es schon -> aus, sonst -> an. Markierung bleibt danach stehen.
+  function toggleRange(cmd, range) {
+    const a = editorOffsetOf(range.startContainer, range.startOffset);
+    const b = editorOffsetOf(range.endContainer, range.endOffset);
+    if (b <= a) return false;
+    const flag = FMT[cmd].flag;
+    const pieces = [];
+    let pos = 0;
+    for (const r of serializeEditor(false)) {
+      const end = pos + r.t.length;
+      const cuts = [pos, Math.max(pos, Math.min(end, a)), Math.max(pos, Math.min(end, b)), end];
+      for (let k = 0; k < 3; k++) {
+        const s0 = cuts[k];
+        const s1 = cuts[k + 1];
+        if (s1 > s0) pieces.push({ ...r, t: r.t.slice(s0 - pos, s1 - pos), sel: s0 >= a && s1 <= b });
+      }
+      pos = end;
+    }
+    const chosen = pieces.filter((p) => p.sel && p.t.trim());
+    if (!chosen.length) return false;
+    const allOn = chosen.every((p) => p[flag]);
+    for (const p of pieces) {
+      if (p.sel) {
+        if (allOn) delete p[flag];
+        else p[flag] = 1;
+      }
+      delete p.sel;
+    }
+    textEditorEl.innerHTML = runsToHtml(normalizeRuns(pieces));
+    const start = editorPointAt(a);
+    const stop = editorPointAt(b);
+    const r = document.createRange();
+    r.setStart(start.node, start.offset);
+    r.setEnd(stop.node, stop.offset);
     const sel = window.getSelection();
-    if (sel.rangeCount && sel.getRangeAt(0).collapsed) toggleAtCaret(cmd);
-    else document.execCommand(cmd, false, null);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    editorRange = r.cloneRange();
+    return true;
+  }
+
+  let pressRange = null; // Markierung im Moment, in dem ein Format-Knopf beruehrt wurde
+  let lastExpandedRange = null; // letzte echte Markierung (iPad hebt sie beim Tippen auf den Knopf auf)
+  let lastExpandedAt = 0;
+
+  function capturePressRange() {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && textEditorEl.contains(sel.anchorNode)) {
+      const r = sel.getRangeAt(0);
+      if (!r.collapsed || !pressRange) pressRange = r.cloneRange();
+    }
+  }
+
+  // Sobald in einem Platzhalter-Knoten echter Text steht, wird \u200B entfernt (sonst waere
+  // es ein unsichtbarer Extra-Schritt beim Cursor-Bewegen/Markieren). Cursor bleibt stehen.
+  function cleanupPlaceholders() {
+    const sel = window.getSelection();
+    const caret = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const walker = document.createTreeWalker(textEditorEl, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      const v = node.nodeValue;
+      if (!v.includes(ZWSP) || v.replace(/\u200B/g, "") === "") continue;
+      let caretOffset = null;
+      if (caret && caret.collapsed && caret.startContainer === node) {
+        caretOffset = v.slice(0, caret.startOffset).replace(/\u200B/g, "").length;
+      }
+      node.nodeValue = v.replace(/\u200B/g, "");
+      if (caretOffset !== null) placeCaret(node, caretOffset);
+    }
+  }
+
+  function applyFormat(cmd) {
+    let range = pressRange && !pressRange.collapsed ? pressRange : null;
+    if (!range && lastExpandedRange && performance.now() - lastExpandedAt < 1500) {
+      const sel = window.getSelection();
+      const cur = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      if (!cur || cur.collapsed) range = lastExpandedRange;
+    }
+    if (!range) {
+      const sel = window.getSelection();
+      const cur = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      if (cur && !cur.collapsed && textEditorEl.contains(cur.startContainer)) range = cur;
+    }
+    pressRange = null;
+    if (range && textEditorEl.contains(range.startContainer) && toggleRange(cmd, range)) {
+      lastExpandedRange = null;
+      return;
+    }
+    restoreEditorRange();
+    toggleAtCaret(cmd);
     rememberEditorRange();
   }
 
@@ -3841,6 +3997,7 @@
       // selbst beim Loslassen aus (Finger, Stift, Maus), "click" nur noch fuer Tastatur.
       let pressedId = null;
       b.addEventListener("pointerdown", (e) => {
+        capturePressRange();
         if (e.cancelable) e.preventDefault();
         e.stopPropagation();
         pressedId = e.pointerId;
@@ -3859,6 +4016,7 @@
         b.addEventListener(
           type,
           (e) => {
+            capturePressRange();
             if (e.cancelable) e.preventDefault();
             e.stopPropagation();
           },
@@ -3874,6 +4032,11 @@
     });
     document.addEventListener("selectionchange", () => {
       if (!textEdit) return;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount && !sel.getRangeAt(0).collapsed && textEditorEl.contains(sel.anchorNode)) {
+        lastExpandedRange = sel.getRangeAt(0).cloneRange();
+        lastExpandedAt = performance.now();
+      }
       rememberEditorRange();
       syncFormatBar();
     });
@@ -3903,7 +4066,14 @@
         syncFormatBar();
       }
     });
-    textEditorEl.addEventListener("pointerdown", (e) => e.stopPropagation());
+    textEditorEl.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      lastExpandedRange = null; // bewusst neu in den Text getippt
+    });
+    textEditorEl.addEventListener("input", () => {
+      lastExpandedRange = null;
+      cleanupPlaceholders();
+    });
   }
 
   function drawTextDragPreview() {
