@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_landscape,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,gesture,grain,grid_4x4,group,hexagon,highlight,home,ink_eraser,more_vert,note_add,palette,person,redo,refresh,remove,reorder,share,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,auto_awesome,brush,calculate,check,chevron_right,close,content_copy,content_cut,content_paste,create_new_folder,crop,crop_square,delete,delete_sweep,description,download,drag_indicator,drive_file_move,edit,folder,folder_open,grain,grid_4x4,group,home,ink_eraser,ink_highlighter,ink_pen,lasso_select,more_vert,note_add,palette,person,rectangle,redo,refresh,remove,reorder,shapes,share,touch_app,tune,undo,zoom_in&display=block" rel="stylesheet" />
 <link rel="preload" href="models/emnist/model.json" as="fetch" crossorigin />
 <link rel="preload" href="models/emnist/group1-shard1of1.bin" as="fetch" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -149,22 +149,22 @@
   <div class="tools-container">
     <div class="tool-wrapper">
       <button class="tool-btn active" data-tool="pen" title="Stift">
-        <span class="material-symbols-rounded">edit</span>
+        <span class="material-symbols-rounded">ink_pen</span>
       </button>
     </div>
     <div class="tool-wrapper">
       <button class="tool-btn" data-tool="marker" title="Textmarker">
-        <span class="material-symbols-rounded">highlight</span>
+        <span class="material-symbols-rounded">ink_highlighter</span>
       </button>
     </div>
     <div class="tool-wrapper">
       <button class="tool-btn" data-tool="eraser" title="Radiergummi">
-        <span class="material-symbols-rounded">crop_square</span>
+        <span class="material-symbols-rounded">ink_eraser</span>
       </button>
     </div>
     <div class="tool-wrapper">
       <button class="tool-btn" data-tool="select" title="Auswahl (Lasso)">
-        <span class="material-symbols-rounded">gesture</span>
+        <span class="material-symbols-rounded">lasso_select</span>
       </button>
     </div>
     <div class="tool-wrapper">
@@ -229,7 +229,7 @@
       <button class="btn-grid-style active" data-grid="graph"><span class="material-symbols-rounded">grid_4x4</span> Kariert</button>
       <button class="btn-grid-style" data-grid="dots"><span class="material-symbols-rounded">grain</span> Punkte</button>
       <button class="btn-grid-style" data-grid="lines"><span class="material-symbols-rounded">reorder</span> Liniert</button>
-      <button class="btn-grid-style" data-grid="blank"><span class="material-symbols-rounded">crop_landscape</span> Blanko</button>
+      <button class="btn-grid-style" data-grid="blank"><span class="material-symbols-rounded">rectangle</span> Blanko</button>
     </div>
     <div class="popover-label">Leiste</div>
     <div class="dock-quick-row">
@@ -240,7 +240,7 @@
     </div>
     <div class="popover-label">Zeichnen</div>
     <button id="shape-toggle" class="setting-toggle active" title="Formen-Erkennung">
-      <span class="material-symbols-rounded">hexagon</span> Formen erkennen
+      <span class="material-symbols-rounded">shapes</span> Formen erkennen
     </button>
     <button id="math-toggle" class="setting-toggle active" title="Rechnungen automatisch lösen">
       <span class="material-symbols-rounded">calculate</span> Rechnungen lösen

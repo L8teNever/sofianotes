@@ -2764,6 +2764,12 @@
   const touchPointers = new Map(); // pointerId -> {x,y}
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
+  let tapState = null; // {pointerId, x, y, t} - moeglicher Finger-Tap (kurz, kaum bewegt)
+  const TAP_MAX_MOVE_PX = 10; // ein Finger-Tap darf sich hoechstens so weit bewegen (Bildschirm-px) ...
+  const TAP_MAX_MS = 350; // ... und hoechstens so lange dauern, sonst ist es ein Pan
+  const TOUCH_SLOP = 1.6; // Finger sind ungenauer als Stift/Maus -> groessere Greifbereiche
+  const SELECT_PAD_PX = 10;
+  const SELECT_PAD_TOUCH_PX = 22;
   let spacePressed = false;
 
   // ---- Auswahl-Werkzeug (Lasso markieren + verschieben) -----------------
@@ -2889,8 +2895,8 @@
     return false;
   }
 
-  function pickStrokeAt(world) {
-    const pad = 12 / Math.max(scale, 0.25);
+  function pickStrokeAt(world, padPx = 12) {
+    const pad = padPx / Math.max(scale, 0.25);
     let best = null;
     let bestD = Infinity;
     for (const s of boardStrokes.values()) {
@@ -3315,24 +3321,24 @@
     return best;
   }
 
-  function pickScaleHandle(world, bbox, pad) {
-    const r = 14 / Math.max(scale, 0.25);
+  function pickScaleHandle(world, bbox, pad, slop = 1) {
+    const r = (14 * slop) / Math.max(scale, 0.25);
     for (const p of selectionHandlePoints(bbox, pad)) {
       if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
     }
     return null;
   }
 
-  function pickRotateHandle(world, bbox, pad) {
+  function pickRotateHandle(world, bbox, pad, slop = 1) {
     if (!bbox) return false;
     const h = selectionRotateHandle(bbox, pad);
-    const r = 16 / Math.max(scale, 0.25);
+    const r = (16 * slop) / Math.max(scale, 0.25);
     return Math.hypot(world.x - h.x, world.y - h.y) <= r;
   }
 
-  function pickCropHandle(world) {
+  function pickCropHandle(world, slop = 1) {
     if (!cropState || !cropState.full) return null;
-    const r = 16 / Math.max(scale, 0.25);
+    const r = (16 * slop) / Math.max(scale, 0.25);
     for (const p of cropHandlePoints(cropState.full, cropState.crop)) {
       if (Math.hypot(world.x - p.x, world.y - p.y) <= r) return p.name;
     }
@@ -4046,6 +4052,89 @@
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   }
 
+  function cropRectWorld() {
+    const full = cropState.full;
+    const crop = cropState.crop;
+    return {
+      minX: full.minX + crop.l * full.w,
+      minY: full.minY + crop.t * full.h,
+      maxX: full.minX + crop.r * full.w,
+      maxY: full.minY + crop.b * full.h,
+    };
+  }
+
+  // Trifft dieser Punkt die bestehende Auswahl (Rahmen, Griffe, Knoten) bzw. den Zuschnitt?
+  // Fuer Finger mit groesserem Greifbereich.
+  function selectionHitAt(world, pointerType) {
+    const touch = pointerType === "touch";
+    const slop = touch ? TOUCH_SLOP : 1;
+    if (cropState && (pickCropHandle(world, slop) || pointInBBox(world, cropRectWorld(), 0))) return true;
+    if (!selection.bbox) return false;
+    const pad = SELECT_PAD_PX / scale;
+    return (
+      (!cropState &&
+        ((!touch && !!pickEditKnot(world)) ||
+          !!pickScaleHandle(world, selection.bbox, pad, slop) ||
+          pickRotateHandle(world, selection.bbox, pad, slop))) ||
+      pointInBBox(world, selection.bbox, (touch ? SELECT_PAD_TOUCH_PX : SELECT_PAD_PX) / scale)
+    );
+  }
+
+  // Startet eine Interaktion mit der bestehenden Auswahl (Zuschnitt, Knoten, Skalieren, Drehen,
+  // Verschieben). Rueckgabe: "crop" | "handle" | "move" oder null, wenn nichts getroffen wurde.
+  function grabSelectionAt(e, world) {
+    const touch = e.pointerType === "touch";
+    const slop = touch ? TOUCH_SLOP : 1;
+    if (cropState) {
+      const handle = pickCropHandle(world, slop);
+      if (handle || pointInBBox(world, cropRectWorld(), 0)) {
+        cropState.pointerId = e.pointerId;
+        cropState.handle = handle || "move";
+        cropState.startCrop = { ...cropState.crop };
+        cropState.startWorld = world;
+        return "crop";
+      }
+    }
+    if (!selection.bbox) return null;
+    const pad = SELECT_PAD_PX / scale;
+    let kind = null;
+    // Einzelne Knoten verbiegen ist Feinarbeit fuer Stift/Maus; ein Finger wuerde dabei
+    // ungewollt die Form verziehen statt die Auswahl zu verschieben.
+    const knot = cropState || touch ? null : pickEditKnot(world);
+    const handle = cropState || knot ? null : pickScaleHandle(world, selection.bbox, pad, slop);
+    if (knot) {
+      startPointEdit(e.pointerId, world, knot);
+      kind = "handle";
+    } else if (handle) {
+      startSelectionScale(e.pointerId, world, handle);
+      kind = "handle";
+    } else if (!cropState && pickRotateHandle(world, selection.bbox, pad, slop)) {
+      startSelectionRotate(e.pointerId, world);
+      kind = "handle";
+    } else if (pointInBBox(world, selection.bbox, (touch ? SELECT_PAD_TOUCH_PX : SELECT_PAD_PX) / scale)) {
+      startSelectionDrag(e.pointerId, world);
+      kind = "move";
+    }
+    if (kind && dragState) dragState.pointerType = e.pointerType;
+    return kind;
+  }
+
+  function penIsDown() {
+    for (const p of activePointers.values()) if (p.type === "pen") return true;
+    return false;
+  }
+
+  // Finger-Tap (ohne Finger-Zeichnen) im Auswahl-Werkzeug: auf einen Strich tippen waehlt ihn aus,
+  // daneben tippen hebt die Auswahl auf, in die Auswahl tippen laesst sie stehen.
+  function handleFingerTap(e) {
+    if (currentTool !== "select") return;
+    const world = screenToWorld(e.clientX, e.clientY);
+    if (selectionHitAt(world, "touch")) return;
+    const hit = pickStrokeAt(world, SELECT_PAD_TOUCH_PX);
+    if (hit) selectStrokeIds([hit.id]);
+    else if (selection.ids.size > 0 || cropState) clearSelection();
+  }
+
   function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
     lastPointerWorld = world;
@@ -4058,51 +4147,15 @@
       }
     }
     if (currentTool === "select") {
-      if (cropState) {
-        const handle = pickCropHandle(world);
-        if (handle) {
-          cropState.pointerId = e.pointerId;
-          cropState.handle = handle;
-          cropState.startCrop = { ...cropState.crop };
-          cropState.startWorld = world;
-          return;
-        }
-        const full = cropState.full;
-        const crop = cropState.crop;
-        const rect = {
-          minX: full.minX + crop.l * full.w,
-          minY: full.minY + crop.t * full.h,
-          maxX: full.minX + crop.r * full.w,
-          maxY: full.minY + crop.b * full.h,
-        };
-        if (pointInBBox(world, rect, 0)) {
-          cropState.pointerId = e.pointerId;
-          cropState.handle = "move";
-          cropState.startCrop = { ...cropState.crop };
-          cropState.startWorld = world;
-          return;
-        }
+      if (dragState && dragState.pointerId !== e.pointerId) {
+        // Setzt der Stift auf, waehrend ein "Finger" die Auswahl zieht, war das fast
+        // sicher der Handballen -> dessen Verschiebung verwerfen statt uebernehmen.
+        if (e.pointerType === "pen" && dragState.pointerType === "touch") cancelSelectionDrag();
+        else finalizeSelectionDrag();
       }
-      if (selection.bbox && !cropState) {
-        const pad = 10 / scale;
-        const knot = pickEditKnot(world);
-        if (knot) {
-          startPointEdit(e.pointerId, world, knot);
-          return;
-        }
-        const handle = pickScaleHandle(world, selection.bbox, pad);
-        if (handle) {
-          startSelectionScale(e.pointerId, world, handle);
-          return;
-        }
-        if (pickRotateHandle(world, selection.bbox, pad)) {
-          startSelectionRotate(e.pointerId, world);
-          return;
-        }
-      }
-      if (selection.bbox && pointInBBox(world, selection.bbox, 10 / scale)) {
-        startSelectionDrag(e.pointerId, world);
-      } else {
+      const grabbed = grabSelectionAt(e, world);
+      if (grabbed && grabbed !== "move") return;
+      if (!grabbed) {
         clearSelection();
         lassoPointerId = e.pointerId;
         lassoPoints = [world];
@@ -4134,6 +4187,7 @@
     if (e.pointerType === "touch") {
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touchPointers.size === 2) {
+        tapState = null;
         if (currentStroke) abortStroke();
         if (dragState) cancelSelectionDrag();
         pendingShapeDrag = null;
@@ -4160,12 +4214,24 @@
           dispatchPrimaryDown(e);
           return;
         }
-        if (!pinchState) panState = { lastX: e.clientX, lastY: e.clientY };
+        if (!pinchState) {
+          // Liegt der Stift gerade auf, ist dieser Touch der Handballen: nicht greifen, nicht tippen.
+          const palm = penIsDown();
+          // Auswahl laesst sich auch ohne Finger-Zeichnen mit dem Finger verschieben,
+          // skalieren, drehen und zuschneiden.
+          if (!palm && currentTool === "select" && !dragState && grabSelectionAt(e, world)) {
+            requestRedraw();
+            return;
+          }
+          panState = { lastX: e.clientX, lastY: e.clientY };
+          if (!palm) tapState = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+        }
         if (!fingerDrawEnabled) armPasteHold(e, screenToWorld(e.clientX, e.clientY));
       }
       return;
     }
 
+    tapState = null; // Stift/Maus beruehrt -> ein laufender Finger-Kontakt ist kein Tap mehr
     if (e.pointerType === "mouse" && (spacePressed || e.button === 1)) {
       panState = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
       return;
@@ -4181,6 +4247,9 @@
 
     if (e.pointerType === "touch") {
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (tapState && tapState.pointerId === e.pointerId && Math.hypot(e.clientX - tapState.x, e.clientY - tapState.y) > TAP_MAX_MOVE_PX) {
+        tapState = null;
+      }
       if (pinchState && touchPointers.size === 2) {
         const pts = Array.from(touchPointers.values());
         const mid = midpoint(pts[0], pts[1]);
@@ -4287,6 +4356,7 @@
 
     if (consumed) {
       pasteHoldConsumed = false;
+      tapState = null;
       if (e.pointerType === "touch") {
         touchPointers.delete(e.pointerId);
         if (touchPointers.size < 2) pinchState = null;
@@ -4311,6 +4381,14 @@
       touchPointers.delete(e.pointerId);
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) panState = null;
+      if (tapState && tapState.pointerId === e.pointerId) {
+        const isTap =
+          e.type === "pointerup" &&
+          performance.now() - tapState.t <= TAP_MAX_MS &&
+          Math.hypot(e.clientX - tapState.x, e.clientY - tapState.y) <= TAP_MAX_MOVE_PX;
+        tapState = null;
+        if (isTap) handleFingerTap(e);
+      }
       const wasActiveDrawTouch =
         (dragState && dragState.pointerId === e.pointerId) ||
         (pendingShapeDrag && pendingShapeDrag.pointerId === e.pointerId) ||
