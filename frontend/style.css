@@ -1624,6 +1624,7 @@ button {
 /* ---- Modus-Auswahl oben + kontextabhaengige Werkzeugleiste ---- */
 .mode-switch { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .mode-btn.active,
+#btn-ruler.active,
 #btn-zoom-window.active {
   background: var(--accent);
   color: #fff;
@@ -1656,3 +1657,5 @@ button {
 #toolbar[data-mode="table"] [data-modes]:not([data-modes~="table"]) { display: none; }
 #toolbar[data-mode="ruler"] [data-modes]:not([data-modes~="ruler"]) { display: none; }
 #toolbar[data-mode="lasso"] [data-modes]:not([data-modes~="lasso"]) { display: none; }
+/* Winkel-Knoepfe nur, solange das Lineal an ist */
+#toolbar:not(.ruler-on) .ruler-group { display: none; }

@@ -161,10 +161,12 @@
     <button type="button" class="icon-btn mode-btn active" data-mode="pen" title="Stift: Stift, Marker, Radierer, Farben"><span class="material-symbols-rounded">ink_pen</span></button>
     <button type="button" class="icon-btn mode-btn" data-mode="text" title="Text: Textfelder, Größe, Fett/Kursiv/…"><span class="material-symbols-rounded">text_fields</span></button>
     <button type="button" class="icon-btn mode-btn" data-mode="table" title="Tabelle: einfügen, Zeilen/Spalten"><span class="material-symbols-rounded">table</span></button>
-    <button type="button" class="icon-btn mode-btn" data-mode="ruler" title="Lineal: an der Kante gerade zeichnen"><span class="material-symbols-rounded">straighten</span></button>
     <button type="button" class="icon-btn mode-btn" data-mode="lasso" title="Lasso: auswählen, verschieben, umfärben"><span class="material-symbols-rounded">lasso_select</span></button>
   </div>
   <div class="bar-divider"></div>
+  <button id="btn-ruler" class="icon-btn" type="button" title="Lineal an/aus (1 Finger schieben, 2 Finger drehen; Stift an der Kante zieht gerade)">
+    <span class="material-symbols-rounded">straighten</span>
+  </button>
   <button id="btn-zoom-window" class="icon-btn" type="button" title="Zoom-Fenster: groß schreiben, klein aufs Blatt">
     <span class="material-symbols-rounded">zoom_in_map</span>
   </button>
@@ -251,7 +253,7 @@
       <button type="button" class="tool-btn tbl-bar-btn" data-tbl="col" data-delta="-1" title="Letzte Spalte entfernen"><span class="material-symbols-rounded">view_column</span><span class="mini-badge">−</span></button>
       <span id="tbl-hint" class="mode-hint">Tabelle einfügen oder antippen</span>
     </div>
-    <div class="mode-group" data-modes="ruler">
+    <div class="mode-group ruler-group" data-modes="pen">
       <span class="mode-sep"></span>
       <button type="button" class="tool-btn angle-btn" data-angle="0" title="Lineal waagrecht"><span class="angle-label">0°</span></button>
       <button type="button" class="tool-btn angle-btn" data-angle="45" title="Lineal 45°"><span class="angle-label">45°</span></button>

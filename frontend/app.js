@@ -4804,6 +4804,8 @@
       ruler.angle = 0;
     }
     rulerBtn.classList.toggle("active", ruler.visible);
+    toolbarEl.classList.toggle("ruler-on", ruler.visible);
+    syncModeBar();
     requestRedraw();
   });
 
@@ -4827,15 +4829,11 @@
 
   function setMode(mode) {
     if (textEdit) commitTextEditor();
-    // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Lineal/Text aufheben
-    if ((mode === "pen" || mode === "ruler" || mode === "text") && selection.ids.size) clearSelection();
-    if (mode !== "ruler" && ruler.visible) {
-      ruler.visible = false;
-      requestRedraw();
-    }
+    // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Text aufheben
+    if ((mode === "pen" || mode === "text") && selection.ids.size) clearSelection();
     modeSyncing = true;
     try {
-      if (mode === "pen" || mode === "ruler") {
+      if (mode === "pen") {
         if (!["pen", "marker", "eraser"].includes(currentTool)) setTool(lastInkTool || "pen");
       } else if (mode === "text") {
         if (currentTool !== "text") setTool("text");
@@ -4845,31 +4843,19 @@
     } finally {
       modeSyncing = false;
     }
-    if (mode === "ruler" && !ruler.visible) {
-      ruler.visible = true;
-      ruler.cx = window.innerWidth / 2;
-      ruler.cy = window.innerHeight * 0.45;
-      requestRedraw();
-    }
     toolPopover.classList.add("hidden");
     showMode(mode);
   }
 
   // Wird ein Werkzeug anders gewaehlt (Tastatur, Radierer-Ruecksprung, Tabelle einfuegen ...),
-  // folgt der Modus - Lineal bleibt bei Tinte, Tabelle bleibt bei der Auswahl.
+  // folgt der Modus - Tabelle bleibt bei der Auswahl. Das Lineal ist ein eigener Schalter.
   function syncModeFromTool(tool) {
     if (modeSyncing || !toolbarEl.dataset) return;
     let mode = currentMode;
-    if (tool === "pen" || tool === "marker" || tool === "eraser") mode = currentMode === "ruler" ? "ruler" : "pen";
+    if (tool === "pen" || tool === "marker" || tool === "eraser") mode = "pen";
     else if (tool === "text") mode = "text";
     else if (tool === "select") mode = currentMode === "table" ? "table" : "lasso";
-    if (mode !== currentMode) {
-      if (currentMode === "ruler" && ruler.visible) {
-        ruler.visible = false;
-        requestRedraw();
-      }
-      showMode(mode);
-    }
+    if (mode !== currentMode) showMode(mode);
   }
 
   function syncModeBar() {
@@ -4902,7 +4888,8 @@
       });
       const hint = document.getElementById("tbl-hint");
       if (hint) hint.classList.toggle("hidden", !!table);
-    } else if (mode === "ruler") {
+    }
+    if (ruler.visible) {
       let deg = Math.abs(Math.round((ruler.angle * 180) / Math.PI)) % 180;
       if (deg > 90) deg = 180 - deg;
       toolbarEl.querySelectorAll(".angle-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.angle) === deg));
@@ -4947,7 +4934,6 @@
       e.stopPropagation();
       // positive Winkel steigen nach rechts an (Bildschirm-y zeigt nach unten)
       ruler.angle = (-Number(b.dataset.angle) * Math.PI) / 180;
-      if (!ruler.visible) ruler.visible = true;
       requestRedraw();
       syncModeBar();
     })
