@@ -151,6 +151,15 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE boards ADD COLUMN solution_synced_at REAL")
     if "solution_error" not in board_cols:
         _conn.execute("ALTER TABLE boards ADD COLUMN solution_error TEXT")
+    if "paper" not in board_cols:
+        _conn.execute("ALTER TABLE boards ADD COLUMN paper TEXT")
+    if "paper" not in folder_cols:
+        _conn.execute("ALTER TABLE folders ADD COLUMN paper TEXT")
+    people_cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
+    if "solution_mode" not in people_cols2:
+        _conn.execute("ALTER TABLE people ADD COLUMN solution_mode TEXT NOT NULL DEFAULT 'auto'")
+    if "default_paper" not in people_cols2:
+        _conn.execute("ALTER TABLE people ADD COLUMN default_paper TEXT NOT NULL DEFAULT 'graph'")
     if "sofia_subject_id" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN sofia_subject_id INTEGER")
     people_cols = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
@@ -379,7 +388,7 @@ def valid_person(person_id: str | None) -> bool:
 
 def _board_row(board_id: str) -> dict[str, Any] | None:
     row = _conn.execute(
-        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error FROM boards WHERE id = ?",
+        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error, paper FROM boards WHERE id = ?",
         (board_id,),
     ).fetchone()
     if not row:
@@ -400,6 +409,7 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
         "sofiaSolutionId": row[7],
         "solutionSyncedAt": row[8],
         "solutionError": row[9],
+        "paper": row[10] or "graph",
     }
 
 
@@ -420,7 +430,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     folders = []
     cur = _conn.execute(
         """
-        SELECT id, parent_id, name, sort_order, color, starred, sofia_subject_id FROM folders
+        SELECT id, parent_id, name, sort_order, color, starred, sofia_subject_id, paper FROM folders
         WHERE person_id = ? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)
         ORDER BY starred DESC, sort_order ASC, name COLLATE NOCASE ASC
         """,
@@ -436,6 +446,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
                 "color": row[4] or DEFAULT_FOLDER_COLOR,
                 "starred": bool(row[5]),
                 "sofiaSubjectId": row[6],
+                "paper": row[7],
             }
         )
     boards = []
@@ -492,6 +503,78 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     return {"personId": person_id, "folderId": folder_id, "folders": folders, "boards": boards, "crumbs": crumbs, "allFolders": all_folders}
 
 
+PAPERS = ("graph", "dots", "lines", "blank")
+
+
+def _paper_for_new_board(person_id: str, folder_id: str | None) -> str:
+    """Papier eines neuen Blatts: vom Ordner (oder dem naechsten Ueberordner, der eins
+    festgelegt hat), sonst der eigene Standard der Person, sonst kariert."""
+    seen: set[str] = set()
+    walk = folder_id
+    while walk and walk not in seen:
+        seen.add(walk)
+        row = _conn.execute("SELECT parent_id, paper FROM folders WHERE id = ?", (walk,)).fetchone()
+        if not row:
+            break
+        if row[1] in PAPERS:
+            return row[1]
+        walk = row[0]
+    row = _conn.execute("SELECT default_paper FROM people WHERE id = ?", (person_id,)).fetchone()
+    return row[0] if row and row[0] in PAPERS else "graph"
+
+
+def _person_settings_sync(person_id: str) -> dict[str, Any]:
+    row = _conn.execute("SELECT solution_mode, default_paper FROM people WHERE id = ?", (person_id,)).fetchone()
+    if not row:
+        return {"solutionMode": "auto", "defaultPaper": "graph"}
+    return {"solutionMode": row[0] or "auto", "defaultPaper": row[1] if row[1] in PAPERS else "graph"}
+
+
+def _set_person_settings_sync(person_id: str, solution_mode: str | None, default_paper: str | None) -> dict[str, Any]:
+    if solution_mode in ("auto", "manual", "off"):
+        _conn.execute("UPDATE people SET solution_mode = ? WHERE id = ?", (solution_mode, person_id))
+    if default_paper in PAPERS:
+        _conn.execute("UPDATE people SET default_paper = ? WHERE id = ?", (default_paper, person_id))
+    _conn.commit()
+    return _person_settings_sync(person_id)
+
+
+def _set_folder_paper_sync(person_id: str, folder_id: str, paper: str | None) -> bool:
+    if paper is not None and paper not in PAPERS:
+        return False
+    cur = _conn.execute("UPDATE folders SET paper = ? WHERE id = ? AND person_id = ?", (paper, folder_id, person_id))
+    _conn.commit()
+    return cur.rowcount > 0
+
+
+def _set_board_paper_sync(board_id: str, paper: str) -> bool:
+    if paper not in PAPERS:
+        return False
+    cur = _conn.execute("UPDATE boards SET paper = ? WHERE id = ?", (paper, board_id))
+    _conn.commit()
+    return cur.rowcount > 0
+
+
+async def person_settings(person_id: str) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _person_settings_sync, person_id)
+
+
+async def set_person_settings(person_id: str, solution_mode: str | None, default_paper: str | None) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _set_person_settings_sync, person_id, solution_mode, default_paper)
+
+
+async def set_folder_paper(person_id: str, folder_id: str, paper: str | None) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _set_folder_paper_sync, person_id, folder_id, paper)
+
+
+async def set_board_paper(board_id: str, paper: str) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _set_board_paper_sync, board_id, paper)
+
+
 def _create_board_sync(person_id: str, title: str, folder_id: str | None, board_id: str | None = None) -> dict[str, Any]:
     now = time.time()
     board_id = board_id or str(uuid.uuid4())
@@ -499,9 +582,10 @@ def _create_board_sync(person_id: str, title: str, folder_id: str | None, board_
     existing = _board_row(board_id)
     if existing:
         return existing
+    paper = _paper_for_new_board(person_id, folder_id)
     _conn.execute(
-        "INSERT INTO boards (id, owner_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (board_id, person_id, title, now, now),
+        "INSERT INTO boards (id, owner_id, title, created_at, updated_at, paper) VALUES (?, ?, ?, ?, ?, ?)",
+        (board_id, person_id, title, now, now, paper),
     )
     _conn.execute(
         "INSERT INTO placements (person_id, board_id, folder_id, sort_order) VALUES (?, ?, ?, 0)",

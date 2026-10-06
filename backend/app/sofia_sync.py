@@ -355,7 +355,7 @@ def _send_json(method: str, path: str, email: str, payload: Any | None = None) -
         return json.loads(raw) if raw else None
 
 
-async def upload_solution(board_id: str) -> dict[str, Any]:
+async def upload_solution(board_id: str, manual: bool = False) -> dict[str, Any]:
     from . import goodnotes_export
 
     if not enabled():
@@ -363,7 +363,8 @@ async def upload_solution(board_id: str) -> dict[str, Any]:
     board = await db.get_board(board_id)
     if not board or not board.get("sofiaHomeworkId"):
         return {"ok": False, "error": "no_homework"}
-    if not board.get("solutionShare"):
+    mode = (await db.person_settings(board["ownerId"]))["solutionMode"]
+    if mode == "off" or (mode == "manual" and not manual):
         return {"ok": False, "error": "off"}
     email = await db.owner_email(board_id)
     if not email:

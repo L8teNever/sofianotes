@@ -18,6 +18,19 @@
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 4;
   const GRID_SIZE = 32;
+  // Persoenliche Einstellungen vom Server (gelten auf allen Geraeten)
+  const mySettings = { solutionMode: "auto", defaultPaper: "graph" };
+  function lsGetRaw(k) {
+    try {
+      return localStorage.getItem(k);
+    } catch (err) {
+      return null;
+    }
+  }
+  let zoomRowsDefault = (() => {
+    const v = parseFloat(lsGetRaw("sofianotes-zoom-rows"));
+    return Number.isFinite(v) && v > 0 ? v : 1;
+  })();
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
@@ -98,7 +111,8 @@
     const undo = document.getElementById("undo-redo-dock");
     if (!bar) return;
     document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
-    if (!viewLeft && !viewRight) {
+    const vertical = bar.classList.contains("tb-vertical") || bar.classList.contains("free-drag");
+    if (!viewLeft && !viewRight || vertical) {
       bar.style.left = "";
       bar.style.transform = "";
       bar.style.maxWidth = "";
@@ -107,7 +121,8 @@
     let from = viewLeft + 12;
     let to = window.innerWidth - viewRight - 12;
     const u = undo && !undo.classList.contains("free-drag") ? undo.getBoundingClientRect() : null;
-    if (u && u.top < 80 && u.width) {
+    const atBottom = bar.classList.contains("tb-bottom");
+    if (u && u.width && (atBottom ? u.bottom > window.innerHeight - 80 : u.top < 80)) {
       if (u.left < (from + to) / 2) from = Math.max(from, u.right + 10);
       else to = Math.min(to, u.left - 10);
     }
@@ -1374,7 +1389,10 @@
       const el = document.getElementById(id);
       if (el) el.textContent = t;
     };
-    set("set-sum-paper", GRID_NAMES[gridStyle] || "Kariert");
+    set("set-sum-paper", (currentBoardId ? "Dieses Blatt: " + (GRID_NAMES[gridStyle] || "Kariert") + " · " : "") + "Neue: " + (GRID_NAMES[mySettings.defaultPaper] || "Kariert"));
+    set("set-sum-zoom", ZOOM_ROW_NAMES[zoomRowsDefault] || zoomRowsDefault + " Kästchen hoch");
+    set("set-sum-sofia", { auto: "Automatisch teilen", manual: "Nur per Knopf", off: "Nie teilen" }[mySettings.solutionMode] || "");
+    renderZoomRowsSetting();
     const on = [];
     if (shapeRecognitionEnabled) on.push("Formen");
     if (mathSolveEnabled) on.push("Rechnungen");
@@ -1418,15 +1436,106 @@
     settingsPopover.addEventListener("click", (e) => e.stopPropagation());
   }
 
+  // Papier gehoert zum Blatt (fuer alle gleich), neue Blaetter bekommen den Standard
+  function applyPaper(paper) {
+    gridStyle = GRID_NAMES[paper] ? paper : "graph";
+    document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b.dataset.grid === gridStyle));
+    requestRedraw();
+  }
   document.querySelectorAll(".btn-grid-style").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      gridStyle = btn.dataset.grid;
-      localStorage.setItem("sofianotes-grid", gridStyle);
-      document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b === btn));
-      requestRedraw();
+      const was = gridStyle;
+      const next = btn.dataset.grid;
+      const bid = currentBoardId;
+      if (!bid || next === was) return;
+      optimistic({
+        apply: () => {
+          applyPaper(next);
+          if (currentBoardMeta) currentBoardMeta.paper = next;
+        },
+        revert: () => {
+          if (bid === currentBoardId) applyPaper(was);
+        },
+        request: () =>
+          api("/api/boards/" + encodeURIComponent(bid), {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ paper: next }),
+          }),
+        failText: "Papier ändern hat nicht geklappt",
+      });
     });
   });
+  function renderPaperDefault() {
+    document.querySelectorAll("#set-paper-default [data-paper]").forEach((b) => b.classList.toggle("active", b.dataset.paper === mySettings.defaultPaper));
+  }
+  function saveMySettings(patch, failText) {
+    const before = { ...mySettings };
+    optimistic({
+      apply: () => {
+        Object.assign(mySettings, patch);
+        renderMySettings();
+      },
+      revert: () => {
+        Object.assign(mySettings, before);
+        renderMySettings();
+      },
+      request: () =>
+        api("/api/me/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }),
+      failText,
+    });
+  }
+  function renderMySettings() {
+    renderPaperDefault();
+    document.querySelectorAll("#set-solution-mode [data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === mySettings.solutionMode));
+    if (typeof renderSolution === "function") renderSolution();
+    syncSettingsSummary();
+  }
+  document.querySelectorAll("#set-paper-default [data-paper]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      saveMySettings({ defaultPaper: b.dataset.paper }, "Speichern hat nicht geklappt");
+    })
+  );
+  document.querySelectorAll("#set-solution-mode [data-mode]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      saveMySettings({ solutionMode: b.dataset.mode }, "Speichern hat nicht geklappt");
+    })
+  );
+  async function loadMySettings() {
+    try {
+      Object.assign(mySettings, await api("/api/me/settings"));
+    } catch (err) {
+      /* offline: Standard behalten */
+    }
+    renderMySettings();
+    try {
+      const st = await api("/api/sofia/status");
+      document.getElementById("set-nav-sofia")?.classList.toggle("hidden", !(st && st.enabled));
+    } catch (err) {}
+  }
+  // Zoom-Fenster: Standard-Schreibhoehe
+  const ZOOM_ROW_NAMES = { 1: "1 Kästchen hoch", 1.5: "1½ Kästchen hoch", 2: "2 Kästchen hoch", 3: "3 Kästchen hoch" };
+  function renderZoomRowsSetting() {
+    document.querySelectorAll("#set-zoom-rows [data-rows]").forEach((b) => b.classList.toggle("active", parseFloat(b.dataset.rows) === zoomRowsDefault));
+  }
+  document.querySelectorAll("#set-zoom-rows [data-rows]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      zoomRowsDefault = parseFloat(b.dataset.rows);
+      try {
+        localStorage.setItem("sofianotes-zoom-rows", String(zoomRowsDefault));
+      } catch (err) {}
+      renderZoomRowsSetting();
+      syncSettingsSummary();
+    })
+  );
 
   function applyZoomPercent(pct, cx, cy) {
     const x = cx == null ? window.innerWidth / 2 : cx;
@@ -1476,8 +1585,8 @@
     toolbarEl.style.bottom = "";
     toolbarEl.style.transform = "";
     toolbarEl.classList.add("dock-" + pos);
-    topBar.classList.toggle("pushed", pos === "top");
     localStorage.setItem("sofianotes-dock", pos);
+    syncBarStack();
     positionToolPopover();
   }
   function setUndoCorner(corner) {
@@ -1602,6 +1711,9 @@
     const r = el.getBoundingClientRect();
     if (kind === "dock") {
       toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+    } else if (kind === "topbar") {
+      topBar.classList.remove("tb-top", "tb-bottom", "tb-left", "tb-right");
+      topBar.style.maxWidth = "";
     } else {
       undoDock.classList.remove(
         "corner-top-left",
@@ -1622,9 +1734,9 @@
 
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch")) return;
-    e.preventDefault();
-    const el = kind === "dock" ? toolbarEl : undoDock;
+    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu")) return;
+    if (kind !== "topbar") e.preventDefault();
+    const el = kind === "dock" ? toolbarEl : kind === "topbar" ? topBar : undoDock;
     dockDrag = {
       kind,
       el,
@@ -1655,9 +1767,10 @@
   function moveDockDrag(x, y) {
     if (!dockDrag || !dockDrag.live) return;
     const el = dockDrag.el;
-    if (dockDrag.kind === "dock") {
+    if (dockDrag.kind === "dock" || dockDrag.kind === "topbar") {
       const edge = nearestEdge(x, y);
-      applyToolbarOrient(edge);
+      if (dockDrag.kind === "dock") applyToolbarOrient(edge);
+      else topBar.classList.toggle("tb-vertical", edge === "left" || edge === "right");
       const dist = edgeDistance(x, y, edge);
       const snapping = dist < SNAP_PX;
       dockDrag.snap = snapping ? edge : null;
@@ -1694,6 +1807,9 @@
     if (!live) return;
     if (kind === "dock") {
       setDockPosition(nearestEdge(lastX, lastY));
+    } else if (kind === "topbar") {
+      el.classList.remove("free-drag", "dragging");
+      setTopBarPos(nearestEdge(lastX, lastY));
     } else {
       setUndoCorner(nearestCorner(lastX, lastY));
     }
@@ -1711,6 +1827,8 @@
   toolbarEl.addEventListener("click", blockDockClick, true);
   undoDock.addEventListener("click", blockDockClick, true);
   toolbarEl.addEventListener("pointerdown", (e) => armDockDrag("dock", e));
+  topBar.addEventListener("click", blockDockClick, true);
+  topBar.addEventListener("pointerdown", (e) => armDockDrag("topbar", e));
   undoDock.addEventListener("pointerdown", (e) => armDockDrag("undo", e));
   window.addEventListener("pointermove", (e) => {
     if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
@@ -1735,6 +1853,154 @@
     if (!dockDrag || e.pointerId !== dockDrag.pointerId) return;
     endDockDrag();
   });
+
+  // ---- Kopfleiste: Rand (oben/unten/links/rechts) und welche Knoepfe sichtbar sind ----
+  // Sitzt die Werkzeugleiste am selben Rand, rueckt sie nach innen (die Kopfleiste bleibt am Rand).
+  function topBarPos() {
+    for (const p of ["bottom", "left", "right"]) if (topBar.classList.contains("tb-" + p)) return p;
+    return "top";
+  }
+  function syncBarStack() {
+    const same = topBarPos() === currentDock() && !topBar.classList.contains("free-drag");
+    document.body.classList.toggle("bars-stacked", same);
+  }
+  function setTopBarPos(pos) {
+    topBar.classList.remove("tb-top", "tb-bottom", "tb-left", "tb-right", "free-drag", "dragging");
+    Object.assign(topBar.style, { left: "", top: "", right: "", bottom: "", transform: "", maxWidth: "" });
+    topBar.classList.add("tb-" + pos);
+    topBar.classList.toggle("tb-vertical", pos === "left" || pos === "right");
+    try {
+      localStorage.setItem("sofianotes-topbar-pos", pos);
+    } catch (err) {}
+    document.body.dataset.topbar = pos;
+    syncBarStack();
+    layoutTopBar();
+    fitFilename();
+    document.querySelectorAll("#set-topbar-pos [data-pos]").forEach((b) => b.classList.toggle("active", b.dataset.pos === pos));
+    try {
+      if (zoomWin) layoutZoomPane(); // beim Start noch nicht angelegt
+    } catch (err) {}
+  }
+  const TOPBAR_ITEMS = [
+    { key: "status", label: "Verbindung", icon: "wifi", sel: "#status" },
+    { key: "modes", label: "Modus-Knöpfe", icon: "ink_pen", sel: "#mode-switch" },
+    { key: "ruler", label: "Lineal", icon: "straighten", sel: "#btn-ruler" },
+    { key: "zoom", label: "Zoom-Fenster", icon: "zoom_in_map", sel: "#btn-zoom-window" },
+    { key: "hw", label: "Aufgabe", icon: "assignment", sel: "#btn-hw-panel" },
+    { key: "insert", label: "Einfügen", icon: "add_box", sel: ".insert-menu-wrap" },
+  ];
+  let topBarHidden = (() => {
+    try {
+      const v = JSON.parse(lsGetRaw("sofianotes-topbar-hidden") || "[]");
+      return Array.isArray(v) ? v : [];
+    } catch (err) {
+      return [];
+    }
+  })();
+  function applyTopBarItems() {
+    for (const it of TOPBAR_ITEMS) {
+      const el = topBar.querySelector(it.sel);
+      if (el) el.classList.toggle("tb-off", topBarHidden.includes(it.key));
+    }
+    // doppelte/haengende Trennstriche ausblenden
+    let prevVisible = null;
+    const kids = Array.from(topBar.children);
+    for (const el of kids) {
+      if (!el.classList.contains("bar-divider")) continue;
+      el.classList.remove("tb-off");
+    }
+    for (const el of kids) {
+      const shown = !el.classList.contains("tb-off") && !el.classList.contains("hidden") && getComputedStyle(el).display !== "none";
+      if (!shown) continue;
+      if (el.classList.contains("bar-divider")) {
+        if (!prevVisible || prevVisible.classList.contains("bar-divider")) el.classList.add("tb-off");
+        else prevVisible = el;
+      } else prevVisible = el;
+    }
+    if (prevVisible && prevVisible.classList.contains("bar-divider")) prevVisible.classList.add("tb-off");
+    renderTopBarSettings();
+    renderHiddenMenu();
+    layoutTopBar();
+  }
+  function renderTopBarSettings() {
+    const box = document.getElementById("set-topbar-items");
+    if (!box) return;
+    box.innerHTML = "";
+    for (const it of TOPBAR_ITEMS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      const on = !topBarHidden.includes(it.key);
+      b.className = "set-check" + (on ? " active" : "");
+      b.innerHTML = '<span class="material-symbols-rounded"></span><span></span><span class="material-symbols-rounded set-check-box"></span>';
+      b.children[0].textContent = it.icon;
+      b.children[1].textContent = it.label;
+      b.children[2].textContent = on ? "check_box" : "check_box_outline_blank";
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        topBarHidden = on ? [...topBarHidden, it.key] : topBarHidden.filter((k) => k !== it.key);
+        try {
+          localStorage.setItem("sofianotes-topbar-hidden", JSON.stringify(topBarHidden));
+        } catch (err) {}
+        applyTopBarItems();
+      });
+      box.appendChild(b);
+    }
+  }
+  // Ausgeblendete Knoepfe stehen im ⋯-Menue unter Teilen/Herunterladen/Einstellungen
+  function renderHiddenMenu() {
+    const box = document.getElementById("canvas-menu-hidden");
+    if (!box) return;
+    box.innerHTML = "";
+    const add = (icon, label, run) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "lib-add-opt";
+      b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+      b.children[0].textContent = icon;
+      b.children[1].textContent = label;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof closeCanvasMenus === "function") closeCanvasMenus();
+        run();
+      });
+      box.appendChild(b);
+    };
+    const click = (sel) => () => document.querySelector(sel)?.click();
+    for (const key of topBarHidden) {
+      if (key === "modes") {
+        add("ink_pen", "Stift", click('.mode-btn[data-mode="pen"]'));
+        add("ink_eraser", "Radierer", click('.mode-btn[data-mode="eraser"]'));
+        add("text_fields", "Text", click('.mode-btn[data-mode="text"]'));
+        add("lasso_select", "Lasso", click('.mode-btn[data-mode="lasso"]'));
+      } else if (key === "ruler") add("straighten", "Lineal an/aus", click("#btn-ruler"));
+      else if (key === "zoom") add("zoom_in_map", "Zoom-Fenster", click("#btn-zoom-window"));
+      else if (key === "hw" && !document.getElementById("btn-hw-panel").classList.contains("hidden")) add("assignment", "Aufgabe", click("#btn-hw-panel"));
+      else if (key === "insert") {
+        add("table", "Tabelle einfügen", click("#insert-table"));
+        add("add_photo_alternate", "Bild einfügen", click("#insert-image"));
+        add("description", "PDF / Datei einfügen", click("#insert-pdf"));
+      }
+    }
+    box.classList.toggle("hidden", !box.children.length);
+  }
+  document.querySelectorAll("#set-topbar-pos [data-pos]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setTopBarPos(b.dataset.pos);
+    })
+  );
+  // Blattname nimmt nur so viel Platz wie sein Text
+  const filenameMeasure = document.createElement("canvas").getContext("2d");
+  function fitFilename() {
+    const inp = document.getElementById("canvas-filename");
+    if (!inp) return;
+    const cs = getComputedStyle(inp);
+    filenameMeasure.font = cs.fontWeight + " " + cs.fontSize + " " + cs.fontFamily;
+    const w = filenameMeasure.measureText(inp.value || inp.placeholder || "").width;
+    inp.style.width = Math.ceil(w + 14) + "px";
+  }
+  document.getElementById("canvas-filename")?.addEventListener("input", fitFilename);
+  document.fonts?.ready?.then(fitFilename);
 
   document.querySelectorAll(".btn-dock-quick").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -1785,17 +2051,15 @@
 
   const savedDock = localStorage.getItem("sofianotes-dock") || "bottom";
   const savedCorner = localStorage.getItem("sofianotes-undo-corner") || "top-left";
-  const savedGrid = localStorage.getItem("sofianotes-grid");
+  setTopBarPos(["top", "bottom", "left", "right"].includes(lsGetRaw("sofianotes-topbar-pos")) ? lsGetRaw("sofianotes-topbar-pos") : "top");
   setDockPosition(savedDock);
+  applyTopBarItems();
   setUndoCorner(savedCorner);
-  if (savedGrid) {
-    gridStyle = savedGrid;
-    document.querySelectorAll(".btn-grid-style").forEach((b) => b.classList.toggle("active", b.dataset.grid === gridStyle));
-  }
   if (filenameInput) {
     filenameInput.addEventListener("change", () => {
       const v = filenameInput.value.trim() || "Unbenannte Skizze";
       filenameInput.value = v;
+      fitFilename();
       document.title = v + " – sofianotes";
       if (currentBoardId && currentPersonId) {
         fetch("/api/boards/" + encodeURIComponent(currentBoardId), {
@@ -2116,8 +2380,10 @@
           currentBoardId = msg.board.id;
           currentBoardMeta = msg.board;
           if (filenameInput) filenameInput.value = msg.board.title || "Unbenannte Skizze";
+          fitFilename();
           document.title = (msg.board.title || "sofianotes") + " – sofianotes";
           syncHomeworkPanel(msg.board);
+          applyPaper(msg.board.paper);
         }
         boardStrokes.clear();
         for (const s of msg.strokes) {
@@ -2130,6 +2396,10 @@
         scheduleSaveBoard();
         break;
       }
+      case "board_paper":
+        if (currentBoardMeta) currentBoardMeta.paper = msg.paper;
+        applyPaper(msg.paper);
+        break;
       case "presence_join":
         ensurePresence(msg.id, msg.color);
         renderPeopleJumpList();
@@ -4981,6 +5251,23 @@
     const r = zoomPaneRect();
     return r.height / zoomRatio();
   }
+  // Schreibhoehe in Kaestchen: das Fenster zeigt immer drei Zeilen dieser Hoehe, in der
+  // mittleren wird geschrieben. Standard aus den Einstellungen, +/- gilt bis zum Schliessen.
+  function zoomRowH() {
+    return (zoomWin && zoomWin.rows ? zoomWin.rows : zoomRowsDefault) * GRID_SIZE;
+  }
+  function zoomFitRows() {
+    if (!zoomWin) return;
+    const r = zoomPaneRect();
+    if (!r.width || !r.height) return;
+    zoomWin.w = (3 * zoomRowH() * r.width) / r.height;
+  }
+  // Rahmen so legen, dass die mittlere Zeile auf einer Kaestchenlinie beginnt
+  function snapZoomY(y) {
+    const rh = zoomRowH();
+    const unit = Number.isInteger(zoomWin.rows) ? GRID_SIZE : GRID_SIZE / 2;
+    return Math.round((y + rh) / unit) * unit - rh;
+  }
   function paneToWorld(clientX, clientY) {
     const r = zoomPaneRect();
     const k = zoomRatio();
@@ -5002,11 +5289,13 @@
   function zoomPaneBounds(h) {
     const tb = toolbarEl.getBoundingClientRect();
     const dock = currentDock();
-    const topBarRect = topBar ? topBar.getBoundingClientRect() : { bottom: 0 };
+    const tbPos = topBarPos();
+    const topBarRect = topBar ? topBar.getBoundingClientRect() : { bottom: 0, top: window.innerHeight };
     const undoRect = undoDock ? undoDock.getBoundingClientRect() : { bottom: 0 };
-    let minTop = Math.max(topBarRect.bottom, undoRect.top < window.innerHeight / 2 ? undoRect.bottom : 0) + 10;
+    let minTop = Math.max(tbPos === "top" ? topBarRect.bottom : 0, undoRect.top < window.innerHeight / 2 ? undoRect.bottom : 0) + 10;
     let maxBottom = window.innerHeight - 12;
-    if (dock === "bottom") maxBottom = tb.top - 10;
+    if (tbPos === "bottom") maxBottom = topBarRect.top - 10;
+    if (dock === "bottom") maxBottom = Math.min(maxBottom, tb.top - 10);
     if (dock === "top") minTop = Math.max(minTop, tb.bottom + 10);
     return { minTop, maxTop: Math.max(minTop, maxBottom - h) };
   }
@@ -5047,8 +5336,9 @@
     const { a, b } = visibleWorldArea();
     const left = a.x + (b.x - a.x) * 0.08;
     const right = b.x - (b.x - a.x) * 0.08;
-    const w = Math.max(80, (right - left) / 3.2);
-    zoomWin = { x: left, y: a.y + (b.y - a.y) * 0.18, w, left, right };
+    zoomWin = { x: left, y: 0, w: 100, left, right, rows: zoomRowsDefault };
+    zoomFitRows();
+    zoomWin.y = snapZoomY(a.y + (b.y - a.y) * 0.18);
     if (zoomWinBtn) zoomWinBtn.classList.add("active");
     requestRedraw();
   }
@@ -5124,7 +5414,7 @@
   }
 
   function zoomNextLine(animate) {
-    moveZoomBox(zoomWin.left, zoomWin.y + zoomBoxH(), animate);
+    moveZoomBox(zoomWin.left, snapZoomY(zoomWin.y + zoomRowH()), animate);
   }
   function zoomStep(dir) {
     const step = zoomWin.w * 0.6;
@@ -5133,7 +5423,7 @@
     if (dir < 0 && nx < zoomWin.left) {
       if (zoomWin.x <= zoomWin.left + 1) {
         // am linken Rand: zurueck ans Ende der vorigen Zeile
-        return moveZoomBox(Math.max(zoomWin.left, zoomWin.right - zoomWin.w), zoomWin.y - zoomBoxH());
+        return moveZoomBox(Math.max(zoomWin.left, zoomWin.right - zoomWin.w), snapZoomY(zoomWin.y - zoomRowH()));
       }
       nx = zoomWin.left;
     }
@@ -5148,14 +5438,14 @@
     // an (oder ueber) der rechten Randlinie: wie am Zeilenende -> naechste Zeile links
     const atMargin = b.maxX >= zoomWin.right - zoomWin.w * 0.06 && b.minX < zoomWin.right + zoomWin.w * 0.1;
     if (atMargin) {
-      zoomNext = { x: zoomWin.left, y: zoomWin.y + zoomBoxH() };
+      zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomRowH()) };
       requestRedraw();
       return;
     }
     if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
     const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
     // die Fortsetzung soll nicht ueber die Randlinie hinausragen
-    if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: zoomWin.y + zoomBoxH() };
+    if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomRowH()) };
     else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
     requestRedraw();
   }
@@ -5224,6 +5514,7 @@
   function drawZoomPane() {
     if (!zoomWin || !zctx) return;
     layoutZoomPane();
+    zoomFitRows();
     const d = Math.max(1, window.devicePixelRatio || 1);
     const k = zoomRatio();
     const h = zoomBoxH();
@@ -5232,6 +5523,13 @@
     zctx.fillStyle = "#ffffff";
     zctx.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
     renderZoomRegion(zoomWin.x, zoomWin.y, zoomWin.w, h, k, d);
+
+    // Nachbarzeilen oben/unten leicht abgedunkelt: geschrieben wird in der Mitte
+    zctx.setTransform(d, 0, 0, d, 0, 0);
+    const rowPx = zoomRowH() * k;
+    zctx.fillStyle = "rgba(60,64,67,0.05)";
+    zctx.fillRect(0, 0, r.width, rowPx);
+    zctx.fillRect(0, rowPx * 2, r.width, Math.max(0, r.height - rowPx * 2));
 
     // Raender (rot gestrichelt), falls im Bild
     zctx.setTransform(d, 0, 0, d, 0, 0);
@@ -5392,16 +5690,16 @@
     act("btn-zw-back", () => zoomStep(-1));
     act("btn-zw-fwd", () => zoomStep(1));
     act("btn-zw-return", () => zoomNextLine());
-    act("btn-zw-in", () => {
+    const setRows = (rows) => {
       zoomNext = null;
-      zoomWin.w = Math.max(30, zoomWin.w * 0.8);
+      const mid = zoomWin.y + zoomRowH();
+      zoomWin.rows = Math.max(0.5, Math.min(4, rows));
+      zoomFitRows();
+      zoomWin.y = snapZoomY(mid - zoomRowH());
       requestRedraw();
-    });
-    act("btn-zw-out", () => {
-      zoomNext = null;
-      zoomWin.w = Math.min(zoomWin.right - zoomWin.left, zoomWin.w * 1.25);
-      requestRedraw();
-    });
+    };
+    act("btn-zw-in", () => setRows(zoomWin.rows - 0.5));
+    act("btn-zw-out", () => setRows(zoomWin.rows + 0.5));
     act("btn-zw-close", closeZoomWindow);
 
     // Griff: Schreibflaeche nach oben/unten ziehen (Finger, Stift oder Maus)
@@ -5473,7 +5771,13 @@
     });
     el.addEventListener("pointermove", (e) => moveZoomBoxDrag(e));
     const end = (e) => {
-      if (zoomBoxDrag && zoomBoxDrag.pointerId === e.pointerId) zoomBoxDrag = null;
+      if (zoomBoxDrag && zoomBoxDrag.pointerId === e.pointerId) {
+        if (zoomBoxDrag.kind === "box" && zoomWin) {
+          zoomWin.y = snapZoomY(zoomWin.y);
+          requestRedraw();
+        }
+        zoomBoxDrag = null;
+      }
     };
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
@@ -7219,6 +7523,7 @@
     const fit = Math.min(maxW / w, maxH / h, 1);
     const dw = w * fit;
     const dh = h * fit;
+    if (origin.center) origin = { x: origin.x - dw / 2, y: origin.y - dh / 2 };
     const id = uuid();
     const stroke = {
       id,
@@ -7835,8 +8140,15 @@
       finishTextDrag({ startWorld: world, cur: world });
       return;
     }
-    if (currentTool !== "select") return;
     const world = screenToWorld(e.clientX, e.clientY);
+    if (currentTool !== "select") {
+      // in jedem Werkzeug: Finger-Tipp neben die Auswahl (oder den Zuschnitt) hebt sie auf
+      if ((selection.ids.size > 0 || cropState) && !selectionHitAt(world, "touch")) {
+        clearSelection();
+        requestRedraw();
+      }
+      return;
+    }
     if (selectionHitAt(world, "touch")) return;
     const hit = pickStrokeAt(world, SELECT_PAD_TOUCH_PX);
     if (hit) selectStrokeIds([hit.id]);
@@ -7974,7 +8286,7 @@
           const palm = penIsDown();
           // Auswahl laesst sich auch ohne Finger-Zeichnen mit dem Finger verschieben,
           // skalieren, drehen und zuschneiden.
-          if (!palm && currentTool === "select" && !dragState && grabSelectionAt(e, world)) {
+          if (!palm && (currentTool === "select" || selection.ids.size > 0 || cropState) && !dragState && grabSelectionAt(e, world)) {
             requestRedraw();
             return;
           }
@@ -8171,6 +8483,7 @@
     activePointers.delete(e.pointerId);
     if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
       zoomBoxDrag = null;
+      if (zoomWin) zoomWin.y = snapZoomY(zoomWin.y);
       touchPointers.delete(e.pointerId);
       requestRedraw();
       return;
@@ -9420,7 +9733,6 @@
   const hwViewer = document.getElementById("hw-viewer");
   const hwViewerStage = document.getElementById("hw-viewer-stage");
   const hwViewerImg = document.getElementById("hw-viewer-img");
-  const hwFoot = document.getElementById("hw-panel-foot");
   let hwBoard = null; // Hausaufgabe des offenen Blatts
   let hwPanelCurrent = "closed";
   const lsGet = (k, d) => {
@@ -9527,19 +9839,93 @@
       im.replaceWith(im.cloneNode(true));
     });
     hwPanelBody.querySelectorAll(".hw-images img").forEach((im, i) => {
-      im.title = "Antippen: im Fenster vergrößern";
+      im.title = "Antippen: vergrößern · lange halten: ins Blatt ziehen";
+      im.draggable = false;
       im.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (performance.now() - hwImgDragEndedAt < 400) return;
         openHwViewer(i);
       });
+      armHwImgDrag(im, imgs[i]);
     });
     if (imgs.length) {
       const hint = document.createElement("div");
       hint.className = "hw-hint";
-      hint.textContent = "Bild antippen, um es hier zu vergrößern – es bleibt so offen, während du schreibst.";
+      hint.textContent = "Bild antippen, um es hier zu vergrößern. Lange halten und aufs Blatt ziehen fügt es ein.";
       hwPanelBody.appendChild(hint);
     }
   }
+  // Bild aus der Aufgabe lange halten und aufs Blatt ziehen -> als Bild einfuegen
+  let hwImgDrag = null;
+  let hwImgDragEndedAt = 0;
+  function armHwImgDrag(im, att) {
+    im.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      endHwImgDrag(null);
+      hwImgDrag = { im, att, pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, active: false };
+      hwImgDrag.timer = setTimeout(() => {
+        if (!hwImgDrag) return;
+        const g = document.createElement("img");
+        g.src = im.currentSrc || im.src;
+        g.className = "hw-img-ghost";
+        document.body.appendChild(g);
+        hwImgDrag.ghost = g;
+        hwImgDrag.active = true;
+        try {
+          im.setPointerCapture(hwImgDrag.pointerId);
+        } catch (err) {}
+        moveHwImgGhost(hwImgDrag.x0, hwImgDrag.y0);
+        if (navigator.vibrate) navigator.vibrate(12);
+      }, e.pointerType === "mouse" ? 300 : 420);
+    });
+    im.addEventListener("pointermove", (e) => {
+      if (!hwImgDrag || hwImgDrag.im !== im || e.pointerId !== hwImgDrag.pointerId) return;
+      if (!hwImgDrag.active) {
+        if (Math.hypot(e.clientX - hwImgDrag.x0, e.clientY - hwImgDrag.y0) > 8) endHwImgDrag(null);
+        return;
+      }
+      moveHwImgGhost(e.clientX, e.clientY);
+    });
+    im.addEventListener("pointerup", (e) => endHwImgDrag(e));
+    im.addEventListener("pointercancel", () => endHwImgDrag(null));
+    im.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+  function hwImgOverPanel(x, y) {
+    const r = hwPanel.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+  function moveHwImgGhost(x, y) {
+    const g = hwImgDrag && hwImgDrag.ghost;
+    if (!g) return;
+    g.style.left = x + "px";
+    g.style.top = y + "px";
+    g.classList.toggle("can-drop", !hwImgOverPanel(x, y));
+  }
+  function endHwImgDrag(e) {
+    const d = hwImgDrag;
+    if (!d) return;
+    hwImgDrag = null;
+    clearTimeout(d.timer);
+    if (d.ghost) d.ghost.remove();
+    if (!d.active) return;
+    hwImgDragEndedAt = performance.now();
+    if (!e || hwImgOverPanel(e.clientX, e.clientY)) return;
+    insertHwImage(d.att, screenToWorld(e.clientX, e.clientY));
+  }
+  async function insertHwImage(att, at) {
+    try {
+      const blob = await (await fetch(att.url)).blob();
+      const bmp = await createImageBitmap(blob);
+      const jpeg = bitmapToJpeg(bmp, 1600);
+      if (bmp.close) bmp.close();
+      const mediaId = await uploadJpeg(jpeg.dataUrl);
+      placeImageStroke(mediaId, jpeg.w, jpeg.h, att.name || "Aufgabe", { x: at.x, y: at.y, center: true });
+      requestRedraw();
+    } catch (err) {
+      showToast("Bild einfügen hat nicht geklappt");
+    }
+  }
+
   // Blatt geoeffnet: gehoert es zu einer Hausaufgabe, Aufgabenstellung dazu holen
   async function syncHomeworkPanel(board, known) {
     const hid = board && board.sofiaHomeworkId;
@@ -9862,37 +10248,22 @@
   });
 
   // ---- Blatt als Loesung in Sofia teilen ----
-  const hwShareBtn = document.getElementById("hw-share-toggle");
+  // Wie geteilt wird, ist eine globale Einstellung (automatisch / per Knopf / nie).
+  // Im Modus "Knopf" erscheint oben im Aufgaben-Fenster ein kleiner Upload-Knopf.
+  const hwShareBtn = document.getElementById("hw-panel-share");
   let hwSolution = null;
-  let hwSolutionTimer = null;
   function renderSolution() {
     const st = hwSolution;
-    hwFoot.classList.toggle("hidden", !st || !st.owner);
-    if (!st || !st.owner) return;
-    hwShareBtn.classList.toggle("active", !!st.share);
-    const icon = document.getElementById("hw-share-icon");
-    const text = document.getElementById("hw-share-status");
-    let t;
-    if (!st.share) {
-      icon.textContent = "cloud_upload";
-      t = "Aus – das Blatt bleibt nur bei dir";
-    } else if (st.pending) {
-      icon.textContent = "cloud_upload";
-      t = "Wird gleich als PDF hochgeladen…";
-    } else if (st.error) {
-      icon.textContent = "sync_problem";
-      t = "Hochladen hat nicht geklappt – wird beim nächsten Schreiben erneut versucht";
-    } else if (st.syncedAt) {
-      icon.textContent = "cloud_done";
-      t = "In Sofia geteilt · zuletzt " + new Date(st.syncedAt * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-    } else {
-      icon.textContent = "cloud_upload";
-      t = "Wird nach dem Schreiben als PDF hochgeladen";
-    }
-    text.textContent = t;
+    const show = !!st && !!st.owner && mySettings.solutionMode === "manual";
+    hwShareBtn.classList.toggle("hidden", !show);
+    if (!show) return;
+    hwShareBtn.classList.toggle("busy", !!st.uploading);
+    hwShareBtn.firstElementChild.textContent = st.uploading ? "progress_activity" : st.error ? "sync_problem" : st.syncedAt ? "cloud_done" : "cloud_upload";
+    hwShareBtn.title = st.syncedAt
+      ? "Als Lösung in Sofia teilen · zuletzt " + new Date(st.syncedAt * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })
+      : "Als Lösung in Sofia teilen";
   }
   async function refreshSolutionStatus() {
-    clearTimeout(hwSolutionTimer);
     const bid = currentBoardId;
     if (!hwBoard || !bid) return;
     try {
@@ -9903,31 +10274,27 @@
     } catch (err) {
       /* offline */
     }
-    if (!hwPanel.classList.contains("hidden")) hwSolutionTimer = setTimeout(refreshSolutionStatus, 15000);
   }
-  hwShareBtn?.addEventListener("click", (e) => {
+  hwShareBtn?.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (!hwSolution || !currentBoardId) return;
-    const was = hwSolution.share;
+    if (!hwSolution || !currentBoardId || hwSolution.uploading) return;
     const bid = currentBoardId;
-    optimistic({
-      apply: () => {
-        hwSolution.share = !was;
-        hwSolution.pending = !was;
-        renderSolution();
-      },
-      revert: () => {
-        hwSolution.share = was;
-        renderSolution();
-      },
-      request: () =>
-        api("/api/boards/" + encodeURIComponent(bid) + "/solution", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ share: !was }),
-        }).then(() => setTimeout(refreshSolutionStatus, 4000)),
-      failText: "Umschalten hat nicht geklappt",
-    });
+    hwSolution.uploading = true;
+    renderSolution();
+    try {
+      const res = await api("/api/boards/" + encodeURIComponent(bid) + "/solution", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ upload: true }),
+      });
+      if (res && res.error === "empty") showToast("Das Blatt ist noch leer");
+      else if (res && res.ok === false) throw new Error(res.error || "fail");
+      else showToast("Als Lösung in Sofia geteilt");
+    } catch (err) {
+      showToast("Hochladen hat nicht geklappt");
+    }
+    if (hwSolution) hwSolution.uploading = false;
+    refreshSolutionStatus();
   });
 
   // Im Fenster scrollen/tippen darf nichts aufs Blatt malen
@@ -10047,8 +10414,12 @@
     return new Date(ts * 1000).toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" });
   }
 
-  function libCard(kind, { icon, color, title, meta, starred, onOpen, onStar, menu, now }) {
+  function libCard(kind, { icon, color, title, meta, starred, onOpen, onStar, menu, now, id }) {
     const el = document.createElement("div");
+    if (id) {
+      el.dataset.id = id;
+      armLibDrag(el, kind, id);
+    }
     el.className = "library-item lib-card lib-card-" + kind + (now ? " lib-card-now" + (now.kind === "next" ? " is-next" : "") : "");
     el.setAttribute("role", "button");
     el.tabIndex = 0;
@@ -10062,12 +10433,16 @@
       chip.textContent = now.kind === "next" ? "Als Nächstes" : "Jetzt";
       el.querySelector(".lib-row-text").prepend(chip);
     }
-    el.addEventListener("click", onOpen);
+    el.addEventListener("click", (e) => {
+      if (libDragJustEnded()) return;
+      onOpen(e);
+    });
     el.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && e.target === el) onOpen();
     });
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
+      if (libDrag) return; // langes Druecken mit dem Finger = ziehen, nicht Menue
       openItemMenu(el.querySelector(".lib-more-btn"), menu);
     });
     el.appendChild(starBtn(starred, onStar));
@@ -10078,6 +10453,7 @@
   function folderCard(folder, now) {
     return libCard("folder", {
       now,
+      id: folder.id,
       icon: "folder",
       color: folder.color,
       title: folder.name,
@@ -10107,6 +10483,7 @@
         { icon: "folder-open", label: "Öffnen", run: () => navigateToFolder(folder.id, true, folder) },
         { icon: "pencil", label: "Umbenennen & Farbe", run: () => renameFolder(folder) },
         { icon: "folder-input", label: "Verschieben", run: () => openMove("folder", folder.id) },
+        { icon: "grid-3x3", label: "Papier für neue Blätter" + (folder.paper ? ": " + GRID_NAMES[folder.paper] : ""), run: () => folderPaperMenu(folder) },
         { icon: "trash-2", label: "Löschen", danger: true, run: () => deleteFolder(folder) },
       ],
     });
@@ -10126,6 +10503,7 @@
       menu.push({ icon: "trash-2", label: "Löschen", danger: true, run: () => deleteBoard(board) });
     }
     return libCard("board", {
+      id: board.id,
       icon: board.shared ? "users" : "file-pen-line",
       title: board.title,
       meta,
@@ -10159,8 +10537,118 @@
   function closeItemMenu() {
     if (libItemMenu) libItemMenu.classList.add("hidden");
   }
+  let itemMenuAnchor = null;
+  // Papier fuer neue Blaetter in diesem Ordner (und seinen Unterordnern)
+  function folderPaperMenu(folder) {
+    const set = (paper) => {
+      const was = folder.paper || null;
+      optimistic({
+        apply: () => {
+          folder.paper = paper;
+        },
+        revert: () => {
+          folder.paper = was;
+        },
+        request: () =>
+          api("/api/folders/" + encodeURIComponent(folder.id), {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ paper }),
+          }).then(persistLibraryCache),
+        failText: "Papier ändern hat nicht geklappt",
+      });
+    };
+    const items = [{ icon: folder.paper ? "circle" : "circle-check", label: "Wie Standard (" + (GRID_NAMES[mySettings.defaultPaper] || "Kariert") + ")", run: () => set(null) }];
+    for (const k of Object.keys(GRID_NAMES)) items.push({ icon: folder.paper === k ? "circle-check" : "circle", label: GRID_NAMES[k], run: () => set(k) });
+    openItemMenu(itemMenuAnchor, items);
+  }
+
+  // ---- Startseite: Karte lange halten und auf einen Ordner ziehen ----
+  let libDrag = null; // {el, kind, id, timer, x0, y0, active, ghost, target, pointerId}
+  let libDragEndedAt = 0;
+  function libDragJustEnded() {
+    return performance.now() - libDragEndedAt < 400;
+  }
+  function libDropTarget(x, y, self) {
+    const hit = document.elementFromPoint(x, y);
+    if (!hit) return null;
+    const card = hit.closest(".lib-card-folder[data-id]");
+    if (card && card !== self) return { el: card, folderId: card.dataset.id };
+    const back = hit.closest("#btn-library-home");
+    if (back && currentFolderId && libraryCache && libraryCache.crumbs) {
+      const c = libraryCache.crumbs;
+      return { el: back, folderId: c.length > 1 ? c[c.length - 2].id : null };
+    }
+    return null;
+  }
+  function armLibDrag(el, kind, id) {
+    el.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (e.target.closest("button")) return;
+      cancelLibDrag();
+      libDrag = { el, kind, id, x0: e.clientX, y0: e.clientY, active: false, pointerId: e.pointerId };
+      libDrag.timer = setTimeout(() => startLibDrag(e.clientX, e.clientY), e.pointerType === "mouse" ? 350 : 450);
+    });
+  }
+  function startLibDrag(x, y) {
+    if (!libDrag) return;
+    const r = libDrag.el.getBoundingClientRect();
+    const g = libDrag.el.cloneNode(true);
+    g.classList.add("lib-drag-ghost");
+    Object.assign(g.style, { width: r.width + "px", left: r.left + "px", top: r.top + "px" });
+    document.body.appendChild(g);
+    libDrag.ghost = g;
+    libDrag.dx = x - r.left;
+    libDrag.dy = y - r.top;
+    libDrag.active = true;
+    libDrag.el.classList.add("lib-dragging");
+    if (navigator.vibrate) navigator.vibrate(12);
+  }
+  function cancelLibDrag() {
+    if (!libDrag) return;
+    clearTimeout(libDrag.timer);
+    if (libDrag.ghost) libDrag.ghost.remove();
+    libDrag.el.classList.remove("lib-dragging");
+    if (libDrag.target) libDrag.target.el.classList.remove("lib-drop-target");
+    if (libDrag.active) libDragEndedAt = performance.now();
+    libDrag = null;
+  }
+  window.addEventListener("pointermove", (e) => {
+    if (!libDrag || e.pointerId !== libDrag.pointerId) return;
+    if (!libDrag.active) {
+      if (Math.hypot(e.clientX - libDrag.x0, e.clientY - libDrag.y0) > 8) cancelLibDrag();
+      return;
+    }
+    libDrag.ghost.style.left = e.clientX - libDrag.dx + "px";
+    libDrag.ghost.style.top = e.clientY - libDrag.dy + "px";
+    const t = libDropTarget(e.clientX, e.clientY, libDrag.el);
+    if ((t && t.el) !== (libDrag.target && libDrag.target.el)) {
+      if (libDrag.target) libDrag.target.el.classList.remove("lib-drop-target");
+      if (t) t.el.classList.add("lib-drop-target");
+    }
+    libDrag.target = t;
+  });
+  const endLibDrag = (e) => {
+    if (!libDrag || e.pointerId !== libDrag.pointerId) return;
+    const d = libDrag;
+    const drop = d.active && e.type === "pointerup" ? d.target : null;
+    cancelLibDrag();
+    if (drop) applyMove(d.kind, d.id, drop.folderId);
+  };
+  window.addEventListener("pointerup", endLibDrag);
+  window.addEventListener("pointercancel", endLibDrag);
+  // Waehrend des Ziehens darf die Liste nicht scrollen
+  window.addEventListener(
+    "touchmove",
+    (e) => {
+      if ((libDrag && libDrag.active) || (hwImgDrag && hwImgDrag.active)) e.preventDefault();
+    },
+    { passive: false }
+  );
+
   function openItemMenu(anchor, items) {
     if (!libItemMenu || !anchor) return;
+    itemMenuAnchor = anchor;
     libItemMenu.innerHTML = "";
     for (const it of items) {
       const b = document.createElement("button");
@@ -10211,6 +10699,7 @@
     if (!opts || opts.homework === undefined) syncHomeworkPanel(null);
     else syncHomeworkPanel({ id, sofiaHomeworkId: opts.homework.id }, opts.homework);
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
+    fitFilename();
     if (title) document.title = title + " – sofianotes";
     hideLibrary({ fromHistory: true });
     if (!(opts && opts.fromHistory)) syncUrl(true);
@@ -10377,7 +10866,10 @@
     if (title === old) return;
     const setTitle = (t) => {
       board.title = t;
-      if (board.id === currentBoardId && filenameInput) filenameInput.value = t;
+      if (board.id === currentBoardId && filenameInput) {
+        filenameInput.value = t;
+        fitFilename();
+      }
       renderLibrary();
     };
     optimistic({
@@ -10984,6 +11476,7 @@
       return;
     }
     canvasShareSubmenu.classList.add("hidden");
+    renderHiddenMenu();
     canvasMenu.classList.toggle("hidden");
   });
   document.getElementById("canvas-menu-download")?.addEventListener("click", () => {
@@ -11046,6 +11539,7 @@
     localStorage.setItem("sofianotes-person", currentPersonId);
     const startParams = new URLSearchParams(location.search);
     currentFolderId = startParams.get("folder") || null;
+    loadMySettings();
     await refreshPeople();
     hideWho();
     syncWhoChip();

@@ -171,6 +171,23 @@ class SolutionTests(unittest.TestCase):
         self.assertEqual(run(db.get_board(bid))["sofiaSolutionId"], 77)
         run(sofia_sync.upload_solution(bid))
         self.assertEqual(self.calls[-1][:2], ("PUT", "/homework/42/solutions/77"))
-        # abgeschaltet -> keine Uploads mehr
-        run(db.solution_state(bid, share=0))
+        # Modus "nur per Knopf": automatisch nichts, per Knopf schon
+        run(db.set_person_settings("simon", "manual", None))
         self.assertEqual(run(sofia_sync.upload_solution(bid))["error"], "off")
+        self.assertTrue(run(sofia_sync.upload_solution(bid, manual=True))["ok"])
+        # aus -> gar nicht
+        run(db.set_person_settings("simon", "off", None))
+        self.assertEqual(run(sofia_sync.upload_solution(bid, manual=True))["error"], "off")
+
+    def test_paper_defaults(self):
+        self.assertEqual(run(db.create_board("simon", "A", None))["paper"], "graph")
+        run(db.set_person_settings("simon", None, "dots"))
+        self.assertEqual(run(db.create_board("simon", "B", None))["paper"], "dots")
+        f = run(db.create_folder("simon", "Deutsch", None))
+        sub = run(db.create_folder("simon", "Aufsaetze", f["id"]))
+        run(db.set_folder_paper("simon", f["id"], "lines"))
+        self.assertEqual(run(db.create_board("simon", "C", sub["id"]))["paper"], "lines")
+        self.assertFalse(run(db.set_folder_paper("simon", f["id"], "quatsch")))
+        b = run(db.create_board("simon", "D", f["id"]))
+        self.assertTrue(run(db.set_board_paper(b["id"], "blank")))
+        self.assertEqual(run(db.get_board(b["id"]))["paper"], "blank")

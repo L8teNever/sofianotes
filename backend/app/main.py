@@ -267,8 +267,9 @@ async def board_solution(board_id: str, person: dict = Depends(get_current_perso
     board = await db.get_board(board_id)
     if not board or not await db.can_access(person["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
+    mode = (await db.person_settings(board["ownerId"]))["solutionMode"]
     return {
-        "share": board.get("solutionShare"),
+        "mode": mode,
         "solutionId": board.get("sofiaSolutionId"),
         "syncedAt": board.get("solutionSyncedAt"),
         "error": board.get("solutionError"),
@@ -279,20 +280,17 @@ async def board_solution(board_id: str, person: dict = Depends(get_current_perso
 
 @app.post("/api/boards/{board_id}/solution")
 async def board_solution_set(board_id: str, request: Request, person: dict = Depends(get_current_person)) -> dict:
-    """share an/aus; upload=true laedt sofort hoch."""
+    """upload=true laedt das Blatt jetzt als Loesung hoch (Modus 'Knopf' oder 'automatisch');
+    remove=true nimmt die geteilte Loesung in Sofia wieder weg."""
     board = await db.get_board(board_id)
     if not board or board.get("ownerId") != person["id"] or not board.get("sofiaHomeworkId"):
         raise HTTPException(status_code=404, detail="not found")
     body = await _json_body(request)
-    if "share" in body:
-        share = bool(body.get("share"))
-        await db.solution_state(board_id, share=1 if share else 0)
-        if share:
-            sofia_sync.schedule_solution(board_id, delay=2)
-        else:
-            await sofia_sync.remove_solution(board_id)
+    if body.get("remove"):
+        await sofia_sync.remove_solution(board_id)
+        return {"ok": True}
     if body.get("upload"):
-        return await sofia_sync.upload_solution(board_id)
+        return await sofia_sync.upload_solution(board_id, manual=True)
     return {"ok": True}
 
 
@@ -304,6 +302,17 @@ async def sofia_sync_now(_: dict = Depends(require_admin)) -> dict:
 def _people_from_sofia() -> None:
     if sofia_sync.enabled():
         raise HTTPException(status_code=409, detail="Personen kommen automatisch aus Sofia - dort aendern.")
+
+
+@app.get("/api/me/settings")
+async def my_settings(person: dict = Depends(get_current_person)) -> dict:
+    return await db.person_settings(person["id"])
+
+
+@app.patch("/api/me/settings")
+async def set_my_settings(request: Request, person: dict = Depends(get_current_person)) -> dict:
+    body = await _json_body(request)
+    return await db.set_person_settings(person["id"], body.get("solutionMode"), body.get("defaultPaper"))
 
 
 @app.get("/api/me")
@@ -396,6 +405,13 @@ async def create_board(request: Request, me: dict = Depends(get_current_person))
 @app.patch("/api/boards/{board_id}")
 async def patch_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
+    if "paper" in body:
+        # Papier gilt fuers ganze Blatt, darf jede Person mit Zugriff aendern
+        if not await db.can_access(me["id"], board_id) or not await db.set_board_paper(board_id, str(body.get("paper") or "")):
+            raise HTTPException(status_code=400, detail="bad paper")
+        await manager.broadcast({"type": "board_paper", "paper": body.get("paper")}, board_id=board_id)
+        if "title" not in body:
+            return {"ok": True, "board": await db.get_board(board_id)}
     title = str(body.get("title") or "")
     board = await db.rename_board(me["id"], board_id, title)
     if board is None:
@@ -454,6 +470,10 @@ async def patch_folder(folder_id: str, request: Request, me: dict = Depends(get_
         ok = await db.move_folder(me["id"], folder_id, parent)
         if not ok:
             raise HTTPException(status_code=400, detail="cannot move")
+    if "paper" in body:
+        paper = body.get("paper") or None
+        if not await db.set_folder_paper(me["id"], folder_id, paper):
+            raise HTTPException(status_code=400, detail="bad paper")
     if "name" in body or "color" in body:
         name = str(body["name"]) if "name" in body else None
         folder = await db.rename_folder(me["id"], folder_id, name, body.get("color") or None)
@@ -777,8 +797,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await goodnotes_export.schedule_write(lambda: db.load_all(bid))
                 if sofia_sync.enabled():
                     b = await db.get_board(bid)
-                    if b and b.get("sofiaHomeworkId") and b.get("solutionShare"):
-                        sofia_sync.schedule_solution(bid)
+                    if b and b.get("sofiaHomeworkId"):
+                        owner_settings = await db.person_settings(b["ownerId"])
+                        if owner_settings["solutionMode"] == "auto":
+                            sofia_sync.schedule_solution(bid)
 
     except WebSocketDisconnect:
         pass
