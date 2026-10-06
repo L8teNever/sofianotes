@@ -9,7 +9,10 @@
   --chip-bg: #d3e3fd;
   --chip-fg: #0842a0;
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
-  --radius-dock: 28px;
+  --radius-dock: 25px;
+  /* Alle drei Leisten (Werkzeuge, Zurueck/Vor, Name/Ordner) sind gleich hoch */
+  --bar-h: 50px;
+  --bar-btn: 36px;
   --safe-top: max(1.25rem, env(safe-area-inset-top));
   --safe-bottom: max(1.25rem, env(safe-area-inset-bottom));
   --safe-left: max(1.25rem, env(safe-area-inset-left));
@@ -188,8 +191,8 @@ button {
 }
 
 .icon-btn {
-  width: 36px;
-  height: 36px;
+  width: var(--bar-btn);
+  height: var(--bar-btn);
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -227,6 +230,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: var(--bar-h);
   padding: 6px 10px 6px 6px;
   max-width: min(96vw, 640px);
   border-radius: 999px;
@@ -237,7 +241,7 @@ button {
   transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1);
 }
 #top-filename-bar.pushed {
-  transform: translateX(-50%) translateY(72px);
+  transform: translateX(-50%) translateY(calc(var(--bar-h) + 10px));
 }
 .file-icon {
   width: 28px;
@@ -305,6 +309,7 @@ button {
   display: flex;
   align-items: center;
   gap: 2px;
+  height: var(--bar-h);
   padding: 6px;
   border-radius: 22px;
   background: var(--dock-bg);
@@ -453,7 +458,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px;
+  padding: 6px;
   border-radius: var(--radius-dock);
   background: var(--dock-bg);
   border: 1px solid var(--dock-border);
@@ -484,6 +489,17 @@ button {
   height: 1px;
 }
 
+#toolbar.dock-bottom,
+#toolbar.dock-top {
+  height: var(--bar-h);
+}
+#toolbar.dock-left,
+#toolbar.dock-right {
+  width: var(--bar-h);
+}
+#toolbar.free-drag:not(.orient-vertical) { height: var(--bar-h); }
+#toolbar.free-drag.orient-vertical { width: var(--bar-h); }
+
 #toolbar.dock-bottom {
   bottom: var(--safe-bottom);
   left: 50%;
@@ -512,9 +528,9 @@ button {
 .tools-container {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 18px;
+  gap: 2px;
+  padding: 0;
+  border-radius: 12px;
   background: #f1f3f4;
   position: relative;
   flex: 0 0 auto;
@@ -522,9 +538,9 @@ button {
 .tool-wrapper { position: relative; }
 
 .tool-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 16px;
+  width: var(--bar-btn);
+  height: var(--bar-btn);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1356,7 +1372,6 @@ button {
 
 @media (max-width: 720px) {
   #canvas-filename { max-width: 92px; }
-  .tool-btn { width: 40px; height: 40px; }
 }
 
 /* ---- Namens-Eingabe als Bottom-Sheet (Sofia-Look) ----------------------
@@ -1523,6 +1538,18 @@ button {
   cursor: pointer;
 }
 .zoom-pane-controls button:active { background: #e2e6ea; }
+.zoom-pane-controls .zw-move {
+  grid-column: 1 / -1;
+  height: 28px;
+  align-self: center;
+  background: transparent;
+  color: #80868b;
+  cursor: grab;
+  touch-action: none;
+}
+.zoom-pane-controls .zw-move .material-symbols-rounded { transform: rotate(90deg); }
+.zoom-pane.moving { box-shadow: 0 16px 40px rgba(0, 0, 0, 0.24); }
+.zoom-pane.moving .zw-move { cursor: grabbing; }
 .zoom-pane-controls .material-symbols-rounded { font-size: 22px; }
 #zoom-box.hidden { display: none; }
 .zoom-handle,

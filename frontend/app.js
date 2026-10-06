@@ -3845,13 +3845,36 @@
     return { x: zoomWin.x + (clientX - r.left) / k, y: zoomWin.y + (clientY - r.top) / k };
   }
 
+  // Lage der Schreibflaeche: Anteil (0 = ganz oben, 1 = ganz unten) im freien Bereich
+  // zwischen den Leisten. Pro Geraet gemerkt; Standard unten wie in GoodNotes.
+  let zoomPaneFrac = (() => {
+    try {
+      const v = parseFloat(localStorage.getItem("sofianotes-zoompane-pos"));
+      return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+    } catch (err) {
+      return 1;
+    }
+  })();
+  let zoomPaneDrag = null;
+
+  function zoomPaneBounds(h) {
+    const tb = toolbarEl.getBoundingClientRect();
+    const dock = currentDock();
+    const topBarRect = topBar ? topBar.getBoundingClientRect() : { bottom: 0 };
+    const undoRect = undoDock ? undoDock.getBoundingClientRect() : { bottom: 0 };
+    let minTop = Math.max(topBarRect.bottom, undoRect.top < window.innerHeight / 2 ? undoRect.bottom : 0) + 10;
+    let maxBottom = window.innerHeight - 12;
+    if (dock === "bottom") maxBottom = tb.top - 10;
+    if (dock === "top") minTop = Math.max(minTop, tb.bottom + 10);
+    return { minTop, maxTop: Math.max(minTop, maxBottom - h) };
+  }
+
   function layoutZoomPane() {
     if (!zoomPaneEl) return;
-    const tb = toolbarEl.getBoundingClientRect();
-    const dockBottom = currentDock() === "bottom";
-    const bottom = dockBottom ? window.innerHeight - tb.top + 10 : 12;
     const h = Math.round(Math.max(170, Math.min(320, window.innerHeight * 0.3)));
-    zoomPaneEl.style.bottom = bottom + "px";
+    const { minTop, maxTop } = zoomPaneBounds(h);
+    zoomPaneEl.style.bottom = "auto";
+    zoomPaneEl.style.top = Math.round(minTop + (maxTop - minTop) * zoomPaneFrac) + "px";
     zoomPaneEl.style.height = h + "px";
     const r = zoomCanvas.getBoundingClientRect();
     const d = Math.max(1, window.devicePixelRatio || 1);
@@ -3863,10 +3886,15 @@
     }
   }
 
-  // Sichtbarer Teil des Hauptblatts (oberhalb der Schreibflaeche)
+  // Sichtbarer Teil des Hauptblatts: der groessere freie Bereich ober- oder unterhalb
+  // der Schreibflaeche (je nachdem, wohin man sie geschoben hat)
   function visibleWorldArea() {
-    const paneTop = zoomPaneEl ? zoomPaneEl.getBoundingClientRect().top : window.innerHeight;
-    return { a: screenToWorld(0, 70), b: screenToWorld(window.innerWidth, paneTop - 10) };
+    if (!zoomPaneEl) return { a: screenToWorld(0, 70), b: screenToWorld(window.innerWidth, window.innerHeight) };
+    const r = zoomPaneEl.getBoundingClientRect();
+    const above = r.top - 70;
+    const below = window.innerHeight - 80 - r.bottom;
+    if (above >= below) return { a: screenToWorld(0, 70), b: screenToWorld(window.innerWidth, r.top - 10) };
+    return { a: screenToWorld(0, r.bottom + 10), b: screenToWorld(window.innerWidth, window.innerHeight - 80) };
   }
 
   function openZoomWindow() {
@@ -4123,6 +4151,47 @@
       requestRedraw();
     });
     act("btn-zw-close", closeZoomWindow);
+
+    // Griff: Schreibflaeche nach oben/unten ziehen (Finger, Stift oder Maus)
+    const grip = document.getElementById("btn-zw-move");
+    if (grip) {
+      grip.addEventListener("pointerdown", (e) => {
+        if (!zoomWin) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          grip.setPointerCapture(e.pointerId);
+        } catch (err) {
+          // egal
+        }
+        const r = zoomPaneEl.getBoundingClientRect();
+        zoomPaneDrag = { pointerId: e.pointerId, offset: e.clientY - r.top, h: r.height };
+        zoomPaneEl.classList.add("moving");
+      });
+      grip.addEventListener("pointermove", (e) => {
+        if (!zoomPaneDrag || zoomPaneDrag.pointerId !== e.pointerId) return;
+        const { minTop, maxTop } = zoomPaneBounds(zoomPaneDrag.h);
+        const top = Math.max(minTop, Math.min(maxTop, e.clientY - zoomPaneDrag.offset));
+        zoomPaneFrac = maxTop > minTop ? (top - minTop) / (maxTop - minTop) : 1;
+        requestRedraw();
+      });
+      const endDrag = (e) => {
+        if (!zoomPaneDrag || zoomPaneDrag.pointerId !== e.pointerId) return;
+        zoomPaneDrag = null;
+        zoomPaneEl.classList.remove("moving");
+        // nahe oben/unten/Mitte einrasten
+        for (const snap of [0, 0.5, 1]) if (Math.abs(zoomPaneFrac - snap) < 0.08) zoomPaneFrac = snap;
+        try {
+          localStorage.setItem("sofianotes-zoompane-pos", String(zoomPaneFrac));
+        } catch (err) {
+          // privater Modus o.ae.
+        }
+        keepZoomBoxVisible();
+        requestRedraw();
+      };
+      grip.addEventListener("pointerup", endDrag);
+      grip.addEventListener("pointercancel", endDrag);
+    }
   }
   if (zoomWinBtn) zoomWinBtn.addEventListener("click", (e) => {
     e.stopPropagation();
