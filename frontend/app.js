@@ -525,6 +525,18 @@
       ctx.lineWidth = 1.5 / scale;
       const hs = 5 / scale;
       for (const p of selectionHandlePoints(b, pad)) {
+        if (p.edge) {
+          // Seitengriff als kleine Pille entlang der Kante
+          const horiz = p.name === "n" || p.name === "s";
+          const lw = (horiz ? 18 : 8) / scale;
+          const lh = (horiz ? 8 : 18) / scale;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(p.x - lw / 2, p.y - lh / 2, lw, lh, 4 / scale);
+          else ctx.rect(p.x - lw / 2, p.y - lh / 2, lw, lh);
+          ctx.fill();
+          ctx.stroke();
+          continue;
+        }
         ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
         ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
       }
@@ -583,13 +595,19 @@
     positionMediaToolbar();
   }
 
+  // Ecken: gleichmaessig skalieren. Seitenmitten: nur in die Breite bzw. Hoehe strecken.
   function selectionHandlePoints(b, pad) {
     const x0 = b.minX - pad, y0 = b.minY - pad, x1 = b.maxX + pad, y1 = b.maxY + pad;
+    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
     return [
       { name: "nw", x: x0, y: y0 },
       { name: "ne", x: x1, y: y0 },
       { name: "sw", x: x0, y: y1 },
       { name: "se", x: x1, y: y1 },
+      { name: "n", x: mx, y: y0, edge: true },
+      { name: "s", x: mx, y: y1, edge: true },
+      { name: "w", x: x0, y: my, edge: true },
+      { name: "e", x: x1, y: my, edge: true },
     ];
   }
 
@@ -4150,17 +4168,23 @@
 
   // ---- Zoom-Fenster (wie GoodNotes) ----------------------------------------
   // Ein Rahmen auf dem Blatt wird unten gross dargestellt. Man schreibt in der grossen
-  // Flaeche, die Tinte landet klein im Rahmen. Endet ein Strich im blauen Bereich rechts,
-  // rueckt der Rahmen kurz nach dem Absetzen weiter; am rechten Rand geht es in die
-  // naechste Zeile. Ein neuer Strich vor dem Weiterruecken bricht es ab (z.B. i-Punkt).
+  // Flaeche, die Tinte landet klein im Rahmen. Wer weit genug rechts schreibt, bekommt links
+  // einen blauen Kasten mit der Fortsetzung; dort ansetzen springt ohne Versatz weiter
+  // (am rechten Rand in die naechste Zeile).
   const zoomPaneEl = document.getElementById("zoom-pane");
   const zoomCanvas = document.getElementById("zoom-canvas");
   const zctx = zoomCanvas ? zoomCanvas.getContext("2d") : null;
   const zoomWinBtn = document.getElementById("btn-zoom-window");
   const zoomBoxEl = document.getElementById("zoom-box");
-  const ZOOM_ADVANCE_ZONE = 0.22; // rechter Anteil der Schreibflaeche, der das Weiterruecken ausloest
-  const ZOOM_KEEP = 0.12; // so viel vom letzten Wort bleibt nach dem Weiterruecken links sichtbar
-  let zoomHover = null; // Stift-/Radierer-Position in der Schreibflaeche (Welt), fuer den Punkt
+  // GoodNotes-Verhalten: Hat man weit genug rechts geschrieben, erscheint links in der
+  // Schreibflaeche ein blauer Kasten mit einer Vorschau der Fortsetzung (Ende des letzten
+  // Worts). Setzt man dort an, springt der Rahmen in demselben Moment hin - massstabsgleich,
+  // also ohne Versatz. Kein automatisches Weiterruecken beim Absetzen.
+  const ZOOM_PREVIEW_W = 0.28; // Breite des blauen Kastens (Anteil der Schreibflaeche)
+  const ZOOM_OFFER_FROM = 0.55; // ab hier rechts geschrieben -> Fortsetzung anbieten
+  const ZOOM_LEAD = 0.05; // so viel vom Wortende ist im Kasten noch zu sehen
+  let zoomNext = null; // {x, y} Weltursprung des naechsten Ausschnitts
+  let zoomHover = null; // {px, py} Stift-/Radierer-Position in der Schreibflaeche (Pixel)
   let zoomWin = null; // {x, y, w, left, right} in Weltkoordinaten
   let zoomPointer = null; // pointerId, der gerade im Zoom-Fenster schreibt/radiert
   let zoomAdvanceTimer = null;
@@ -4254,6 +4278,7 @@
     zoomAdvanceTimer = null;
     zoomAnim = null;
     zoomHover = null;
+    zoomNext = null;
     zoomWin = null;
     zoomPointer = null;
     if (zoomPaneEl) zoomPaneEl.classList.add("hidden");
@@ -4305,6 +4330,7 @@
   }
 
   function moveZoomBox(nx, ny, animate) {
+    zoomNext = null;
     if (!animate) {
       zoomAnim = null;
       zoomWin.x = nx;
@@ -4334,18 +4360,16 @@
     moveZoomBox(nx, zoomWin.y);
   }
 
-  function scheduleZoomAdvance(stroke) {
-    clearTimeout(zoomAdvanceTimer);
-    zoomAdvanceTimer = null;
+  // Nach einem Strich weit rechts: Fortsetzung vorbereiten (Kasten links). Kurze Striche
+  // weiter links (i-Punkt, Korrektur) lassen ein vorhandenes Angebot stehen.
+  function offerZoomContinuation(stroke) {
     if (!zoomWin || !stroke || !stroke.points || !stroke.points.length) return;
     const b = makeBBox(stroke.points);
-    const zoneStart = zoomWin.x + zoomWin.w * (1 - ZOOM_ADVANCE_ZONE);
-    if (b.maxX < zoneStart) return;
-    // sofort weiterruecken; vom Geschriebenen bleibt links nur ein schmaler Rest sichtbar
-    // (reicht noch fuer einen i-Punkt am letzten Buchstaben)
-    const nx = b.maxX - zoomWin.w * ZOOM_KEEP;
-    if (nx + zoomWin.w > zoomWin.right + zoomWin.w * 0.25) zoomNextLine(true);
-    else moveZoomBox(Math.max(zoomWin.left, nx), zoomWin.y, true);
+    if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
+    const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
+    if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: zoomWin.y + zoomBoxH() };
+    else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
+    requestRedraw();
   }
 
   function drawZoomBoxOnPage() {
@@ -4387,20 +4411,13 @@
     }
   }
 
-  function drawZoomPane() {
-    if (!zoomWin || !zctx) return;
-    layoutZoomPane();
-    const d = Math.max(1, window.devicePixelRatio || 1);
-    const k = zoomRatio();
-    const h = zoomBoxH();
-    zctx.setTransform(1, 0, 0, 1, 0, 0);
-    zctx.fillStyle = "#ffffff";
-    zctx.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
-    zctx.setTransform(k * d, 0, 0, k * d, -zoomWin.x * k * d, -zoomWin.y * k * d);
-    drawGrid(zctx, { minX: zoomWin.x, minY: zoomWin.y, maxX: zoomWin.x + zoomWin.w, maxY: zoomWin.y + h }, k);
+  // Zeichnet den Welt-Ausschnitt ab (ox, oy) im Massstab k in die Schreibflaeche
+  function renderZoomRegion(ox, oy, wWorld, hWorld, k, d) {
+    zctx.setTransform(k * d, 0, 0, k * d, -ox * k * d, -oy * k * d);
+    drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
     const inView = (st) => {
       const b = st.bbox || strokeWorldBBox(st);
-      return !b || (b.maxX >= zoomWin.x && b.minX <= zoomWin.x + zoomWin.w && b.maxY >= zoomWin.y && b.minY <= zoomWin.y + h);
+      return !b || (b.maxX >= ox && b.minX <= ox + wWorld && b.maxY >= oy && b.minY <= oy + hWorld);
     };
     const all = Array.from(boardStrokes.values()).filter(inView);
     for (const st of all) if (st.tool === "image" || st.tool === "table") drawStroke(st, zctx);
@@ -4410,46 +4427,80 @@
     for (const st of all) if (st.tool !== "marker" && st.tool !== "image" && st.tool !== "table") drawStroke(st, zctx);
     for (const st of remoteInProgress.values()) if (st.tool !== "marker") drawStroke(st, zctx);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke, zctx);
-    if (zoomHover) {
-      zctx.save();
-      if (currentTool === "eraser") {
-        zctx.beginPath();
-        zctx.arc(zoomHover.x, zoomHover.y, eraserSize / 2, 0, Math.PI * 2);
-        zctx.fillStyle = "rgba(255,255,255,0.35)";
-        zctx.fill();
-        zctx.lineWidth = 1.5 / k;
-        zctx.strokeStyle = "rgba(0,0,0,0.55)";
-        zctx.stroke();
-      } else if (!(currentStroke && zoomPointer != null)) {
-        zctx.beginPath();
-        zctx.arc(zoomHover.x, zoomHover.y, Math.max(activeSize() / 2, 2.5 / k), 0, Math.PI * 2);
-        zctx.fillStyle = currentTool === "marker" ? hexToRgba(currentColor, 0.45) : hexToRgba(currentColor, 0.6);
-        zctx.fill();
-      }
-      zctx.restore();
-    }
-    // Weiterrueck-Bereich und Raender
-    zctx.setTransform(d, 0, 0, d, 0, 0);
+  }
+
+  function zoomPreviewWidthPx() {
+    return zoomPaneRect().width * ZOOM_PREVIEW_W;
+  }
+
+  function drawZoomPane() {
+    if (!zoomWin || !zctx) return;
+    layoutZoomPane();
+    const d = Math.max(1, window.devicePixelRatio || 1);
+    const k = zoomRatio();
+    const h = zoomBoxH();
     const r = zoomPaneRect();
-    const zoneX = r.width * (1 - ZOOM_ADVANCE_ZONE);
-    zctx.fillStyle = "rgba(26,115,232,0.07)";
-    zctx.fillRect(zoneX, 0, r.width - zoneX, r.height);
-    zctx.strokeStyle = "rgba(26,115,232,0.35)";
+    zctx.setTransform(1, 0, 0, 1, 0, 0);
+    zctx.fillStyle = "#ffffff";
+    zctx.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
+    renderZoomRegion(zoomWin.x, zoomWin.y, zoomWin.w, h, k, d);
+
+    // Raender (rot gestrichelt), falls im Bild
+    zctx.setTransform(d, 0, 0, d, 0, 0);
     zctx.lineWidth = 1;
     zctx.setLineDash([5, 5]);
-    zctx.beginPath();
-    zctx.moveTo(zoneX, 0);
-    zctx.lineTo(zoneX, r.height);
-    zctx.stroke();
-    zctx.setLineDash([]);
     for (const mx of [zoomWin.left, zoomWin.right]) {
       const px = (mx - zoomWin.x) * k;
       if (px < 0 || px > r.width) continue;
-      zctx.strokeStyle = "rgba(234,67,53,0.5)";
+      zctx.strokeStyle = "rgba(234,67,53,0.45)";
       zctx.beginPath();
       zctx.moveTo(px, 0);
       zctx.lineTo(px, r.height);
       zctx.stroke();
+    }
+    zctx.setLineDash([]);
+
+    // Fortsetzungs-Kasten links: zeigt den naechsten Ausschnitt im selben Massstab
+    if (zoomNext) {
+      const bw = zoomPreviewWidthPx();
+      zctx.save();
+      zctx.setTransform(d, 0, 0, d, 0, 0);
+      zctx.beginPath();
+      if (zctx.roundRect) zctx.roundRect(0, 0, bw, r.height, 12);
+      else zctx.rect(0, 0, bw, r.height);
+      zctx.clip();
+      zctx.fillStyle = "#ffffff";
+      zctx.fillRect(0, 0, bw, r.height);
+      renderZoomRegion(zoomNext.x, zoomNext.y, bw / k, h, k, d);
+      zctx.setTransform(d, 0, 0, d, 0, 0);
+      zctx.fillStyle = "rgba(26,115,232,0.13)";
+      zctx.fillRect(0, 0, bw, r.height);
+      zctx.restore();
+      zctx.setTransform(d, 0, 0, d, 0, 0);
+      zctx.strokeStyle = "#1A73E8";
+      zctx.lineWidth = 2;
+      zctx.beginPath();
+      if (zctx.roundRect) zctx.roundRect(1, 1, bw - 2, r.height - 2, 12);
+      else zctx.rect(1, 1, bw - 2, r.height - 2);
+      zctx.stroke();
+    }
+
+    // Punkt / Radierer-Kreis zuletzt, damit er auch ueber dem Kasten sichtbar ist
+    if (zoomHover) {
+      zctx.setTransform(d, 0, 0, d, 0, 0);
+      zctx.beginPath();
+      if (currentTool === "eraser") {
+        zctx.arc(zoomHover.px, zoomHover.py, (eraserSize / 2) * k, 0, Math.PI * 2);
+        zctx.fillStyle = "rgba(255,255,255,0.35)";
+        zctx.fill();
+        zctx.lineWidth = 1.5;
+        zctx.strokeStyle = "rgba(0,0,0,0.55)";
+        zctx.stroke();
+      } else if (!(currentStroke && zoomPointer != null)) {
+        zctx.arc(zoomHover.px, zoomHover.py, Math.max((activeSize() / 2) * k, 2.5), 0, Math.PI * 2);
+        zctx.fillStyle = currentTool === "marker" ? hexToRgba(currentColor, 0.45) : hexToRgba(currentColor, 0.6);
+        zctx.fill();
+      }
     }
   }
 
@@ -4469,6 +4520,16 @@
       clearTimeout(zoomAdvanceTimer);
       zoomAdvanceTimer = null;
       finishZoomAnim(); // Rahmen steht, bevor der neue Strich beginnt
+      if (zoomNext) {
+        const rr = zoomPaneRect();
+        if (e.clientX - rr.left <= zoomPreviewWidthPx()) {
+          // im Kasten angesetzt: sofort dorthin - gleicher Massstab, also kein Versatz
+          zoomWin.x = zoomNext.x;
+          zoomWin.y = zoomNext.y;
+          zoomNext = null;
+          keepZoomBoxVisible();
+        }
+      }
       if (textEdit) commitTextEditor();
       zoomPointer = e.pointerId;
       const w = paneToWorld(e.clientX, e.clientY);
@@ -4486,7 +4547,8 @@
     zoomCanvas.addEventListener("pointermove", (e) => {
       // Punkt/Radierer-Kreis zeigt, wo Stift oder Maus gerade ist (auch beim Schweben)
       if (zoomWin && (e.pointerType !== "touch" || fingerDrawEnabled)) {
-        zoomHover = paneToWorld(e.clientX, e.clientY);
+        const rr = zoomPaneRect();
+        zoomHover = { px: e.clientX - rr.left, py: e.clientY - rr.top };
         requestRedraw();
       }
       if (zoomPointer !== e.pointerId || !currentStroke) return;
@@ -4520,7 +4582,7 @@
       if (e.type === "pointercancel") return abortStroke();
       const finished = currentStroke;
       endStroke();
-      if (boardStrokes.has(finished.id)) scheduleZoomAdvance(finished);
+      if (boardStrokes.has(finished.id)) offerZoomContinuation(finished);
     };
     zoomCanvas.addEventListener("pointerup", endZoomPointer);
     zoomCanvas.addEventListener("pointerleave", (e) => {
@@ -4543,10 +4605,12 @@
     act("btn-zw-fwd", () => zoomStep(1));
     act("btn-zw-return", () => zoomNextLine());
     act("btn-zw-in", () => {
+      zoomNext = null;
       zoomWin.w = Math.max(30, zoomWin.w * 0.8);
       requestRedraw();
     });
     act("btn-zw-out", () => {
+      zoomNext = null;
       zoomWin.w = Math.min(zoomWin.right - zoomWin.left, zoomWin.w * 1.25);
       requestRedraw();
     });
@@ -4617,6 +4681,7 @@
         // ignorieren
       }
       zoomBoxDrag = { kind, pointerId: e.pointerId, start: screenToWorld(e.clientX, e.clientY), win: { ...zoomWin } };
+      zoomNext = null;
     });
     el.addEventListener("pointermove", (e) => {
       if (!zoomBoxDrag || zoomBoxDrag.pointerId !== e.pointerId || !zoomWin) return;
@@ -5311,17 +5376,23 @@
     const snap = snapshotSelection();
     const pad = 10 / scale;
     const b = selection.bbox;
+    const mx = (b.minX + b.maxX) / 2, my = (b.minY + b.maxY) / 2;
     const originMap = {
       nw: { x: b.maxX + pad, y: b.maxY + pad },
       ne: { x: b.minX - pad, y: b.maxY + pad },
       sw: { x: b.maxX + pad, y: b.minY - pad },
       se: { x: b.minX - pad, y: b.minY - pad },
+      n: { x: mx, y: b.maxY + pad },
+      s: { x: mx, y: b.minY - pad },
+      w: { x: b.maxX + pad, y: my },
+      e: { x: b.minX - pad, y: my },
     };
     dragState = {
       pointerId,
       startWorld: world,
       kind: "scale",
       corner,
+      axis: corner === "n" || corner === "s" ? "y" : corner === "w" || corner === "e" ? "x" : null,
       origin: originMap[corner],
       ...snap,
     };
@@ -5359,6 +5430,7 @@
     const s0y = dragState.startWorld.y - origin.y;
     const s1x = world.x - origin.x;
     const s1y = world.y - origin.y;
+    if (dragState.axis) return updateSelectionStretch(s0x, s0y, s1x, s1y);
     let factor = Math.abs(s0x) > Math.abs(s0y) ? s1x / s0x : s1y / s0y;
     if (!Number.isFinite(factor)) factor = 1;
     factor = Math.max(0.08, Math.min(12, factor));
@@ -5376,6 +5448,43 @@
       if (baseSize != null) s.size = Math.max(1, baseSize * factor);
       const baseExtra = dragState.extras && dragState.extras.get(id);
       if (isBoxText(s) && baseExtra && baseExtra.width) s.extra = Object.assign({}, s.extra, { width: baseExtra.width * factor });
+      s.bbox = strokeWorldBBox(s);
+      boxes.push(s.bbox);
+    }
+    selection.bbox = unionBBox(boxes);
+    requestRedraw();
+  }
+
+  // Seitengriffe: nur eine Richtung strecken. Tinte, Formen, Tabellen und Bilder werden
+  // verzerrt; Strichstaerke bleibt; Textfelder wandern nur mit (Text verzerrt nicht).
+  function updateSelectionStretch(s0x, s0y, s1x, s1y) {
+    const origin = dragState.origin;
+    const axisX = dragState.axis === "x";
+    let f = axisX ? s1x / s0x : s1y / s0y;
+    if (!Number.isFinite(f)) f = 1;
+    f = Math.max(0.05, Math.min(20, f));
+    const fx = axisX ? f : 1;
+    const fy = axisX ? 1 : f;
+    const boxes = [];
+    for (const [id, pts] of dragState.snapshot) {
+      const s = boardStrokes.get(id);
+      if (!s) continue;
+      if (s.tool === "text") {
+        const a = pts[0];
+        const dx = origin.x + (a.x - origin.x) * fx - a.x;
+        const dy = origin.y + (a.y - origin.y) * fy - a.y;
+        s.points = pts.map((p) => ({ x: p.x + dx, y: p.y + dy, p: p.p, text: p.text }));
+      } else {
+        s.points = pts.map((p) => ({
+          x: origin.x + (p.x - origin.x) * fx,
+          y: origin.y + (p.y - origin.y) * fy,
+          p: p.p,
+          text: p.text,
+        }));
+        const baseExtra = dragState.extras && dragState.extras.get(id);
+        const tag = baseExtra && baseExtra.shape;
+        if (tag === "circle" && Math.abs(f - 1) > 0.02) s.extra = Object.assign({}, s.extra, { shape: "ellipse" });
+      }
       s.bbox = strokeWorldBBox(s);
       boxes.push(s.bbox);
     }
