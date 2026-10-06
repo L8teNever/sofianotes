@@ -2184,6 +2184,9 @@
 
   // Wird bei jedem neuen Punkt aufgerufen. Bleibt der Stift innerhalb von HOLD_STILL_PX um
   // den Haltepunkt, laeuft die Uhr weiter; erst eine echte Bewegung startet sie neu.
+  const MARKER_HOLD_MS = 350; // Textmarker: kurz halten reicht fuer eine gerade Linie
+  let holdDuration = 1500;
+
   function armHoldTimer() {
     if (!shapeRecognitionEnabled) return clearHoldTimer();
     if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked || currentStroke.rulerEdge) return clearHoldTimer();
@@ -2193,8 +2196,9 @@
     if (!tip) return;
     holdAnchor = { x: tip.x, y: tip.y, index: currentStroke.points.length - 1 };
     holdStartedAt = performance.now();
-    holdHintTimer = setTimeout(showHoldHint, HOLD_HINT_MS);
-    holdTimer = setTimeout(tryShapeSnap, shapeParams.holdMs);
+    holdDuration = currentStroke.tool === "marker" ? MARKER_HOLD_MS : shapeParams.holdMs;
+    holdHintTimer = setTimeout(showHoldHint, Math.min(HOLD_HINT_MS, holdDuration * 0.3));
+    holdTimer = setTimeout(tryShapeSnap, holdDuration);
   }
 
   // Die Zitter-Punkte, die waehrend des Haltens dazukommen, gehoeren nicht zur Form -
@@ -2204,10 +2208,10 @@
     return points.slice(0, holdAnchor.index + 1);
   }
 
+  // Textmarker markiert Text: nur gerade Linien, keine Kreise/Rechtecke
   function detectHoldShape(points, tool) {
-    let detected = detectShape(points);
-    if (!detected && tool === "marker") detected = straightenOpenStroke(points);
-    return detected;
+    if (tool === "marker") return straightenOpenStroke(points);
+    return detectShape(points);
   }
 
   // Ring nur zeigen, wenn beim Weiterhalten wirklich eine Form entstuende -
@@ -2222,7 +2226,7 @@
 
   function drawHoldHint() {
     if (!holdHint) return;
-    const progress = Math.min(1, (performance.now() - holdStartedAt) / shapeParams.holdMs);
+    const progress = Math.min(1, (performance.now() - holdStartedAt) / holdDuration);
     const r = 14 / scale;
     ctx.save();
     ctx.lineCap = "round";
@@ -2665,11 +2669,12 @@
     clearHoldTimer();
     if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
     const detected = detectHoldShape(shapePoints, currentStroke.tool);
+    const learn = currentStroke.tool === "pen"; // Lernen nur fuer die Stift-Formen
     if (!detected) {
-      watchShapeMiss(currentStroke.id, lastShapeMetrics);
+      if (learn) watchShapeMiss(currentStroke.id, lastShapeMetrics);
       return;
     }
-    watchShapeSnap(currentStroke.id, detected.type === "circle" && detected.round === false ? "ellipse" : detected.type, lastShapeMetrics);
+    if (learn) watchShapeSnap(currentStroke.id, detected.type === "circle" && detected.round === false ? "ellipse" : detected.type, lastShapeMetrics);
     const grab = currentStroke.points[currentStroke.points.length - 1];
     currentStroke.points = detected.points;
     currentStroke.unsent = [];
@@ -5568,43 +5573,6 @@
     requestRedraw();
   }
 
-  function knotIndicesForStroke(stroke) {
-    const pts = stroke.points || [];
-    if (pts.length < 2) return pts.length === 1 ? [0] : [];
-    if (pts.length <= 16) return pts.map((_, i) => i);
-    const b = stroke.bbox || makeBBox(pts);
-    const diag = Math.max(32, Math.hypot(b.maxX - b.minX, b.maxY - b.minY));
-    const simple = rdpSimplify(pts, Math.max(5, diag * 0.04));
-    const idx = [];
-    const seen = new Set();
-    for (const sp of simple) {
-      let best = 0;
-      let bestD = Infinity;
-      for (let i = 0; i < pts.length; i++) {
-        const d = Math.hypot(pts[i].x - sp.x, pts[i].y - sp.y);
-        if (d < bestD) {
-          bestD = d;
-          best = i;
-        }
-      }
-      if (!seen.has(best)) {
-        seen.add(best);
-        idx.push(best);
-      }
-    }
-    if (!seen.has(0)) idx.unshift(0);
-    if (!seen.has(pts.length - 1)) idx.push(pts.length - 1);
-    idx.sort((a, b) => a - b);
-    if (idx.length > 22) {
-      const out = [idx[0]];
-      const step = Math.ceil((idx.length - 2) / 18);
-      for (let i = step; i < idx.length - 1; i += step) out.push(idx[i]);
-      out.push(idx[idx.length - 1]);
-      return out;
-    }
-    return idx;
-  }
-
   function selectedEditKnots() {
     const ink = selectedStrokes().filter((s) => s.tool === "pen" || s.tool === "marker");
     if (!ink.length || ink.length > 10) return [];
@@ -5616,13 +5584,7 @@
         for (const k of shaped) out.push(Object.assign({ strokeId: s.id, knots: [] }, k));
         continue;
       }
-      if (s.extra && s.extra.shape) continue;
-      const knots = knotIndicesForStroke(s);
-      for (const i of knots) {
-        const p = s.points[i];
-        if (!p) continue;
-        out.push({ strokeId: s.id, i, x: p.x, y: p.y, knots, kind: "free" });
-      }
+      // Handschrift bekommt keine Verbiege-Punkte - die gibt es nur fuer Formen und Linien
     }
     return out.length > 80 ? [] : out;
   }
@@ -6280,7 +6242,9 @@
   function endStroke() {
     if (!currentStroke) return;
     clearHoldTimer();
-    if (currentStroke.tool === "pen" && !currentStroke.locked) {
+    // Durchstreichen loescht - aber nicht bei Lineal-Strichen (die sind immer gerade und
+    // laufen oft absichtlich an anderer Tinte entlang)
+    if (currentStroke.tool === "pen" && !currentStroke.locked && !currentStroke.rulerEdge) {
       const struck = findStruckStrokes(currentStroke.points);
       if (struck.length > 0) {
         wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
@@ -6302,6 +6266,18 @@
     if (currentStroke.unsent.length > 0) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
       currentStroke.unsent = [];
+    }
+    // Am Lineal gezogen: als echte Linie speichern (zwei Endpunkte, spaeter verschiebbar)
+    if (currentStroke.rulerEdge && !currentStroke.locked && currentStroke.points.length >= 2) {
+      const pts = currentStroke.points;
+      const a = pts[0];
+      const b = pts[pts.length - 1];
+      if (Math.hypot(b.x - a.x, b.y - a.y) > 2) {
+        const p = pts.reduce((sum, q) => sum + (q.p || 0.5), 0) / pts.length;
+        currentStroke.points = [{ x: a.x, y: a.y, p }, { x: b.x, y: b.y, p }];
+        currentStroke.extra = Object.assign({}, currentStroke.extra || {}, { shape: "line" });
+        wsSend({ type: "stroke_replace", strokeId: currentStroke.id, points: currentStroke.points, extra: currentStroke.extra });
+      }
     }
     wsSend({ type: "stroke_end", strokeId: currentStroke.id, extra: currentStroke.extra || null });
     tagShape(currentStroke);
