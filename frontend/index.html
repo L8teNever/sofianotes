@@ -399,8 +399,8 @@
   </div>
 </div>
 
-<div id="admin-backdrop" class="settings-backdrop hidden">
-  <div class="settings-modal" role="dialog" aria-modal="true">
+<div id="admin-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div class="settings-modal dlg" role="dialog" aria-modal="true">
     <div class="settings-modal-head">
       <h2>Personen</h2>
       <button type="button" id="btn-admin-close" class="icon-btn" title="Schließen">
@@ -419,16 +419,23 @@
 <div id="library-backdrop" class="library-backdrop hidden">
   <div class="library-sheet lib-page">
     <div class="lib-header">
-      <button type="button" id="btn-library-home" class="lib-icon-btn" title="Zum Anfang">
+      <button type="button" id="btn-library-home" class="lib-icon-btn" title="Zurück">
         <i data-lucide="arrow-left"></i>
       </button>
       <div class="lib-header-text">
         <div id="library-person" class="lib-eyebrow">Simon</div>
         <div id="library-crumbs" class="lib-title">Alle Blätter</div>
       </div>
+      <button type="button" id="btn-library-search" class="lib-icon-btn" title="Suchen">
+        <i data-lucide="search"></i>
+      </button>
+      <button type="button" id="btn-library-switch" class="lib-icon-btn" title="Person wechseln">
+        <i data-lucide="users"></i>
+      </button>
       <div class="lib-add-wrap">
-        <button type="button" id="btn-library-add" class="lib-icon-btn" title="Neu">
+        <button type="button" id="btn-library-add" class="lib-new-btn" title="Neu">
           <i data-lucide="plus"></i>
+          <span>Neu</span>
         </button>
         <div id="lib-add-menu" class="lib-add-menu hidden">
           <button type="button" id="lib-add-board" class="lib-add-opt">
@@ -441,25 +448,21 @@
           </button>
         </div>
       </div>
-      <button type="button" id="btn-library-search" class="lib-icon-btn" title="Suchen">
-        <i data-lucide="search"></i>
-      </button>
-      <button type="button" id="btn-library-switch" class="lib-icon-btn" title="Wechseln">
-        <i data-lucide="users"></i>
-      </button>
-      <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Schließen">
+      <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Zurück zum Blatt">
         <i data-lucide="x"></i>
       </button>
     </div>
     <div id="lib-search-row" class="lib-search-row hidden">
-      <input id="lib-search-input" type="text" placeholder="Suchen…" autocomplete="off" autocorrect="off" spellcheck="false" name="lib-search" />
+      <i data-lucide="search" class="lib-search-ico"></i>
+      <input id="lib-search-input" type="text" placeholder="Blätter und Ordner suchen…" autocomplete="off" autocorrect="off" spellcheck="false" name="lib-search" />
     </div>
     <div id="library-list" class="library-list"></div>
   </div>
+  <div id="lib-item-menu" class="lib-item-menu hidden" role="menu"></div>
 </div>
 
-<div id="share-backdrop" class="settings-backdrop hidden">
-  <div class="settings-modal" role="dialog" aria-modal="true">
+<div id="share-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div class="settings-modal dlg" role="dialog" aria-modal="true">
     <div class="settings-modal-head">
       <h2>Teilen</h2>
       <button type="button" id="btn-share-close" class="icon-btn" title="Schließen">
@@ -471,10 +474,10 @@
   </div>
 </div>
 
-<div id="move-backdrop" class="settings-backdrop hidden">
-  <div class="settings-modal" role="dialog" aria-modal="true">
+<div id="move-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div class="settings-modal dlg" role="dialog" aria-modal="true">
     <div class="settings-modal-head">
-      <h2>Ordner</h2>
+      <h2 id="move-title">Verschieben nach</h2>
       <button type="button" id="btn-move-close" class="icon-btn" title="Schließen">
         <span class="material-symbols-rounded">close</span>
       </button>
@@ -483,8 +486,21 @@
   </div>
 </div>
 
-<div id="name-sheet-scrim" class="hidden">
-  <div class="bottom-sheet" role="dialog" aria-modal="true">
+<div id="confirm-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg dlg-confirm" role="alertdialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="dlg-confirm-icon"><span class="material-symbols-rounded">delete</span></div>
+    <div class="sheet-title" id="confirm-title">Löschen?</div>
+    <p class="dlg-text" id="confirm-text"></p>
+    <div class="m3-sheet-actions">
+      <button type="button" id="confirm-cancel" class="m3-btn-outline">Abbrechen</button>
+      <button type="button" id="confirm-ok" class="m3-btn-primary danger">Löschen</button>
+    </div>
+  </div>
+</div>
+
+<div id="name-sheet-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg" role="dialog" aria-modal="true">
     <div class="sheet-handle"></div>
     <div class="sheet-title" id="name-sheet-title">Name</div>
     <div class="m3-field">
@@ -496,8 +512,8 @@
       <div id="name-sheet-colors" class="name-sheet-colors"></div>
     </div>
     <div class="m3-sheet-actions">
-      <button type="button" id="name-sheet-cancel" class="m3-btn-outline" style="flex:1;">Abbrechen</button>
-      <button type="button" id="name-sheet-save" class="m3-btn-primary" style="flex:1;">Speichern</button>
+      <button type="button" id="name-sheet-cancel" class="m3-btn-outline">Abbrechen</button>
+      <button type="button" id="name-sheet-save" class="m3-btn-primary">Speichern</button>
     </div>
   </div>
 </div>

@@ -8745,31 +8745,35 @@
     const searchQ = librarySearchQuery.trim().toLowerCase();
     const folders = (libraryCache.folders || []).filter((f) => !searchQ || f.name.toLowerCase().includes(searchQ));
     const boards = (libraryCache.boards || []).filter((b) => !searchQ || b.title.toLowerCase().includes(searchQ));
-    for (const folder of folders) {
-      list.appendChild(folderCard(folder));
+    const section = (title, count, cls) => {
+      const head = document.createElement("div");
+      head.className = "lib-section-title";
+      head.innerHTML = "<span></span><span class=\"lib-count\"></span>";
+      head.firstChild.textContent = title;
+      head.lastChild.textContent = String(count);
+      list.appendChild(head);
+      const grid = document.createElement("div");
+      grid.className = "lib-grid " + cls;
+      list.appendChild(grid);
+      return grid;
+    };
+    if (folders.length) {
+      const grid = section("Ordner", folders.length, "lib-grid-folders");
+      for (const folder of folders) grid.appendChild(folderCard(folder));
     }
-    for (const board of boards) {
-      list.appendChild(boardCard(board));
+    if (boards.length) {
+      const grid = section("Blätter", boards.length, "lib-grid-boards");
+      for (const board of boards) grid.appendChild(boardCard(board));
     }
     if (!folders.length && !boards.length) {
       const empty = document.createElement("div");
       empty.className = "library-empty";
-      empty.textContent = searchQ ? "Nichts gefunden." : "Noch leer. Leg ein Blatt oder einen Ordner an.";
+      empty.innerHTML = searchQ
+        ? '<i data-lucide="search-x"></i><strong>Nichts gefunden</strong><span>Probier einen anderen Suchbegriff.</span>'
+        : '<i data-lucide="notebook-pen"></i><strong>Noch leer</strong><span>Leg über „Neu“ ein Blatt oder einen Ordner an.</span>';
       list.appendChild(empty);
     }
     if (window.lucide) lucide.createIcons();
-  }
-
-  function iconBtn(name, title, onClick) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.title = title;
-    b.innerHTML = `<i data-lucide="${name}"></i>`;
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      onClick();
-    });
-    return b;
   }
 
   function libRowIcon(name, color) {
@@ -8793,70 +8797,147 @@
     return b;
   }
 
-  function folderCard(folder) {
+  function moreBtn(items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "lib-more-btn";
+    b.title = "Mehr";
+    b.innerHTML = `<i data-lucide="ellipsis"></i>`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openItemMenu(b, items);
+    });
+    return b;
+  }
+
+  // "vor 5 Min." / "gestern" / Datum
+  function relTime(ts) {
+    if (!ts) return "";
+    const d = Date.now() / 1000 - ts;
+    if (d < 60) return "gerade eben";
+    if (d < 3600) return "vor " + Math.round(d / 60) + " Min.";
+    if (d < 86400) return "vor " + Math.round(d / 3600) + " Std.";
+    if (d < 172800) return "gestern";
+    if (d < 7 * 86400) return "vor " + Math.round(d / 86400) + " Tagen";
+    return new Date(ts * 1000).toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function libCard(kind, { icon, color, title, meta, starred, onOpen, onStar, menu }) {
     const el = document.createElement("div");
-    el.className = "library-item";
+    el.className = "library-item lib-card lib-card-" + kind;
     el.setAttribute("role", "button");
     el.tabIndex = 0;
-    el.appendChild(libRowIcon("folder", folder.color));
-    el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta">Ordner</span></div>`);
-    el.querySelector("strong").textContent = folder.name;
-    el.addEventListener("click", () => {
-      navigateToFolder(folder.id);
+    el.appendChild(libRowIcon(icon, color));
+    el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta"></span></div>`);
+    el.querySelector("strong").textContent = title;
+    el.querySelector(".meta").textContent = meta;
+    el.addEventListener("click", onOpen);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target === el) onOpen();
     });
-    el.appendChild(
-      starBtn(folder.starred, async () => {
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openItemMenu(el.querySelector(".lib-more-btn"), menu);
+    });
+    el.appendChild(starBtn(starred, onStar));
+    el.appendChild(moreBtn(menu));
+    return el;
+  }
+
+  function folderCard(folder) {
+    return libCard("folder", {
+      icon: "folder",
+      color: folder.color,
+      title: folder.name,
+      meta: "Ordner",
+      starred: folder.starred,
+      onOpen: () => navigateToFolder(folder.id),
+      onStar: async () => {
         folder.starred = !folder.starred;
         await api("/api/folders/" + encodeURIComponent(folder.id) + "/star", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ starred: folder.starred }),
-        });
+        }).catch(() => {});
         refreshLibrary();
-      })
-    );
-    const row = document.createElement("div");
-    row.className = "row";
-    row.appendChild(iconBtn("pencil", "Umbenennen", () => renameFolder(folder)));
-    row.appendChild(iconBtn("folder-open", "Verschieben", () => openMove("folder", folder.id)));
-    row.appendChild(iconBtn("trash-2", "Löschen", () => deleteFolder(folder)));
-    el.appendChild(row);
-    return el;
+      },
+      menu: [
+        { icon: "folder-open", label: "Öffnen", run: () => navigateToFolder(folder.id) },
+        { icon: "pencil", label: "Umbenennen & Farbe", run: () => renameFolder(folder) },
+        { icon: "folder-input", label: "Verschieben", run: () => openMove("folder", folder.id) },
+        { icon: "trash-2", label: "Löschen", danger: true, run: () => deleteFolder(folder) },
+      ],
+    });
   }
 
   function boardCard(board) {
-    const el = document.createElement("div");
-    el.className = "library-item";
-    el.setAttribute("role", "button");
-    el.tabIndex = 0;
     const owner = personName(board.ownerId);
-    const meta = board.shared ? "Geteilt von " + owner : "Eigenes Blatt";
-    el.appendChild(libRowIcon("layout-dashboard"));
-    el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta"></span></div>`);
-    el.querySelector("strong").textContent = board.title;
-    el.querySelector(".meta").textContent = meta;
-    el.addEventListener("click", () => openBoard(board.id, board.title));
-    el.appendChild(
-      starBtn(board.starred, async () => {
+    const when = relTime(board.updatedAt);
+    const meta = (board.shared ? "Geteilt von " + owner : "Blatt") + (when ? " · " + when : "");
+    const menu = [
+      { icon: "square-pen", label: "Öffnen", run: () => openBoard(board.id, board.title) },
+      { icon: "folder-input", label: "In Ordner legen", run: () => openMove("board", board.id) },
+    ];
+    if (!board.shared) {
+      menu.splice(1, 0, { icon: "pencil", label: "Umbenennen", run: () => renameBoard(board) });
+      menu.push({ icon: "share-2", label: "Teilen", run: () => openShare(board) });
+      menu.push({ icon: "trash-2", label: "Löschen", danger: true, run: () => deleteBoard(board) });
+    }
+    return libCard("board", {
+      icon: board.shared ? "users" : "file-pen-line",
+      title: board.title,
+      meta,
+      starred: board.starred,
+      onOpen: () => openBoard(board.id, board.title),
+      onStar: async () => {
         board.starred = !board.starred;
         await api("/api/boards/" + encodeURIComponent(board.id) + "/star", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ starred: board.starred }),
-        });
+        }).catch(() => {});
         refreshLibrary();
-      })
-    );
-    const row = document.createElement("div");
-    row.className = "row";
-    row.appendChild(iconBtn("folder-open", "In Ordner legen", () => openMove("board", board.id)));
-    if (!board.shared) {
-      row.appendChild(iconBtn("share-2", "Teilen", () => openShare(board)));
-      row.appendChild(iconBtn("trash-2", "Löschen", () => deleteBoard(board)));
-    }
-    el.appendChild(row);
-    return el;
+      },
+      menu,
+    });
   }
+
+  // ⋯-Menue an einer Karte
+  const libItemMenu = document.getElementById("lib-item-menu");
+  function closeItemMenu() {
+    if (libItemMenu) libItemMenu.classList.add("hidden");
+  }
+  function openItemMenu(anchor, items) {
+    if (!libItemMenu || !anchor) return;
+    libItemMenu.innerHTML = "";
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "lib-add-opt" + (it.danger ? " danger" : "");
+      b.innerHTML = `<i data-lucide="${it.icon}"></i><span></span>`;
+      b.querySelector("span").textContent = it.label;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeItemMenu();
+        it.run();
+      });
+      libItemMenu.appendChild(b);
+    }
+    libItemMenu.classList.remove("hidden");
+    if (window.lucide) lucide.createIcons();
+    const r = anchor.getBoundingClientRect();
+    const mw = libItemMenu.offsetWidth;
+    const mh = libItemMenu.offsetHeight;
+    let left = r.right - mw;
+    let top = r.bottom + 6;
+    if (top + mh > window.innerHeight - 8) top = r.top - mh - 6;
+    libItemMenu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, left)) + "px";
+    libItemMenu.style.top = Math.max(8, top) + "px";
+  }
+  document.addEventListener("pointerdown", (e) => {
+    if (libItemMenu && !libItemMenu.classList.contains("hidden") && !e.target.closest("#lib-item-menu") && !e.target.closest(".lib-more-btn")) closeItemMenu();
+  }, true);
+  document.getElementById("library-backdrop")?.addEventListener("scroll", closeItemMenu, true);
 
   async function openBoard(id, title, opts) {
     // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
@@ -8951,6 +9032,72 @@
     else if (e.key === "Escape") closeNameSheet(null);
   });
 
+  // Bestaetigen (ersetzt window.confirm): Promise<boolean>
+  const confirmScrim = document.getElementById("confirm-scrim");
+  let confirmResolve = null;
+  function askConfirm({ title, text, ok = "Löschen" }) {
+    return new Promise((resolve) => {
+      confirmResolve = resolve;
+      document.getElementById("confirm-title").textContent = title;
+      document.getElementById("confirm-text").textContent = text || "";
+      document.getElementById("confirm-ok").textContent = ok;
+      confirmScrim.classList.remove("hidden");
+      document.getElementById("confirm-ok").focus({ preventScroll: true });
+    });
+  }
+  function closeConfirm(v) {
+    confirmScrim.classList.add("hidden");
+    const r = confirmResolve;
+    confirmResolve = null;
+    if (r) r(v);
+  }
+  document.getElementById("confirm-cancel").addEventListener("click", () => closeConfirm(false));
+  document.getElementById("confirm-ok").addEventListener("click", () => closeConfirm(true));
+  confirmScrim.addEventListener("click", (e) => {
+    if (e.target === confirmScrim) closeConfirm(false);
+  });
+
+  // Escape schliesst den obersten Dialog
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!confirmScrim.classList.contains("hidden")) closeConfirm(false);
+    else if (!nameSheetScrim.classList.contains("hidden")) closeNameSheet(null);
+    else if (!shareBackdrop.classList.contains("hidden")) shareBackdrop.classList.add("hidden");
+    else if (!moveBackdrop.classList.contains("hidden")) moveBackdrop.classList.add("hidden");
+    else closeItemMenu();
+  });
+
+  // Dialoge bleiben ueber der Bildschirmtastatur (iPad/Handy): sichtbare Hoehe als CSS-Variable
+  (function trackVisualViewport() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const upd = () => {
+      document.documentElement.style.setProperty("--vvh", vv.height + "px");
+      document.documentElement.style.setProperty("--vvt", vv.offsetTop + "px");
+    };
+    vv.addEventListener("resize", upd);
+    vv.addEventListener("scroll", upd);
+    upd();
+  })();
+
+  async function renameBoard(board) {
+    const res = await openNameSheet({ title: "Blatt umbenennen", label: "Titel", initial: board.title });
+    if (res === null) return;
+    const title = res.value.trim() || board.title;
+    if (title === board.title) return;
+    try {
+      await api("/api/boards/" + encodeURIComponent(board.id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, title }),
+      });
+    } catch (err) {
+      await enqueueOp({ type: "board_rename", personId: currentPersonId, id: board.id, title });
+    }
+    if (board.id === currentBoardId && filenameInput) filenameInput.value = title;
+    refreshLibrary();
+  }
+
   async function createBoard() {
     const res = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
     if (res === null) return;
@@ -9031,7 +9178,8 @@
   }
 
   async function deleteFolder(folder) {
-    if (!window.confirm("Ordner löschen? Blätter bleiben, nur der Ordner geht weg.")) return;
+    const ok = await askConfirm({ title: "Ordner „" + folder.name + "“ löschen?", text: "Die Blätter darin bleiben erhalten – nur der Ordner verschwindet." });
+    if (!ok) return;
     try {
       await api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
         method: "DELETE",
@@ -9043,7 +9191,8 @@
   }
 
   async function deleteBoard(board) {
-    if (!window.confirm("Dieses Blatt wirklich löschen?")) return;
+    const ok = await askConfirm({ title: "„" + board.title + "“ löschen?", text: "Das Blatt wird endgültig gelöscht – auch für alle, mit denen es geteilt ist." });
+    if (!ok) return;
     try {
       await api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
         method: "DELETE",
@@ -9067,8 +9216,11 @@
       const on = (board.sharedWith || []).includes(p.id);
       const b = document.createElement("button");
       b.type = "button";
-      b.className = on ? "on" : "";
-      b.textContent = on ? "Geteilt mit " + p.name : "Teilen mit " + p.name;
+      b.className = "dlg-choice" + (on ? " on" : "");
+      b.innerHTML = '<span class="dlg-avatar"></span><span class="dlg-choice-text"><strong></strong><small></small></span><i data-lucide="' + (on ? "check" : "plus") + '"></i>';
+      b.querySelector(".dlg-avatar").textContent = (p.name || "?").slice(0, 1).toUpperCase();
+      b.querySelector("strong").textContent = p.name;
+      b.querySelector("small").textContent = on ? "Hat Zugriff – antippen zum Entfernen" : "Antippen zum Teilen";
       b.addEventListener("click", async () => {
         try {
           if (on) {
@@ -9095,27 +9247,33 @@
       });
       box.appendChild(b);
     }
+    if (!box.children.length) box.innerHTML = '<p class="share-hint">Es gibt noch keine anderen Personen.</p>';
     shareBackdrop.classList.remove("hidden");
+    if (window.lucide) lucide.createIcons();
   }
 
   function openMove(kind, id) {
     const box = document.getElementById("move-choices");
     box.innerHTML = "";
-    const root = document.createElement("button");
-    root.type = "button";
-    root.textContent = "Ganz oben (kein Ordner)";
-    root.addEventListener("click", () => applyMove(kind, id, null));
-    box.appendChild(root);
+    const choice = (icon, label, color, target) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "dlg-choice";
+      b.innerHTML = '<span class="dlg-folder-ico"><i data-lucide="' + icon + '"></i></span><span class="dlg-choice-text"><strong></strong></span><i data-lucide="chevron-right"></i>';
+      if (color) b.querySelector(".dlg-folder-ico").style.background = color;
+      b.querySelector("strong").textContent = label;
+      b.addEventListener("click", () => applyMove(kind, id, target));
+      box.appendChild(b);
+    };
+    document.getElementById("move-title").textContent = kind === "folder" ? "Ordner verschieben nach" : "In Ordner legen";
+    choice("house", "Ganz oben (kein Ordner)", null, null);
     const folders = (libraryCache && libraryCache.allFolders) || [];
     for (const f of folders) {
       if (kind === "folder" && f.id === id) continue;
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = f.name;
-      b.addEventListener("click", () => applyMove(kind, id, f.id));
-      box.appendChild(b);
+      choice("folder", f.name, f.color, f.id);
     }
     moveBackdrop.classList.remove("hidden");
+    if (window.lucide) lucide.createIcons();
   }
 
   async function applyMove(kind, id, folderId) {
@@ -9182,7 +9340,7 @@
         `<span>${escapeHtml(person.name)}</span>` +
         (person.isAdmin ? `<span class="admin-badge">Admin</span>` : "");
       const renameBtn = document.createElement("button");
-      renameBtn.className = "danger";
+      renameBtn.className = "link";
       renameBtn.textContent = "Umbenennen";
       renameBtn.addEventListener("click", async () => {
         const res = await openNameSheet({ title: "Person umbenennen", label: "Name", initial: person.name });
@@ -9201,7 +9359,7 @@
         delBtn.className = "danger";
         delBtn.textContent = "Löschen";
         delBtn.addEventListener("click", async () => {
-          if (!window.confirm(`"${person.name}" wirklich löschen?`)) return;
+          if (!(await askConfirm({ title: "„" + person.name + "“ löschen?", text: "Die Person verliert den Zugang. Geht nur, wenn sie keine eigenen Blätter mehr hat." }))) return;
           try {
             await api("/api/admin/people/" + encodeURIComponent(person.id), { method: "DELETE" });
             await loadAdminPeople();
