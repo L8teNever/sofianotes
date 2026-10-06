@@ -4154,7 +4154,8 @@
   const zoomWinBtn = document.getElementById("btn-zoom-window");
   const zoomBoxEl = document.getElementById("zoom-box");
   const ZOOM_ADVANCE_ZONE = 0.22; // rechter Anteil der Schreibflaeche, der das Weiterruecken ausloest
-  const ZOOM_ADVANCE_DELAY = 550;
+  const ZOOM_KEEP = 0.12; // so viel vom letzten Wort bleibt nach dem Weiterruecken links sichtbar
+  let zoomHover = null; // Stift-/Radierer-Position in der Schreibflaeche (Welt), fuer den Punkt
   let zoomWin = null; // {x, y, w, left, right} in Weltkoordinaten
   let zoomPointer = null; // pointerId, der gerade im Zoom-Fenster schreibt/radiert
   let zoomAdvanceTimer = null;
@@ -4246,6 +4247,8 @@
   function closeZoomWindow() {
     clearTimeout(zoomAdvanceTimer);
     zoomAdvanceTimer = null;
+    zoomAnim = null;
+    zoomHover = null;
     zoomWin = null;
     zoomPointer = null;
     if (zoomPaneEl) zoomPaneEl.classList.add("hidden");
@@ -4268,15 +4271,49 @@
     offsetY += dy * scale;
   }
 
-  function moveZoomBox(nx, ny) {
-    zoomWin.x = nx;
-    zoomWin.y = ny;
+  // Kurzes Gleiten (~0,1 s) statt Sprung: fuehlt sich sofort an, man sieht aber wohin.
+  // Setzt man waehrenddessen wieder an, springt der Rahmen sofort ans Ziel (finishZoomAnim).
+  const ZOOM_ANIM_MS = 110;
+  let zoomAnim = null; // {fromX, fromY, toX, toY, t0}
+
+  function finishZoomAnim() {
+    if (!zoomAnim || !zoomWin) {
+      zoomAnim = null;
+      return;
+    }
+    zoomWin.x = zoomAnim.toX;
+    zoomWin.y = zoomAnim.toY;
+    zoomAnim = null;
     keepZoomBoxVisible();
     requestRedraw();
   }
 
-  function zoomNextLine() {
-    moveZoomBox(zoomWin.left, zoomWin.y + zoomBoxH());
+  function stepZoomAnim() {
+    if (!zoomAnim || !zoomWin) return;
+    const t = Math.min(1, (performance.now() - zoomAnim.t0) / ZOOM_ANIM_MS);
+    const e = 1 - Math.pow(1 - t, 3);
+    zoomWin.x = zoomAnim.fromX + (zoomAnim.toX - zoomAnim.fromX) * e;
+    zoomWin.y = zoomAnim.fromY + (zoomAnim.toY - zoomAnim.fromY) * e;
+    requestRedraw();
+    if (t >= 1) finishZoomAnim();
+    else requestAnimationFrame(stepZoomAnim);
+  }
+
+  function moveZoomBox(nx, ny, animate) {
+    if (!animate) {
+      zoomAnim = null;
+      zoomWin.x = nx;
+      zoomWin.y = ny;
+      keepZoomBoxVisible();
+      requestRedraw();
+      return;
+    }
+    zoomAnim = { fromX: zoomWin.x, fromY: zoomWin.y, toX: nx, toY: ny, t0: performance.now() };
+    requestAnimationFrame(stepZoomAnim);
+  }
+
+  function zoomNextLine(animate) {
+    moveZoomBox(zoomWin.left, zoomWin.y + zoomBoxH(), animate);
   }
   function zoomStep(dir) {
     const step = zoomWin.w * 0.6;
@@ -4299,14 +4336,11 @@
     const b = makeBBox(stroke.points);
     const zoneStart = zoomWin.x + zoomWin.w * (1 - ZOOM_ADVANCE_ZONE);
     if (b.maxX < zoneStart) return;
-    zoomAdvanceTimer = setTimeout(() => {
-      zoomAdvanceTimer = null;
-      if (!zoomWin) return;
-      // so weiterruecken, dass das Geschriebene links im Fenster noch sichtbar bleibt
-      const nx = b.maxX - zoomWin.w * 0.3;
-      if (nx + zoomWin.w > zoomWin.right + zoomWin.w * 0.25) zoomNextLine();
-      else moveZoomBox(Math.max(zoomWin.left, nx), zoomWin.y);
-    }, ZOOM_ADVANCE_DELAY);
+    // sofort weiterruecken; vom Geschriebenen bleibt links nur ein schmaler Rest sichtbar
+    // (reicht noch fuer einen i-Punkt am letzten Buchstaben)
+    const nx = b.maxX - zoomWin.w * ZOOM_KEEP;
+    if (nx + zoomWin.w > zoomWin.right + zoomWin.w * 0.25) zoomNextLine(true);
+    else moveZoomBox(Math.max(zoomWin.left, nx), zoomWin.y, true);
   }
 
   function drawZoomBoxOnPage() {
@@ -4371,6 +4405,24 @@
     for (const st of all) if (st.tool !== "marker" && st.tool !== "image" && st.tool !== "table") drawStroke(st, zctx);
     for (const st of remoteInProgress.values()) if (st.tool !== "marker") drawStroke(st, zctx);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke, zctx);
+    if (zoomHover) {
+      zctx.save();
+      if (currentTool === "eraser") {
+        zctx.beginPath();
+        zctx.arc(zoomHover.x, zoomHover.y, eraserSize / 2, 0, Math.PI * 2);
+        zctx.fillStyle = "rgba(255,255,255,0.35)";
+        zctx.fill();
+        zctx.lineWidth = 1.5 / k;
+        zctx.strokeStyle = "rgba(0,0,0,0.55)";
+        zctx.stroke();
+      } else if (!(currentStroke && zoomPointer != null)) {
+        zctx.beginPath();
+        zctx.arc(zoomHover.x, zoomHover.y, Math.max(activeSize() / 2, 2.5 / k), 0, Math.PI * 2);
+        zctx.fillStyle = currentTool === "marker" ? hexToRgba(currentColor, 0.45) : hexToRgba(currentColor, 0.6);
+        zctx.fill();
+      }
+      zctx.restore();
+    }
     // Weiterrueck-Bereich und Raender
     zctx.setTransform(d, 0, 0, d, 0, 0);
     const r = zoomPaneRect();
@@ -4411,6 +4463,7 @@
       }
       clearTimeout(zoomAdvanceTimer);
       zoomAdvanceTimer = null;
+      finishZoomAnim(); // Rahmen steht, bevor der neue Strich beginnt
       if (textEdit) commitTextEditor();
       zoomPointer = e.pointerId;
       const w = paneToWorld(e.clientX, e.clientY);
@@ -4426,6 +4479,11 @@
       requestRedraw();
     });
     zoomCanvas.addEventListener("pointermove", (e) => {
+      // Punkt/Radierer-Kreis zeigt, wo Stift oder Maus gerade ist (auch beim Schweben)
+      if (zoomWin && (e.pointerType !== "touch" || fingerDrawEnabled)) {
+        zoomHover = paneToWorld(e.clientX, e.clientY);
+        requestRedraw();
+      }
       if (zoomPointer !== e.pointerId || !currentStroke) return;
       for (const ev of coalescedEvents(e)) {
         const w = paneToWorld(ev.clientX, ev.clientY);
@@ -4460,6 +4518,11 @@
       if (boardStrokes.has(finished.id)) scheduleZoomAdvance(finished);
     };
     zoomCanvas.addEventListener("pointerup", endZoomPointer);
+    zoomCanvas.addEventListener("pointerleave", (e) => {
+      if (zoomPointer === e.pointerId) return;
+      zoomHover = null;
+      requestRedraw();
+    });
     zoomCanvas.addEventListener("pointercancel", endZoomPointer);
   }
 
