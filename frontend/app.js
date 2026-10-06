@@ -20,7 +20,7 @@
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
-  const HOLD_MS = 450; // wie lange der Stift ruhig gehalten werden muss, damit eine Form erkannt wird
+  const HOLD_MS = 750; // wie lange der Stift ruhig gehalten werden muss, damit eine Form erkannt wird - bewusst deutlich laenger als eine normale Schreibpause zwischen Buchstaben/Woertern, sonst wird Handschrift faelschlich als Form erkannt
   const MIN_MOVE_WORLD = 0.35; // kleine Stiftbewegungen zaehlen mit, sonst wirken Kurven eckig
   const GAP_FILL_WORLD = 3.5; // grosse Luecken zwischen Samples mit Zwischenpunkten fuellen
 

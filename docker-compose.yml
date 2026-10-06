@@ -4,7 +4,9 @@ services:
       context: .
       args:
         GIT_COMMIT: ${GIT_COMMIT:-main}
-    container_name: sofianotes
+    # Pro Instanz per .env ueberschreibbar (z.B. CONTAINER_NAME=sofianotes-multiboard),
+    # damit mehrere Stacks aus demselben Repo nebeneinander laufen koennen.
+    container_name: ${CONTAINER_NAME:-sofianotes}
     restart: unless-stopped
     ports:
       - "${BIND_HOST:-127.0.0.1}:${BIND_PORT:-8000}:8000"
@@ -15,3 +17,5 @@ services:
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
       CLOUDFLARE_OCR_MODEL: ${CLOUDFLARE_OCR_MODEL:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      DEV_BYPASS_EMAIL: ${DEV_BYPASS_EMAIL:-}
