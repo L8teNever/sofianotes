@@ -3,6 +3,7 @@
 
   const canvas = document.getElementById("board");
   const ctx = canvas.getContext("2d");
+  window.__sofiaMainCtx = ctx;
   const eraserCursorEl = document.getElementById("eraser-cursor");
   const statusEl = document.getElementById("status");
   const statusTextEl = document.getElementById("status-text");
@@ -450,16 +451,19 @@
 
   let gridStyle = "graph";
 
-  function drawGrid() {
+  // area/k optional: fuer das Zoom-Fenster (eigener Ausschnitt, eigener Massstab)
+  function drawGrid(target, area, k) {
     if (gridStyle === "blank") return;
-    const topLeft = screenToWorld(0, 0);
-    const bottomRight = screenToWorld(window.innerWidth, window.innerHeight);
+    const ctx = target || window.__sofiaMainCtx;
+    const unit = k || scale;
+    const topLeft = area ? { x: area.minX, y: area.minY } : screenToWorld(0, 0);
+    const bottomRight = area ? { x: area.maxX, y: area.maxY } : screenToWorld(window.innerWidth, window.innerHeight);
     const startX = Math.floor(topLeft.x / GRID_SIZE) * GRID_SIZE;
     const startY = Math.floor(topLeft.y / GRID_SIZE) * GRID_SIZE;
 
     if (gridStyle === "dots") {
       ctx.fillStyle = "rgba(0,0,0,0.16)";
-      const r = 1.15 / scale;
+      const r = 1.15 / unit;
       for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
         for (let y = startY; y <= bottomRight.y; y += GRID_SIZE) {
           ctx.beginPath();
@@ -470,7 +474,7 @@
       return;
     }
 
-    ctx.lineWidth = 1 / scale;
+    ctx.lineWidth = 1 / unit;
     if (gridStyle !== "lines") {
       for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
         const bold = Math.round(x / GRID_SIZE) % 4 === 0;
@@ -645,6 +649,7 @@
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
     drawTextDragPreview();
+    drawZoomBoxOnPage();
     drawLassoAndSelection();
     drawHoldHint();
     positionTextEditor();
@@ -653,6 +658,7 @@
 
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
+    drawZoomPane();
   }
 
   function tick() {
@@ -850,6 +856,7 @@
 
   function setTool(tool, { openPopover } = {}) {
     if (textEdit) commitTextEditor();
+    if (zoomWin && (tool === "select" || tool === "text")) closeZoomWindow();
     const already = currentTool === tool;
     if (tool === "eraser" && currentTool !== "eraser") {
       lastToolBeforeEraser = currentTool || "pen";
@@ -3399,6 +3406,370 @@
       changeTable(kind, delta);
     });
   }
+
+  // ---- Zoom-Fenster (wie GoodNotes) ----------------------------------------
+  // Ein Rahmen auf dem Blatt wird unten gross dargestellt. Man schreibt in der grossen
+  // Flaeche, die Tinte landet klein im Rahmen. Endet ein Strich im blauen Bereich rechts,
+  // rueckt der Rahmen kurz nach dem Absetzen weiter; am rechten Rand geht es in die
+  // naechste Zeile. Ein neuer Strich vor dem Weiterruecken bricht es ab (z.B. i-Punkt).
+  const zoomPaneEl = document.getElementById("zoom-pane");
+  const zoomCanvas = document.getElementById("zoom-canvas");
+  const zctx = zoomCanvas ? zoomCanvas.getContext("2d") : null;
+  const zoomWinBtn = document.getElementById("btn-zoom-window");
+  const zoomBoxEl = document.getElementById("zoom-box");
+  const ZOOM_ADVANCE_ZONE = 0.22; // rechter Anteil der Schreibflaeche, der das Weiterruecken ausloest
+  const ZOOM_ADVANCE_DELAY = 550;
+  let zoomWin = null; // {x, y, w, left, right} in Weltkoordinaten
+  let zoomPointer = null; // pointerId, der gerade im Zoom-Fenster schreibt/radiert
+  let zoomAdvanceTimer = null;
+  let zoomBoxDrag = null;
+
+  function zoomPaneRect() {
+    return zoomCanvas.getBoundingClientRect();
+  }
+  function zoomRatio() {
+    const r = zoomPaneRect();
+    return r.width / Math.max(1e-6, zoomWin.w);
+  }
+  function zoomBoxH() {
+    const r = zoomPaneRect();
+    return r.height / zoomRatio();
+  }
+  function paneToWorld(clientX, clientY) {
+    const r = zoomPaneRect();
+    const k = zoomRatio();
+    return { x: zoomWin.x + (clientX - r.left) / k, y: zoomWin.y + (clientY - r.top) / k };
+  }
+
+  function layoutZoomPane() {
+    if (!zoomPaneEl) return;
+    const tb = toolbarEl.getBoundingClientRect();
+    const dockBottom = currentDock() === "bottom";
+    const bottom = dockBottom ? window.innerHeight - tb.top + 10 : 12;
+    const h = Math.round(Math.max(170, Math.min(320, window.innerHeight * 0.3)));
+    zoomPaneEl.style.bottom = bottom + "px";
+    zoomPaneEl.style.height = h + "px";
+    const r = zoomCanvas.getBoundingClientRect();
+    const d = Math.max(1, window.devicePixelRatio || 1);
+    const W = Math.round(r.width * d);
+    const H = Math.round(r.height * d);
+    if (zoomCanvas.width !== W || zoomCanvas.height !== H) {
+      zoomCanvas.width = W;
+      zoomCanvas.height = H;
+    }
+  }
+
+  // Sichtbarer Teil des Hauptblatts (oberhalb der Schreibflaeche)
+  function visibleWorldArea() {
+    const paneTop = zoomPaneEl ? zoomPaneEl.getBoundingClientRect().top : window.innerHeight;
+    return { a: screenToWorld(0, 70), b: screenToWorld(window.innerWidth, paneTop - 10) };
+  }
+
+  function openZoomWindow() {
+    if (textEdit) commitTextEditor();
+    if (currentTool !== "pen" && currentTool !== "marker" && currentTool !== "eraser") setTool("pen");
+    zoomPaneEl.classList.remove("hidden");
+    layoutZoomPane();
+    const { a, b } = visibleWorldArea();
+    const left = a.x + (b.x - a.x) * 0.08;
+    const right = b.x - (b.x - a.x) * 0.08;
+    const w = Math.max(80, (right - left) / 3.2);
+    zoomWin = { x: left, y: a.y + (b.y - a.y) * 0.18, w, left, right };
+    if (zoomWinBtn) zoomWinBtn.classList.add("active");
+    requestRedraw();
+  }
+
+  function closeZoomWindow() {
+    clearTimeout(zoomAdvanceTimer);
+    zoomAdvanceTimer = null;
+    zoomWin = null;
+    zoomPointer = null;
+    if (zoomPaneEl) zoomPaneEl.classList.add("hidden");
+    if (zoomBoxEl) zoomBoxEl.classList.add("hidden");
+    if (zoomWinBtn) zoomWinBtn.classList.remove("active");
+    requestRedraw();
+  }
+
+  function keepZoomBoxVisible() {
+    if (!zoomWin) return;
+    const { a, b } = visibleWorldArea();
+    const h = zoomBoxH();
+    let dx = 0;
+    let dy = 0;
+    if (zoomWin.y + h > b.y) dy = b.y - (zoomWin.y + h) - h * 0.5;
+    else if (zoomWin.y < a.y) dy = a.y - zoomWin.y + h * 0.5;
+    if (zoomWin.x + zoomWin.w > b.x) dx = b.x - (zoomWin.x + zoomWin.w) - zoomWin.w * 0.2;
+    else if (zoomWin.x < a.x) dx = a.x - zoomWin.x + zoomWin.w * 0.2;
+    offsetX += dx * scale;
+    offsetY += dy * scale;
+  }
+
+  function moveZoomBox(nx, ny) {
+    zoomWin.x = nx;
+    zoomWin.y = ny;
+    keepZoomBoxVisible();
+    requestRedraw();
+  }
+
+  function zoomNextLine() {
+    moveZoomBox(zoomWin.left, zoomWin.y + zoomBoxH());
+  }
+  function zoomStep(dir) {
+    const step = zoomWin.w * 0.6;
+    let nx = zoomWin.x + dir * step;
+    if (dir > 0 && nx + zoomWin.w > zoomWin.right + zoomWin.w * 0.25) return zoomNextLine();
+    if (dir < 0 && nx < zoomWin.left) {
+      if (zoomWin.x <= zoomWin.left + 1) {
+        // am linken Rand: zurueck ans Ende der vorigen Zeile
+        return moveZoomBox(Math.max(zoomWin.left, zoomWin.right - zoomWin.w), zoomWin.y - zoomBoxH());
+      }
+      nx = zoomWin.left;
+    }
+    moveZoomBox(nx, zoomWin.y);
+  }
+
+  function scheduleZoomAdvance(stroke) {
+    clearTimeout(zoomAdvanceTimer);
+    zoomAdvanceTimer = null;
+    if (!zoomWin || !stroke || !stroke.points || !stroke.points.length) return;
+    const b = makeBBox(stroke.points);
+    const zoneStart = zoomWin.x + zoomWin.w * (1 - ZOOM_ADVANCE_ZONE);
+    if (b.maxX < zoneStart) return;
+    zoomAdvanceTimer = setTimeout(() => {
+      zoomAdvanceTimer = null;
+      if (!zoomWin) return;
+      // so weiterruecken, dass das Geschriebene links im Fenster noch sichtbar bleibt
+      const nx = b.maxX - zoomWin.w * 0.3;
+      if (nx + zoomWin.w > zoomWin.right + zoomWin.w * 0.25) zoomNextLine();
+      else moveZoomBox(Math.max(zoomWin.left, nx), zoomWin.y);
+    }, ZOOM_ADVANCE_DELAY);
+  }
+
+  function drawZoomBoxOnPage() {
+    if (!zoomWin) {
+      if (zoomBoxEl) zoomBoxEl.classList.add("hidden");
+      return;
+    }
+    const h = zoomBoxH();
+    ctx.save();
+    ctx.fillStyle = "rgba(26,115,232,0.06)";
+    ctx.fillRect(zoomWin.x, zoomWin.y, zoomWin.w, h);
+    ctx.strokeStyle = "#1A73E8";
+    ctx.lineWidth = 2 / scale;
+    ctx.strokeRect(zoomWin.x, zoomWin.y, zoomWin.w, h);
+    // Raender als kurze Markierungen in Zeilenhoehe
+    ctx.strokeStyle = "rgba(26,115,232,0.55)";
+    ctx.setLineDash([4 / scale, 4 / scale]);
+    for (const mx of [zoomWin.left, zoomWin.right]) {
+      ctx.beginPath();
+      ctx.moveTo(mx, zoomWin.y - h * 0.5);
+      ctx.lineTo(mx, zoomWin.y + h * 1.5);
+      ctx.stroke();
+    }
+    ctx.restore();
+    if (zoomBoxEl) {
+      const tl = worldToScreen(zoomWin.x, zoomWin.y);
+      const lm = worldToScreen(zoomWin.left, zoomWin.y + h / 2);
+      const rm = worldToScreen(zoomWin.right, zoomWin.y + h / 2);
+      zoomBoxEl.classList.remove("hidden");
+      const grip = document.getElementById("zoom-grip");
+      const lh = document.getElementById("zoom-margin-left");
+      const rh = document.getElementById("zoom-margin-right");
+      grip.style.left = tl.x + "px";
+      grip.style.top = tl.y + "px";
+      lh.style.left = lm.x + "px";
+      lh.style.top = lm.y + "px";
+      rh.style.left = rm.x + "px";
+      rh.style.top = rm.y + "px";
+    }
+  }
+
+  function drawZoomPane() {
+    if (!zoomWin || !zctx) return;
+    layoutZoomPane();
+    const d = Math.max(1, window.devicePixelRatio || 1);
+    const k = zoomRatio();
+    const h = zoomBoxH();
+    zctx.setTransform(1, 0, 0, 1, 0, 0);
+    zctx.fillStyle = "#ffffff";
+    zctx.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
+    zctx.setTransform(k * d, 0, 0, k * d, -zoomWin.x * k * d, -zoomWin.y * k * d);
+    drawGrid(zctx, { minX: zoomWin.x, minY: zoomWin.y, maxX: zoomWin.x + zoomWin.w, maxY: zoomWin.y + h }, k);
+    const inView = (st) => {
+      const b = st.bbox || strokeWorldBBox(st);
+      return !b || (b.maxX >= zoomWin.x && b.minX <= zoomWin.x + zoomWin.w && b.maxY >= zoomWin.y && b.minY <= zoomWin.y + h);
+    };
+    const all = Array.from(boardStrokes.values()).filter(inView);
+    for (const st of all) if (st.tool === "image" || st.tool === "table") drawStroke(st, zctx);
+    for (const st of all) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
+    for (const st of remoteInProgress.values()) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
+    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, zctx, { alpha: 0.38 });
+    for (const st of all) if (st.tool !== "marker" && st.tool !== "image" && st.tool !== "table") drawStroke(st, zctx);
+    for (const st of remoteInProgress.values()) if (st.tool !== "marker") drawStroke(st, zctx);
+    if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke, zctx);
+    // Weiterrueck-Bereich und Raender
+    zctx.setTransform(d, 0, 0, d, 0, 0);
+    const r = zoomPaneRect();
+    const zoneX = r.width * (1 - ZOOM_ADVANCE_ZONE);
+    zctx.fillStyle = "rgba(26,115,232,0.07)";
+    zctx.fillRect(zoneX, 0, r.width - zoneX, r.height);
+    zctx.strokeStyle = "rgba(26,115,232,0.35)";
+    zctx.lineWidth = 1;
+    zctx.setLineDash([5, 5]);
+    zctx.beginPath();
+    zctx.moveTo(zoneX, 0);
+    zctx.lineTo(zoneX, r.height);
+    zctx.stroke();
+    zctx.setLineDash([]);
+    for (const mx of [zoomWin.left, zoomWin.right]) {
+      const px = (mx - zoomWin.x) * k;
+      if (px < 0 || px > r.width) continue;
+      zctx.strokeStyle = "rgba(234,67,53,0.5)";
+      zctx.beginPath();
+      zctx.moveTo(px, 0);
+      zctx.lineTo(px, r.height);
+      zctx.stroke();
+    }
+  }
+
+  if (zoomCanvas) {
+    zoomCanvas.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!zoomWin || zoomPointer != null) return;
+      // Finger nur, wenn Finger-Zeichnen an ist (sonst Handballen)
+      if (e.pointerType === "touch" && !fingerDrawEnabled) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      try {
+        zoomCanvas.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // egal - Schreiben geht trotzdem
+      }
+      clearTimeout(zoomAdvanceTimer);
+      zoomAdvanceTimer = null;
+      if (textEdit) commitTextEditor();
+      zoomPointer = e.pointerId;
+      const w = paneToWorld(e.clientX, e.clientY);
+      if (currentTool === "eraser") {
+        erasedThisGesture.clear();
+        erasedStrokesThisGesture.clear();
+        currentStroke = { pointerId: e.pointerId, eraser: true, lastX: w.x, lastY: w.y };
+        eraseSegment(w.x, w.y, w.x, w.y);
+      } else {
+        if (currentTool !== "pen" && currentTool !== "marker") setTool("pen");
+        startStroke(e.pointerId, e.pointerType, w.x, w.y, pointerPressure(e));
+      }
+      requestRedraw();
+    });
+    zoomCanvas.addEventListener("pointermove", (e) => {
+      if (zoomPointer !== e.pointerId || !currentStroke) return;
+      for (const ev of coalescedEvents(e)) {
+        const w = paneToWorld(ev.clientX, ev.clientY);
+        if (currentStroke.eraser) {
+          eraseSegment(currentStroke.lastX, currentStroke.lastY, w.x, w.y);
+          currentStroke.lastX = w.x;
+          currentStroke.lastY = w.y;
+        } else extendStroke(w.x, w.y, pointerPressure(ev));
+      }
+      requestRedraw();
+    });
+    const endZoomPointer = (e) => {
+      if (zoomPointer !== e.pointerId) return;
+      zoomPointer = null;
+      if (!currentStroke) return;
+      if (currentStroke.eraser) {
+        if (pendingErase.size > 0) {
+          wsSend({ type: "erase", strokeIds: Array.from(pendingErase) });
+          pendingErase.clear();
+        }
+        if (erasedStrokesThisGesture.size > 0) {
+          pushUndo({ type: "erase", strokes: Array.from(erasedStrokesThisGesture.values()) });
+          erasedStrokesThisGesture.clear();
+        }
+        currentStroke = null;
+        requestRedraw();
+        return;
+      }
+      if (e.type === "pointercancel") return abortStroke();
+      const finished = currentStroke;
+      endStroke();
+      if (boardStrokes.has(finished.id)) scheduleZoomAdvance(finished);
+    };
+    zoomCanvas.addEventListener("pointerup", endZoomPointer);
+    zoomCanvas.addEventListener("pointercancel", endZoomPointer);
+  }
+
+  if (zoomPaneEl) {
+    const act = (id, fn) => {
+      const b = document.getElementById(id);
+      if (b) b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (zoomWin) fn();
+      });
+    };
+    act("btn-zw-back", () => zoomStep(-1));
+    act("btn-zw-fwd", () => zoomStep(1));
+    act("btn-zw-return", () => zoomNextLine());
+    act("btn-zw-in", () => {
+      zoomWin.w = Math.max(30, zoomWin.w * 0.8);
+      requestRedraw();
+    });
+    act("btn-zw-out", () => {
+      zoomWin.w = Math.min(zoomWin.right - zoomWin.left, zoomWin.w * 1.25);
+      requestRedraw();
+    });
+    act("btn-zw-close", closeZoomWindow);
+  }
+  if (zoomWinBtn) zoomWinBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (zoomWin) closeZoomWindow();
+    else openZoomWindow();
+  });
+
+  // Rahmen und Raender auf dem Blatt verschieben (Stift, Maus oder Finger)
+  for (const [id, kind] of [
+    ["zoom-grip", "box"],
+    ["zoom-margin-left", "left"],
+    ["zoom-margin-right", "right"],
+  ]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener("pointerdown", (e) => {
+      if (!zoomWin) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // ignorieren
+      }
+      zoomBoxDrag = { kind, pointerId: e.pointerId, start: screenToWorld(e.clientX, e.clientY), win: { ...zoomWin } };
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!zoomBoxDrag || zoomBoxDrag.pointerId !== e.pointerId || !zoomWin) return;
+      const w = screenToWorld(e.clientX, e.clientY);
+      const dx = w.x - zoomBoxDrag.start.x;
+      const dy = w.y - zoomBoxDrag.start.y;
+      const o = zoomBoxDrag.win;
+      if (kind === "box") {
+        zoomWin.x = o.x + dx;
+        zoomWin.y = o.y + dy;
+      } else if (kind === "left") {
+        zoomWin.left = Math.min(o.left + dx, zoomWin.right - zoomWin.w * 0.5);
+      } else {
+        zoomWin.right = Math.max(o.right + dx, zoomWin.left + zoomWin.w * 0.5);
+      }
+      requestRedraw();
+    });
+    const end = (e) => {
+      if (zoomBoxDrag && zoomBoxDrag.pointerId === e.pointerId) zoomBoxDrag = null;
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+  window.addEventListener("resize", () => {
+    if (zoomWin) requestRedraw();
+  });
 
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}

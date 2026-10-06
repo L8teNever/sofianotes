@@ -1478,3 +1478,77 @@ button {
   caret-color: #1a73e8;
 }
 .text-editor.hidden { display: none; }
+
+/* Zoom-Fenster: grosse Schreibflaeche unten, Rahmen auf dem Blatt */
+.zoom-pane {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  z-index: 55;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 20px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+.zoom-pane.hidden { display: none; }
+.zoom-pane canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border-radius: 14px;
+  touch-action: none;
+  cursor: crosshair;
+}
+.zoom-pane-controls {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, 40px);
+  grid-auto-rows: 40px;
+  gap: 4px;
+  align-content: center;
+}
+.zoom-pane-controls button {
+  border: none;
+  border-radius: 12px;
+  background: #f1f3f4;
+  color: #3c4043;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.zoom-pane-controls button:active { background: #e2e6ea; }
+.zoom-pane-controls .material-symbols-rounded { font-size: 22px; }
+#zoom-box.hidden { display: none; }
+.zoom-handle,
+.zoom-margin {
+  position: fixed;
+  z-index: 54;
+  touch-action: none;
+}
+.zoom-handle {
+  width: 30px;
+  height: 30px;
+  margin: -34px 0 0 -4px;
+  border-radius: 10px;
+  background: #1a73e8;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: move;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+.zoom-handle .material-symbols-rounded { font-size: 18px; }
+.zoom-margin {
+  width: 14px;
+  height: 34px;
+  margin: -17px 0 0 -7px;
+  border-radius: 7px;
+  background: rgba(26, 115, 232, 0.85);
+  cursor: ew-resize;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
