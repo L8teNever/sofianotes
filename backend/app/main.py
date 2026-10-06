@@ -479,11 +479,15 @@ async def download_pdf(board: str) -> FileResponse:
 async def websocket_endpoint(websocket: WebSocket) -> None:
     board_id = websocket.query_params.get("board") or ""
     me = await get_current_person_ws(websocket)
+    # Erst annehmen, dann mit eigenem Code schliessen: wird schon der Handshake
+    # abgelehnt, sieht der Browser nur 1006 und versucht es endlos weiter.
     if me is None:
+        await websocket.accept()
         await websocket.close(code=4401)
         return
     person = me["id"]
     if not await db.can_access(person, board_id):
+        await websocket.accept()
         await websocket.close(code=4403)
         return
     await websocket.accept()

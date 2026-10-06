@@ -1652,7 +1652,17 @@
       setConnState("live");
       reconnectDelay = 1000;
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      if (ev && ev.code === 4403) {
+        // kein Zugriff auf dieses Blatt (z.B. fremder Link): zurueck in die Bibliothek
+        // statt endlos neu zu verbinden
+        wantWs = false;
+        currentBoardId = null;
+        boardStrokes.clear();
+        requestRedraw();
+        showLibrary();
+        return;
+      }
       if (!wantWs) {
         setConnState("offline");
         return;
@@ -6222,34 +6232,56 @@
     whoBackdrop.classList.add("hidden");
   }
 
-  function showLibrary() {
+  function showLibrary(opts) {
     hideWho();
     libraryBackdrop.classList.remove("hidden");
     document.getElementById("btn-library-close").classList.toggle("hidden", !currentBoardId);
+    if (!(opts && opts.fromHistory)) syncUrl(true);
     refreshLibrary();
   }
 
-  function hideLibrary() {
+  function hideLibrary(opts) {
     libraryBackdrop.classList.add("hidden");
+    if (!(opts && opts.fromHistory) && currentBoardId) syncUrl(true);
   }
 
-  function folderUrl(folderId) {
+  // URL spiegelt immer, wo man gerade ist: ?folder=<Ordner>&board=<Blatt>.
+  // Bibliothek offen -> nur der Ordner; Blatt offen -> Ordner + Blatt. So funktionieren
+  // Zurueck/Vorwaerts im Browser, Neuladen und geteilte Links.
+  function appUrl(folderId, boardId) {
     const url = new URL(location.href);
     if (folderId) url.searchParams.set("folder", folderId);
     else url.searchParams.delete("folder");
+    if (boardId) url.searchParams.set("board", boardId);
+    else url.searchParams.delete("board");
     return url.pathname + url.search;
+  }
+
+  function syncUrl(push) {
+    const libOpen = !libraryBackdrop.classList.contains("hidden");
+    const boardId = libOpen ? null : currentBoardId;
+    const next = appUrl(currentFolderId, boardId);
+    if (next === location.pathname + location.search) return;
+    const state = { folderId: currentFolderId, boardId };
+    if (push) history.pushState(state, "", next);
+    else history.replaceState(state, "", next);
   }
 
   function navigateToFolder(folderId, push = true) {
     currentFolderId = folderId || null;
-    if (push) history.pushState({ folderId: currentFolderId }, "", folderUrl(currentFolderId));
+    if (push) syncUrl(true);
     refreshLibrary();
   }
 
-  window.addEventListener("popstate", (e) => {
-    if (!currentBoardId) {
-      currentFolderId = (e.state && e.state.folderId) || null;
-      refreshLibrary();
+  window.addEventListener("popstate", () => {
+    const params = new URLSearchParams(location.search);
+    const boardId = params.get("board");
+    currentFolderId = params.get("folder") || null;
+    if (boardId) {
+      if (boardId !== currentBoardId) openBoard(boardId, null, { fromHistory: true });
+      else hideLibrary({ fromHistory: true });
+    } else {
+      showLibrary({ fromHistory: true });
     }
   });
 
@@ -6402,7 +6434,7 @@
     return el;
   }
 
-  async function openBoard(id, title) {
+  async function openBoard(id, title, opts) {
     // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
     // Boards: eine noch offene WS-Verbindung wuerde sonst keine frische
     // "init"-Nachricht mehr bekommen (connectWS() ist dann ein No-Op), und
@@ -6420,7 +6452,9 @@
     currentBoardId = id;
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
-    hideLibrary();
+    if (title) document.title = title + " – sofianotes";
+    hideLibrary({ fromHistory: true });
+    if (!(opts && opts.fromHistory)) syncUrl(true);
     if (window.SofiaOffline) {
       const local = await SofiaOffline.getStrokes(id);
       if (local && local.length) applyStrokeList(local);
@@ -6832,8 +6866,8 @@
     await refreshPeople();
   });
 
-  document.getElementById("btn-open-library")?.addEventListener("click", showLibrary);
-  document.getElementById("btn-library-close")?.addEventListener("click", hideLibrary);
+  document.getElementById("btn-open-library")?.addEventListener("click", () => showLibrary());
+  document.getElementById("btn-library-close")?.addEventListener("click", () => hideLibrary());
   document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
   const libSearchRow = document.getElementById("lib-search-row");
   const libSearchInput = document.getElementById("lib-search-input");
@@ -7024,10 +7058,15 @@
     isAdmin = !!me.isAdmin;
     document.getElementById("btn-library-switch")?.classList.toggle("hidden", !isAdmin);
     localStorage.setItem("sofianotes-person", currentPersonId);
-    currentFolderId = new URLSearchParams(location.search).get("folder") || null;
+    const startParams = new URLSearchParams(location.search);
+    currentFolderId = startParams.get("folder") || null;
     await refreshPeople();
     hideWho();
     syncWhoChip();
-    showLibrary();
+    showLibrary({ fromHistory: true });
+    // Link mit ?board=... oeffnet direkt dieses Blatt (Titel kommt mit dem "init" vom Server)
+    const startBoard = startParams.get("board");
+    if (startBoard) await openBoard(startBoard, null, { fromHistory: true });
+    syncUrl(false);
   })();
 })();
