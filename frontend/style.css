@@ -2372,3 +2372,59 @@ button {
   animation: lib-shimmer 1.1s infinite;
 }
 @keyframes lib-shimmer { to { transform: translateX(100%); } }
+
+/* ---- Sofia: aktuelles Fach + Personen aus Sofia ---- */
+.lib-card.library-item.lib-card-now {
+  border: 2px solid #6750a4;
+  box-shadow: 0 6px 22px rgba(103, 80, 164, 0.22);
+  background: linear-gradient(135deg, #fff 0%, #f6f1fd 100%);
+}
+.lib-card.library-item.lib-card-now.is-next { border-color: rgba(103, 80, 164, 0.5); box-shadow: 0 4px 14px rgba(103, 80, 164, 0.12); }
+.lib-now-chip {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 8px;
+  border-radius: 10px;
+  background: #6750a4;
+  color: #fff;
+  font: 700 11px/1.2 'Google Sans', 'Inter', sans-serif;
+  letter-spacing: 0.02em;
+}
+.lib-now-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+  animation: now-pulse 1.6s ease-in-out infinite;
+}
+.lib-card-now.is-next .lib-now-chip { background: #ece6f0; color: #4a4458; }
+.lib-card-now.is-next .lib-now-chip::before { background: #6750a4; animation: none; }
+@keyframes now-pulse { 50% { opacity: 0.35; } }
+.lib-card-now .meta { color: #6750a4; font-weight: 600; }
+
+.admin-sofia-hint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 4px 0 12px;
+  border-radius: 16px;
+  background: #e8def8;
+  color: #1c1b1f;
+}
+.admin-sofia-hint > .material-symbols-rounded { color: #6750a4; }
+.admin-sofia-hint div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font: 700 14px 'Google Sans', 'Inter', sans-serif; }
+.admin-sofia-hint small { font: 500 12px/1.35 'Google Sans', 'Inter', sans-serif; color: #49454f; }
+.admin-sofia-hint button { border: none; border-radius: 12px; padding: 9px 12px; background: #6750a4; color: #fff; font: 700 13px 'Google Sans', 'Inter', sans-serif; cursor: pointer; white-space: nowrap; }
+.admin-sofia-hint button:disabled { opacity: 0.6; }
+#admin-backdrop.from-sofia .admin-person-head button,
+#admin-backdrop.from-sofia .admin-email-row button,
+#admin-backdrop.from-sofia .admin-add-email-row,
+#admin-backdrop.from-sofia .admin-new-person-row,
+#admin-backdrop.from-sofia .share-hint { display: none; }
+@media (min-width: 600px) {
+  .lib-grid-folders .lib-card-now { grid-column: span 2; }
+}

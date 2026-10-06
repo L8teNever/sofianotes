@@ -19,3 +19,9 @@ services:
       CLOUDFLARE_OCR_MODEL: ${CLOUDFLARE_OCR_MODEL:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       DEV_BYPASS_EMAIL: ${DEV_BYPASS_EMAIL:-}
+      # Abgleich mit der Sofia-App (Personen, Faecher, Stundenplan) - leer = aus
+      SOFIA_API_BASE: ${SOFIA_API_BASE:-}
+      SOFIA_TOKEN_FILE: ${SOFIA_TOKEN_FILE:-}
+      SOFIA_INTERNAL_TOKEN: ${SOFIA_INTERNAL_TOKEN:-}
+      SOFIA_ACT_AS: ${SOFIA_ACT_AS:-}
+      SOFIA_SYNC_SECONDS: ${SOFIA_SYNC_SECONDS:-120}

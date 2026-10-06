@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import cloudflare_ocr, db, goodnotes_export, media, shape_learning, spellcheck
+from . import cloudflare_ocr, db, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
@@ -44,6 +44,11 @@ async def on_startup() -> None:
     await shape_learning.init()
     if ADMIN_EMAIL:
         await db.ensure_admin(ADMIN_EMAIL)
+    if sofia_sync.enabled():
+        # Personen + Faecher laufend aus Sofia uebernehmen (internes Netz)
+        import asyncio
+
+        app.state.sofia_task = asyncio.create_task(sofia_sync.run_forever())
 
 
 @app.get("/api/health")
@@ -187,6 +192,27 @@ async def list_people() -> dict:
     return {"people": await db.people()}
 
 
+@app.get("/api/sofia/now")
+async def sofia_now(person: dict = Depends(get_current_person)) -> dict:
+    """Aktuelles/naechstes Fach laut Sofia-Stundenplan - fuer das Hervorheben des Ordners."""
+    return await sofia_sync.current_lesson(person["id"])
+
+
+@app.get("/api/sofia/status")
+async def sofia_status(_: dict = Depends(get_current_person)) -> dict:
+    return {"enabled": sofia_sync.enabled(), **sofia_sync.state}
+
+
+@app.post("/api/sofia/sync")
+async def sofia_sync_now(_: dict = Depends(require_admin)) -> dict:
+    return await sofia_sync.sync_once(force=True)
+
+
+def _people_from_sofia() -> None:
+    if sofia_sync.enabled():
+        raise HTTPException(status_code=409, detail="Personen kommen automatisch aus Sofia - dort aendern.")
+
+
 @app.get("/api/me")
 async def me(person: dict = Depends(get_current_person)) -> dict:
     return person
@@ -207,6 +233,7 @@ async def admin_list_people(_: dict = Depends(require_admin)) -> list[dict]:
 
 @app.post("/api/admin/people")
 async def admin_create_person(payload: PersonCreate, _: dict = Depends(require_admin)) -> dict:
+    _people_from_sofia()
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name fehlt.")
@@ -215,6 +242,7 @@ async def admin_create_person(payload: PersonCreate, _: dict = Depends(require_a
 
 @app.patch("/api/admin/people/{person_id}")
 async def admin_rename_person(person_id: str, payload: PersonCreate, _: dict = Depends(require_admin)) -> dict:
+    _people_from_sofia()
     ok = await db.rename_person(person_id, payload.name)
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
@@ -223,6 +251,7 @@ async def admin_rename_person(person_id: str, payload: PersonCreate, _: dict = D
 
 @app.delete("/api/admin/people/{person_id}")
 async def admin_delete_person(person_id: str, admin: dict = Depends(require_admin)) -> dict:
+    _people_from_sofia()
     if person_id == admin["id"]:
         raise HTTPException(status_code=400, detail="Die eigene Person kann nicht geloescht werden.")
     err = await db.delete_person(person_id)
@@ -235,6 +264,7 @@ async def admin_delete_person(person_id: str, admin: dict = Depends(require_admi
 
 @app.post("/api/admin/people/{person_id}/emails")
 async def admin_add_email(person_id: str, payload: EmailAdd, _: dict = Depends(require_admin)) -> dict:
+    _people_from_sofia()
     email = payload.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Ungueltige Mail-Adresse.")
@@ -246,6 +276,7 @@ async def admin_add_email(person_id: str, payload: EmailAdd, _: dict = Depends(r
 
 @app.delete("/api/admin/people/{person_id}/emails/{email}")
 async def admin_remove_email(person_id: str, email: str, _: dict = Depends(require_admin)) -> dict:
+    _people_from_sofia()
     await db.remove_person_email(person_id, email)
     return {"ok": True}
 

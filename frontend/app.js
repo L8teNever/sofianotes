@@ -8715,6 +8715,7 @@
     document.getElementById("btn-library-close").classList.toggle("hidden", !currentBoardId);
     if (!(opts && opts.fromHistory)) syncUrl(true);
     refreshLibrary();
+    startSofiaNow();
   }
 
   function hideLibrary(opts) {
@@ -8853,6 +8854,45 @@
     if (!window.SofiaOffline) return;
     SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache).catch(() => {});
   }
+  // ---- Sofia: aktuelles Fach aus dem Stundenplan ----------------------------
+  let sofiaNow = null;
+  let sofiaNowTimer = null;
+  async function refreshSofiaNow() {
+    try {
+      const r = await fetch("/api/sofia/now", { credentials: "same-origin" });
+      if (!r.ok) return;
+      const next = await r.json();
+      const changed = JSON.stringify(next) !== JSON.stringify(sofiaNow);
+      sofiaNow = next;
+      if (changed && !libraryBackdrop.classList.contains("hidden")) renderLibrary();
+    } catch (err) {
+      /* offline - Hervorhebung bleibt einfach weg */
+    }
+  }
+  function startSofiaNow() {
+    refreshSofiaNow();
+    clearInterval(sofiaNowTimer);
+    sofiaNowTimer = setInterval(() => {
+      if (!libraryBackdrop.classList.contains("hidden")) refreshSofiaNow();
+    }, 60000);
+  }
+  // Welcher Ordner leuchtet: das laufende Fach, sonst das naechste (in den naechsten 20 Min.)
+  function sofiaHighlight() {
+    if (!sofiaNow || !sofiaNow.enabled) return null;
+    const c = sofiaNow.current;
+    if (c && c.folderId) {
+      return { kind: "now", folderId: c.folderId, label: "Jetzt bis " + c.end + (c.room ? " · " + c.room : "") };
+    }
+    const n = sofiaNow.next;
+    if (n && n.folderId && n.start) {
+      const [h, m] = n.start.split(":").map(Number);
+      const d = new Date();
+      const mins = h * 60 + m - (d.getHours() * 60 + d.getMinutes());
+      if (mins >= 0 && mins <= 20) return { kind: "next", folderId: n.folderId, label: "Ab " + n.start + (n.room ? " · " + n.room : "") };
+    }
+    return null;
+  }
+
   function renderLibrary() {
     if (!libraryCache) return;
     const crumbs = document.getElementById("library-crumbs");
@@ -8886,8 +8926,14 @@
       return grid;
     };
     if (folders.length) {
+      // Fach, das laut Sofia-Stundenplan gerade dran ist (oder als Naechstes), steht vorne
+      const hl = atRoot && !searchQ ? sofiaHighlight() : null;
+      if (hl) {
+        const i = folders.findIndex((f) => f.id === hl.folderId);
+        if (i > 0) folders.unshift(folders.splice(i, 1)[0]);
+      }
       const grid = section("Ordner", folders.length, "lib-grid-folders");
-      for (const folder of folders) grid.appendChild(folderCard(folder));
+      for (const folder of folders) grid.appendChild(folderCard(folder, hl && hl.folderId === folder.id ? hl : null));
     }
     if (boards.length) {
       const grid = section("Blätter", boards.length, "lib-grid-boards");
@@ -8956,15 +9002,21 @@
     return new Date(ts * 1000).toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" });
   }
 
-  function libCard(kind, { icon, color, title, meta, starred, onOpen, onStar, menu }) {
+  function libCard(kind, { icon, color, title, meta, starred, onOpen, onStar, menu, now }) {
     const el = document.createElement("div");
-    el.className = "library-item lib-card lib-card-" + kind;
+    el.className = "library-item lib-card lib-card-" + kind + (now ? " lib-card-now" + (now.kind === "next" ? " is-next" : "") : "");
     el.setAttribute("role", "button");
     el.tabIndex = 0;
     el.appendChild(libRowIcon(icon, color));
     el.insertAdjacentHTML("beforeend", `<div class="lib-row-text"><strong></strong><span class="meta"></span></div>`);
     el.querySelector("strong").textContent = title;
-    el.querySelector(".meta").textContent = meta;
+    el.querySelector(".meta").textContent = now ? now.label : meta;
+    if (now) {
+      const chip = document.createElement("span");
+      chip.className = "lib-now-chip";
+      chip.textContent = now.kind === "next" ? "Als Nächstes" : "Jetzt";
+      el.querySelector(".lib-row-text").prepend(chip);
+    }
     el.addEventListener("click", onOpen);
     el.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && e.target === el) onOpen();
@@ -8978,8 +9030,9 @@
     return el;
   }
 
-  function folderCard(folder) {
+  function folderCard(folder, now) {
     return libCard("folder", {
+      now,
       icon: "folder",
       color: folder.color,
       title: folder.name,
@@ -9570,6 +9623,51 @@
     if (!isAdmin) return;
     adminBackdrop.classList.remove("hidden");
     loadAdminPeople();
+    syncSofiaAdminHint();
+  }
+  // Kommen die Personen aus Sofia, ist hier nur Ansehen + "jetzt abgleichen" moeglich
+  async function syncSofiaAdminHint() {
+    let st = null;
+    try {
+      st = await api("/api/sofia/status");
+    } catch (err) {
+      st = null;
+    }
+    const on = !!(st && st.enabled);
+    adminBackdrop.classList.toggle("from-sofia", on);
+    let hint = document.getElementById("admin-sofia-hint");
+    if (!on) {
+      if (hint) hint.remove();
+      return;
+    }
+    if (!hint) {
+      hint = document.createElement("div");
+      hint.id = "admin-sofia-hint";
+      hint.className = "admin-sofia-hint";
+      hint.innerHTML = '<span class="material-symbols-rounded">sync</span><div><strong>Personen kommen aus Sofia</strong><small></small></div><button type="button">Jetzt abgleichen</button>';
+      adminPeopleListEl.parentElement.insertBefore(hint, adminPeopleListEl);
+      hint.querySelector("button").addEventListener("click", async (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        b.textContent = "Gleiche ab…";
+        try {
+          await api("/api/sofia/sync", { method: "POST" });
+          await loadAdminPeople();
+          await refreshPeople();
+          libMem.clear();
+          refreshLibrary();
+        } catch (err) {
+          showToast("Abgleich mit Sofia hat nicht geklappt");
+        }
+        b.disabled = false;
+        b.textContent = "Jetzt abgleichen";
+        syncSofiaAdminHint();
+      });
+    }
+    const when = st.lastSync ? new Date(st.lastSync * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : "noch nie";
+    hint.querySelector("small").textContent = st.lastError
+      ? "Letzter Versuch fehlgeschlagen: " + st.lastError
+      : "Neue Personen und Fächer in Sofia erscheinen hier automatisch · zuletzt " + when + " · " + (st.people || 0) + " Personen, " + (st.subjects || 0) + " Fächer";
   }
   function closeAdminPanel() {
     adminBackdrop.classList.add("hidden");

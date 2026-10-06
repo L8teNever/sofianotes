@@ -40,6 +40,13 @@ async def get_current_person(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Keine Cloudflare-Access-Anmeldung gefunden.")
     person = await db.person_by_email(email)
     if person is None:
+        # vielleicht gerade erst in Sofia angelegt: einmal abgleichen und nochmal schauen
+        from . import sofia_sync
+
+        if sofia_sync.enabled():
+            await sofia_sync.sync_once()
+            person = await db.person_by_email(email)
+    if person is None:
         raise HTTPException(
             status_code=403,
             detail=f"Kein Zugriff fuer {email}. Ein Admin muss diese Mail-Adresse erst einer Person zuordnen.",

@@ -141,6 +141,37 @@ die passenden Pfade + `CACHE_NAME` in `frontend/service-worker.js`) um eins
 erhoehen. Das erzeugt eine neue URL, die zwangslaeufig frisch vom Origin
 geholt wird, ganz ohne dass ein Cache irgendwo explizit geleert werden muss.
 
+## Anbindung an Sofia (optional)
+
+Laufen sofianotes und die Sofia-App auf demselben Server, kann sofianotes Sofia im
+internen Docker-Netz fragen (gleicher Weg wie der Sofia-MCP-Dienst: `X-Internal-Token`).
+
+- **Personen** kommen dann aus Sofia, inklusive aller Mail-Adressen. Neue Sofia-Personen
+  erscheinen nach spätestens 2 Minuten, bei der ersten Anmeldung sofort. Personen ohne
+  Sofia-Gegenstück werden nur ausgeblendet, ihre Blätter bleiben erhalten.
+- **Fächer**: Für jedes Fach, das eine Person in Sofia sieht, gibt es automatisch einen
+  Ordner (Umbenennungen ziehen nach, ein gelöschtes Fach lässt den Ordner stehen).
+- **Stundenplan**: Der Ordner des Fachs, das gerade dran ist (oder in 20 Min. beginnt),
+  steht in der Bibliothek vorne und ist hervorgehoben.
+
+Beispiel `docker-compose.override.yml` neben `docker-compose.yml` (nicht eingecheckt):
+
+```yaml
+services:
+  sofianotes:
+    environment:
+      SOFIA_API_BASE: http://sofia-kulbarts:8000/api/v1
+      SOFIA_TOKEN_FILE: /sofia-data/internal_service_token.txt
+      SOFIA_ACT_AS: admin@example.com
+    volumes:
+      - /opt/stacks/sofia-kulbarts/data/internal_service_token.txt:/sofia-data/internal_service_token.txt:ro
+    networks: [default, sofia]
+networks:
+  sofia:
+    external: true
+    name: sofia-kulbarts_default
+```
+
 ## Was bewusst fehlt
 
 Mehrere Boards, Undo/Redo, Nutzer-Accounts/Login, Formen-Werkzeuge — laut

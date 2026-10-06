@@ -140,6 +140,15 @@ def _init_sync() -> None:
         _conn.execute(f"ALTER TABLE folders ADD COLUMN color TEXT DEFAULT '{DEFAULT_FOLDER_COLOR}'")
     if "starred" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    if "sofia_subject_id" not in folder_cols:
+        _conn.execute("ALTER TABLE folders ADD COLUMN sofia_subject_id INTEGER")
+    people_cols = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
+    if "sofia_user_id" not in people_cols:
+        _conn.execute("ALTER TABLE people ADD COLUMN sofia_user_id INTEGER")
+    if "active" not in people_cols:
+        _conn.execute("ALTER TABLE people ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+    if "sofia_email" not in people_cols:
+        _conn.execute("ALTER TABLE people ADD COLUMN sofia_email TEXT")
     placement_cols = {row[1] for row in _conn.execute("PRAGMA table_info(placements)").fetchall()}
     if "starred" not in placement_cols:
         _conn.execute("ALTER TABLE placements ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
@@ -395,7 +404,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     folders = []
     cur = _conn.execute(
         """
-        SELECT id, parent_id, name, sort_order, color, starred FROM folders
+        SELECT id, parent_id, name, sort_order, color, starred, sofia_subject_id FROM folders
         WHERE person_id = ? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id = ?)
         ORDER BY starred DESC, sort_order ASC, name COLLATE NOCASE ASC
         """,
@@ -410,6 +419,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
                 "sortOrder": row[3],
                 "color": row[4] or DEFAULT_FOLDER_COLOR,
                 "starred": bool(row[5]),
+                "sofiaSubjectId": row[6],
             }
         )
     boards = []
@@ -695,9 +705,9 @@ def _star_folder_sync(person_id: str, folder_id: str, starred: bool) -> bool:
 
 def _people_sync() -> list[dict[str, Any]]:
     rows = _conn.execute(
-        "SELECT id, name, is_admin FROM people ORDER BY created_at ASC, rowid ASC"
+        "SELECT id, name, is_admin, sofia_user_id FROM people WHERE active = 1 ORDER BY created_at ASC, rowid ASC"
     ).fetchall()
-    return [{"id": r[0], "name": r[1], "isAdmin": bool(r[2])} for r in rows]
+    return [{"id": r[0], "name": r[1], "isAdmin": bool(r[2]), "fromSofia": r[3] is not None} for r in rows]
 
 
 def _people_admin_sync() -> list[dict[str, Any]]:
@@ -717,7 +727,7 @@ def _person_by_email_sync(email: str) -> dict[str, Any] | None:
         """
         SELECT p.id, p.name, p.is_admin
         FROM person_emails pe JOIN people p ON p.id = pe.person_id
-        WHERE pe.email = ?
+        WHERE pe.email = ? AND p.active = 1
         """,
         (email.strip().lower(),),
     ).fetchone()
@@ -808,6 +818,163 @@ def _remove_person_email_sync(person_id: str, email: str) -> None:
         (email.strip().lower(), person_id),
     )
     _conn.commit()
+
+
+# ---- Abgleich mit Sofia ------------------------------------------------------
+SOFIA_ADMIN_ROLES = {"super_admin", "admin"}
+
+
+def _soft_color(hex_color: str | None) -> str:
+    """Sofia-Fachfarben koennen kraeftig sein (#00ff00); Ordner-Kacheln brauchen eine
+    helle Flaeche. Kraeftige Farben werden aufgehellt, Pastelltoene bleiben."""
+    h = (hex_color or "").strip().lstrip("#")
+    if len(h) != 6:
+        return DEFAULT_FOLDER_COLOR
+    try:
+        r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return DEFAULT_FOLDER_COLOR
+    lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+    if lum >= 0.82:
+        return "#" + h.lower()
+    k = 0.72  # Richtung Weiss
+    r, g, b = (round(c + (255 - c) * k) for c in (r, g, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _apply_sofia_sync(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Uebernimmt Personen (mit allen Mail-Adressen) und Faecher aus Sofia.
+
+    - Jede Sofia-Person bekommt genau eine Person hier (gemerkt ueber sofia_user_id).
+      Beim ersten Abgleich wird eine vorhandene Person ueber ihre Mail-Adresse
+      zugeordnet, damit ihre Blaetter und Ordner erhalten bleiben.
+    - Personen, die es in Sofia nicht (mehr) gibt, werden nur ausgeblendet
+      (active = 0), nie geloescht - ihre Blaetter bleiben in der Datenbank.
+    - Fuer jedes Fach, das die Person in Sofia sieht, gibt es oben einen Ordner
+      (gemerkt ueber sofia_subject_id). Umbenennungen in Sofia ziehen nach, ein
+      geloeschtes Fach laesst den Ordner samt Inhalt stehen.
+    """
+    users = snapshot.get("users") or []
+    subjects = snapshot.get("subjects") or []
+    now = time.time()
+    linked: set[str] = set()
+    created_people = 0
+    created_folders = 0
+    for u in users:
+        uid = u.get("id")
+        if uid is None:
+            continue
+        primary = str(u.get("email") or "").strip().lower()
+        emails = [primary] + [str(a).strip().lower() for a in (u.get("aliases") or [])]
+        emails = [e for i, e in enumerate(emails) if e and "@" in e and e not in emails[:i]]
+        name = (u.get("display_name") or "").strip() or (primary.split("@")[0] if primary else "Person")
+        row = _conn.execute("SELECT id FROM people WHERE sofia_user_id = ?", (uid,)).fetchone()
+        pid = row[0] if row else None
+        if pid is None and primary:
+            # erste Zuordnung: vorhandene, noch freie Person mit der Hauptadresse uebernehmen
+            row = _conn.execute(
+                """SELECT p.id FROM person_emails pe JOIN people p ON p.id = pe.person_id
+                   WHERE pe.email = ? AND p.sofia_user_id IS NULL""",
+                (primary,),
+            ).fetchone()
+            pid = row[0] if row else None
+        if pid is None:
+            pid = str(uuid.uuid4())
+            _conn.execute(
+                "INSERT INTO people (id, name, is_admin, created_at, sofia_user_id, active, sofia_email) VALUES (?, ?, 0, ?, ?, 1, ?)",
+                (pid, name, now, uid, primary),
+            )
+            created_people += 1
+        is_admin = 1 if str(u.get("role") or "") in SOFIA_ADMIN_ROLES else None
+        _conn.execute(
+            "UPDATE people SET name = ?, sofia_user_id = ?, active = 1, sofia_email = ?, is_admin = COALESCE(?, is_admin) WHERE id = ?",
+            (name, uid, primary, is_admin, pid),
+        )
+        for e in emails:
+            _conn.execute("DELETE FROM person_emails WHERE email = ? AND person_id != ?", (e, pid))
+            _conn.execute("INSERT OR IGNORE INTO person_emails (email, person_id) VALUES (?, ?)", (e, pid))
+        if emails:
+            marks = ",".join("?" for _ in emails)
+            _conn.execute(f"DELETE FROM person_emails WHERE person_id = ? AND email NOT IN ({marks})", (pid, *emails))
+        linked.add(pid)
+
+        # Faecher -> Ordner
+        cls = u.get("class_id")
+        visible = [
+            s
+            for s in subjects
+            if s.get("is_global") or s.get("class_id") is None or (cls is not None and s.get("class_id") == cls)
+        ]
+        for s in visible:
+            sid = s.get("id")
+            sname = str(s.get("name") or s.get("short_name") or "").strip()
+            if sid is None or not sname:
+                continue
+            color = _soft_color(s.get("color"))
+            row = _conn.execute(
+                "SELECT id, name FROM folders WHERE person_id = ? AND sofia_subject_id = ?", (pid, sid)
+            ).fetchone()
+            if row:
+                if row[1] != sname:
+                    _conn.execute("UPDATE folders SET name = ? WHERE id = ?", (sname, row[0]))
+                continue
+            same = _conn.execute(
+                """SELECT id FROM folders WHERE person_id = ? AND parent_id IS NULL
+                   AND sofia_subject_id IS NULL AND lower(name) = lower(?)""",
+                (pid, sname),
+            ).fetchone()
+            if same:
+                _conn.execute("UPDATE folders SET sofia_subject_id = ? WHERE id = ?", (sid, same[0]))
+                continue
+            _conn.execute(
+                """INSERT INTO folders (id, person_id, parent_id, name, sort_order, created_at, color, starred, sofia_subject_id)
+                   VALUES (?, ?, NULL, ?, 0, ?, ?, 0, ?)""",
+                (str(uuid.uuid4()), pid, sname, now, color, sid),
+            )
+            created_folders += 1
+    if users:
+        # nur ausblenden, wenn Sofia wirklich eine Liste geliefert hat
+        marks = ",".join("?" for _ in linked) or "''"
+        gone = [
+            r[0]
+            for r in _conn.execute(f"SELECT id FROM people WHERE active = 1 AND id NOT IN ({marks})", tuple(linked)).fetchall()
+        ]
+        for pid in gone:
+            _conn.execute("UPDATE people SET active = 0 WHERE id = ?", (pid,))
+            _conn.execute("DELETE FROM person_emails WHERE person_id = ?", (pid,))
+    known = {s.get("id") for s in subjects if s.get("id") is not None}
+    if subjects:
+        for (fid, ssid) in _conn.execute("SELECT id, sofia_subject_id FROM folders WHERE sofia_subject_id IS NOT NULL").fetchall():
+            if ssid not in known:
+                _conn.execute("UPDATE folders SET sofia_subject_id = NULL WHERE id = ?", (fid,))
+    _conn.commit()
+    _refresh_person_cache_sync()
+    return {"people": len(linked), "newPeople": created_people, "newFolders": created_folders}
+
+
+def _sofia_person_sync(person_id: str) -> dict[str, Any] | None:
+    row = _conn.execute(
+        "SELECT sofia_user_id, sofia_email FROM people WHERE id = ?", (person_id,)
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    folders = {
+        r[0]: r[1]
+        for r in _conn.execute(
+            "SELECT sofia_subject_id, id FROM folders WHERE person_id = ? AND sofia_subject_id IS NOT NULL", (person_id,)
+        ).fetchall()
+    }
+    return {"sofiaUserId": row[0], "email": row[1], "folders": folders}
+
+
+async def apply_sofia_sync(snapshot: dict[str, Any]) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _apply_sofia_sync, snapshot)
+
+
+async def sofia_person(person_id: str) -> dict[str, Any] | None:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _sofia_person_sync, person_id)
 
 
 async def people() -> list[dict[str, Any]]:
