@@ -470,3 +470,98 @@ test("fraction layout becomes division", () => {
   assert.equal(layout.text, "(1)/(2)");
   assert.equal(SofiaInk.solveMath(layout.text).text, "0.5");
 });
+
+// ---- Handschrift darf nie als Durchkritzeln zaehlen ------------------------
+function arc(cx, cy, rx, ry, a0, a1, n = 40) {
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + ((a1 - a0) * i) / n;
+    out.push([cx + rx * Math.cos(a), cy + ry * Math.sin(a)]);
+  }
+  return out;
+}
+function path(...parts) {
+  const corners = [];
+  for (const p of parts) for (const c of p) corners.push(c);
+  return dense(corners);
+}
+function shift(parts, dx, dy = 0) {
+  return parts.map((p) => p.map(([x, y]) => [x + dx, y + dy]));
+}
+const D = Math.PI / 180;
+// Buchstaben als Teilstuecke (y nach unten, x-Hoehe ~20 px)
+const L = {
+  a: [arc(10, 10, 10, 10, -30 * D, -390 * D), [[20, 0], [20, 20], [24, 22]]],
+  g: [arc(10, 10, 10, 10, -30 * D, -390 * D), [[20, 0], [20, 34]], arc(12, 34, 8, 8, 0, 200 * D)],
+  b: [[[2, -18], [2, 20]], arc(11, 11, 9, 9, 180 * D, -180 * D)],
+  e: [[[0, 10], [20, 10]], arc(10, 10, 10, 10, 0, -300 * D)],
+  u: [[[0, 0], [0, 14]], arc(9, 14, 9, 6, 180 * D, 0), [[18, 14], [18, 0], [18, 20]]],
+  f: [[[6, 34], [6, -10]], arc(12, -10, 6, 6, 180 * D, 360 * D), [[0, 6], [14, 6]]],
+  s: [arc(10, 5, 8, 5, -20 * D, -270 * D), arc(10, 15, 8, 5, -90 * D, 160 * D)],
+  n: [[[0, 20], [0, 4]], arc(9, 6, 9, 6, 180 * D, 360 * D), [[18, 6], [18, 20]]],
+  8: [arc(10, 6, 7, 6, 90 * D, -270 * D), arc(10, 20, 9, 8, -90 * D, 270 * D)],
+};
+function word(letters, gap = 4) {
+  let x = 0;
+  const parts = [];
+  for (const ch of letters) {
+    parts.push(...shift(L[ch], x));
+    x += 22 + gap;
+  }
+  return path(...parts);
+}
+
+test("single handwritten letters (a g b e u f s 8) are never scribbles", () => {
+  for (const ch of Object.keys(L)) {
+    if (ch === "n") continue;
+    const pts = path(...L[ch]);
+    assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), false, "Buchstabe " + ch);
+  }
+});
+
+test("cursive words like 'ufgabe', 'gegeben', 'Aufgaben' are never scribbles", () => {
+  for (const w of ["ufgabe", "gegeben", "abgeben", "ee", "gg", "bb", "ga", "be", "8888"]) {
+    assert.equal(SofiaInk.looksLikeStrikeGesture(word(w), "pen"), false, "Wort " + w);
+  }
+});
+
+test("letters written small or large still are not scribbles", () => {
+  for (const k of [0.4, 0.7, 1.6, 3]) {
+    for (const ch of ["g", "b", "a", "e", "8"]) {
+      const pts = path(...L[ch]).map((p) => pt(p.x * k, p.y * k));
+      assert.equal(SofiaInk.looksLikeStrikeGesture(pts, "pen"), false, ch + " x" + k);
+    }
+  }
+});
+
+test("typical quick scribbles still erase", () => {
+  const zig = dense([[0, 0], [70, 6], [3, 12], [72, 17], [5, 23], [70, 30]]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(zig, "pen"), true, "Zickzack");
+  const diag = dense([[0, 0], [50, 40], [8, 4], [56, 44], [10, 10], [60, 50]]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(diag, "pen"), true, "schraeg");
+  // flache Schlaufen hin und her (wie schnelles "eeee" in die Breite gezogen)
+  const loops = [];
+  for (let k = 0; k < 3; k++) loops.push(...arc(30, 10 + k * 5, 30, 5, Math.PI, Math.PI * 3, 30));
+  assert.equal(SofiaInk.looksLikeStrikeGesture(dense(loops), "pen"), true, "flache Schlaufen");
+  // wackelige Hand
+  const wob = dense([[0, 0], [64, 5], [4, 9], [60, 16], [-2, 20], [63, 26], [2, 31]]).map((p, i) => pt(p.x + Math.sin(i * 0.7) * 1.5, p.y + Math.cos(i * 0.9) * 1.5));
+  assert.equal(SofiaInk.looksLikeStrikeGesture(wob, "pen"), true, "wackelig");
+});
+
+test("scribble over written ink hits it, writing next to it does not", () => {
+  const ink = word("ga"); // ~48 px breit, 0..42 hoch
+  const scr = dense([[-4, 2], [52, 6], [-2, 12], [54, 18], [0, 24], [52, 30], [2, 36]]);
+  assert.equal(SofiaInk.looksLikeStrikeGesture(scr, "pen"), true);
+  assert.equal(SofiaInk.scribbleHitsStroke(scr, ink, 6), true, "Kritzel ueber Wort");
+  // grosses M direkt daneben (sieht aus wie Zickzack), Bounding-Boxen beruehren sich
+  const M = dense([[50, 30], [56, -4], [66, 26], [76, -4], [82, 30]]);
+  assert.equal(SofiaInk.scribbleHitsStroke(M, ink, 6), false, "M daneben");
+  // naechster Buchstabe, der den vorigen leicht ueberlappt (Schreibschrift-Anschluss)
+  const next = path(...shift(L.b, 40));
+  assert.equal(SofiaInk.scribbleHitsStroke(next, ink, 6), false, "b angehaengt");
+  // i-Punkt neben dem Buchstaben wird nicht weggekritzelt, ein Punkt unter dem Gekritzel schon
+  const dotFar = [pt(120, 0)];
+  assert.equal(SofiaInk.scribbleHitsStroke(scr, dotFar, 6), false);
+  const dotUnder = [pt(20, 12.5)];
+  assert.equal(SofiaInk.scribbleHitsStroke(scr, dotUnder, 6), true);
+});

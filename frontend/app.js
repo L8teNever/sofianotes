@@ -7428,23 +7428,7 @@
   // Haelfte ihrer Punkte im Gekritzel-Bereich und tatsaechlich beruehrt) - lange Striche,
   // die nur am Rand gestreift werden, bleiben.
   function scribbleCovers(pts, stroke) {
-    const b = makeBBox(pts);
-    const pad = 6 + (stroke.size || 6) / 2;
-    const sp = stroke.points || [];
-    if (!sp.length) return false;
-    let inside = 0;
-    for (const p of sp) {
-      if (p.x >= b.minX - pad && p.x <= b.maxX + pad && p.y >= b.minY - pad && p.y <= b.maxY + pad) inside++;
-    }
-    if (inside / sp.length < 0.5) return false;
-    const hitR = 10 + (stroke.size || 6) * 0.65;
-    for (const q of pts) {
-      for (let j = 0; j < sp.length; j++) {
-        const d = j ? distPointToSeg(q, sp[j - 1], sp[j]) : Math.hypot(q.x - sp[0].x, q.y - sp[0].y);
-        if (d <= hitR) return true;
-      }
-    }
-    return false;
+    return SofiaInk.scribbleHitsStroke(pts, stroke.points, stroke.size);
   }
 
   function findStruckStrokes(pts) {

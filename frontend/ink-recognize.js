@@ -135,28 +135,100 @@
     const extent = Math.max(...proj) - Math.min(...proj);
     if (extent < 14) return null;
     const minSwing = Math.max(6, extent * 0.3);
+    // Zuege zwischen den Umkehrpunkten sammeln: Beim Kritzeln sind das lange, fast gerade
+    // Hin-und-her-Striche ueber die ganze Breite. Buchstaben wie g, b, a, e, 8 kehren zwar
+    // auch mehrmals um, aber in Boegen und unterschiedlich langen Stuecken.
+    const runs = [];
     let reversals = 0;
     let dir = 0;
     let anchor = proj[0];
-    for (const v of proj) {
+    let anchorIdx = 0;
+    let runStart = 0;
+    for (let i = 0; i < proj.length; i++) {
+      const v = proj[i];
       if (dir >= 0 && v < anchor - minSwing) {
-        if (dir > 0) reversals++;
+        if (dir > 0) {
+          reversals++;
+          runs.push([runStart, anchorIdx]);
+          runStart = anchorIdx;
+        }
         dir = -1;
         anchor = v;
+        anchorIdx = i;
       } else if (dir <= 0 && v > anchor + minSwing) {
-        if (dir < 0) reversals++;
+        if (dir < 0) {
+          reversals++;
+          runs.push([runStart, anchorIdx]);
+          runStart = anchorIdx;
+        }
         dir = 1;
         anchor = v;
+        anchorIdx = i;
       } else if ((dir > 0 && v > anchor) || (dir < 0 && v < anchor)) {
         anchor = v;
+        anchorIdx = i;
       }
     }
-    return { reversals, density: path / extent, extent };
+    if (Math.abs(proj[proj.length - 1] - proj[runStart]) >= minSwing) runs.push([runStart, proj.length - 1]);
+    let good = 0;
+    for (const [a, b] of runs) {
+      const chord = Math.abs(proj[b] - proj[a]);
+      let len = 0;
+      for (let i = a + 1; i <= b; i++) len += hypot(even[i].x - even[i - 1].x, even[i].y - even[i - 1].y);
+      if (chord >= extent * 0.5 && len > 0 && chord / len >= 0.78) good++;
+    }
+    return { reversals, density: path / extent, extent, runs: runs.length, good };
   }
 
   function looksLikeScribble(pts) {
     const info = scribbleInfo(pts);
-    return !!info && info.reversals >= 3 && info.density >= 3;
+    return !!info && info.reversals >= 3 && info.density >= 3 && info.good >= 4 && info.good >= info.runs * 0.75;
+  }
+
+  function segsCross(a, b, c, d) {
+    const o = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    const d1 = o(c, d, a);
+    const d2 = o(c, d, b);
+    const d3 = o(a, b, c);
+    const d4 = o(a, b, d);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  }
+
+  // Trifft ein Kritzel-Strich diese Tinte wirklich? Er muss sie ueberdecken (der Grossteil
+  // liegt in seiner Flaeche) UND mehrfach darueber hinweggehen. Beim normalen Schreiben
+  // kreuzt ein neuer Buchstabe (auch ein M oder W, das wie ein Zickzack aussieht) die
+  // Buchstaben daneben praktisch nie mehrfach.
+  function scribbleHitsStroke(scribble, target, size) {
+    const sp = target || [];
+    if (!scribble || scribble.length < 2 || !sp.length) return false;
+    const sz = size || 6;
+    const b = bboxOfPoints(scribble);
+    const pad = 4 + sz / 2;
+    let inside = 0;
+    for (const p of sp) {
+      if (p.x >= b.minX - pad && p.x <= b.maxX + pad && p.y >= b.minY - pad && p.y <= b.maxY + pad) inside++;
+    }
+    if (inside / sp.length < 0.6) return false;
+    const tb = bboxOfPoints(sp);
+    const small = Math.hypot(tb.maxX - tb.minX, tb.maxY - tb.minY) < Math.max(16, sz * 3);
+    const sc = resampleEven(scribble, 3);
+    if (small) {
+      // Punkt / Mini-Strich: es reicht, wenn das Gekritzel direkt darueber geht
+      const hitR = 4 + sz * 0.6;
+      for (const q of sc) for (const p of sp) if (hypot(q.x - p.x, q.y - p.y) <= hitR) return true;
+      return false;
+    }
+    const tp = sp.length > 2 ? resampleEven(sp, 3) : sp;
+    let crossings = 0;
+    for (let i = 1; i < sc.length; i++) {
+      for (let j = 1; j < tp.length; j++) {
+        if (segsCross(sc[i - 1], sc[i], tp[j - 1], tp[j])) {
+          crossings++;
+          if (crossings >= 3) return true;
+        }
+      }
+    }
+    return false;
   }
 
   function looksLikeStrikeGesture(pts, pointerType) {
@@ -1859,6 +1931,7 @@
     looksLikeStrikeGesture,
     looksLikeScribble,
     scribbleInfo,
+    scribbleHitsStroke,
     bboxOfPoints,
     rasterizeGlyph,
     knnPredict,
