@@ -1457,3 +1457,24 @@ button {
   border-color: #6750a4;
   box-shadow: 0 0 0 2px #fff inset;
 }
+
+/* Texteingabe direkt auf dem Blatt (Textfelder und Tabellenzellen) */
+.text-editor {
+  position: fixed;
+  z-index: 70;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: 1.5px dashed rgba(26, 115, 232, 0.7);
+  outline-offset: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.55);
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  caret-color: #1a73e8;
+}
+.text-editor.hidden { display: none; }

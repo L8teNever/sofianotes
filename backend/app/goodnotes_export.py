@@ -56,6 +56,27 @@ def _hex_color(hex_color: str, alpha: float) -> Color:
     return Color(r, g, b, alpha=alpha)
 
 
+def _wrap_pdf_text(text: str, font: str, size: float, width: float | None) -> list[str]:
+    """Bricht Text wie im Browser um: Zeilenumbrueche bleiben, sonst wortweise bis zur Breite."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    out: list[str] = []
+    for para in str(text).split("\n"):
+        if not width:
+            out.append(para)
+            continue
+        line = ""
+        for word in para.split(" "):
+            candidate = f"{line} {word}" if line else word
+            if not line or stringWidth(candidate, font, size) <= width:
+                line = candidate
+            else:
+                out.append(line)
+                line = word
+        out.append(line)
+    return out or [""]
+
+
 def _bbox(strokes: list[dict[str, Any]]) -> tuple[float, float, float, float]:
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
@@ -197,11 +218,58 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
         except Exception:  # noqa: BLE001
             return
 
-    # Images under marker under ink.
+    def _draw_table(stroke: dict[str, Any]) -> None:
+        pts = stroke.get("points") or []
+        if len(pts) < 2:
+            return
+        extra = stroke.get("extra") or {}
+        x0 = min(float(pts[0]["x"]), float(pts[1]["x"]))
+        y0 = min(float(pts[0]["y"]), float(pts[1]["y"]))
+        w = abs(float(pts[1]["x"]) - float(pts[0]["x"]))
+        h = abs(float(pts[1]["y"]) - float(pts[0]["y"]))
+        cols = max(1, int(extra.get("cols") or 1))
+        rows = max(1, int(extra.get("rows") or 1))
+        cw = extra.get("cw") if isinstance(extra.get("cw"), list) and len(extra["cw"]) == cols else [1.0] * cols
+        rh = extra.get("rh") if isinstance(extra.get("rh"), list) and len(extra["rh"]) == rows else [1.0] * rows
+        sw = float(sum(cw)) or 1.0
+        sh = float(sum(rh)) or 1.0
+        xs = [x0]
+        for v in cw:
+            xs.append(xs[-1] + float(v) / sw * w)
+        ys = [y0]
+        for v in rh:
+            ys.append(ys[-1] + float(v) / sh * h)
+        size = float(stroke.get("size") or 20)
+        c.setFillColor(Color(1, 1, 1, alpha=0.92))
+        c.rect(tx(x0), ty(y0 + h), w * scale, h * scale, stroke=0, fill=1)
+        c.setStrokeColor(_hex_color(str(stroke.get("color") or "#5f6368"), 1.0))
+        c.setLineWidth(max(0.4, size * 0.05 * scale))
+        for x in xs:
+            c.line(tx(x), ty(y0), tx(x), ty(y0 + h))
+        for y in ys:
+            c.line(tx(x0), ty(y), tx(x0 + w), ty(y))
+        cells = extra.get("cells") or {}
+        font_size = max(5.0, size * scale)
+        pad = size * 0.4
+        c.setFillColor(HexColor("#1E1F22"))
+        c.setFont("Helvetica", font_size)
+        for key, text in cells.items():
+            try:
+                r, col = (int(v) for v in str(key).split(","))
+            except ValueError:
+                continue
+            if not text or r >= rows or col >= cols:
+                continue
+            lines = _wrap_pdf_text(str(text), "Helvetica", font_size, max(4.0, (xs[col + 1] - xs[col] - pad * 2) * scale))
+            for i, line in enumerate(lines):
+                c.drawString(tx(xs[col] + pad), ty(ys[r] + pad + size * 0.95) - i * font_size * 1.3, line)
+
+    # Images under tables under marker under ink.
     ordered = (
         [s for s in strokes if s.get("tool") == "image"]
+        + [s for s in strokes if s.get("tool") == "table"]
         + [s for s in strokes if s.get("tool") == "marker"]
-        + [s for s in strokes if s.get("tool") not in ("image", "marker")]
+        + [s for s in strokes if s.get("tool") not in ("image", "table", "marker")]
     )
     for stroke in ordered:
         pts = stroke.get("points") or []
@@ -222,12 +290,22 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
             r = max(0.4, (width * scale) / 2)
             c.circle(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), r, stroke=0, fill=1)
             continue
+        if stroke.get("tool") == "table":
+            _draw_table(stroke)
+            continue
         if stroke.get("tool") == "text":
             label = str(pts[0].get("text") or "")
             if label:
+                extra = stroke.get("extra") or {}
+                box = bool(extra.get("box"))
+                font = "Helvetica" if box else "Helvetica-Bold"
+                font_size = max(6.0, width * scale)
                 c.setFillColor(_hex_color(str(stroke.get("color") or "#0b57d0"), 1.0))
-                c.setFont("Helvetica-Bold", max(8.0, width * scale))
-                c.drawString(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), label)
+                c.setFont(font, font_size)
+                wrap = float(extra["width"]) * scale if box and extra.get("width") else None
+                lines = _wrap_pdf_text(label, font, font_size, wrap) if box else [label]
+                for i, line in enumerate(lines):
+                    c.drawString(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])) - i * font_size * 1.3, line)
             continue
         path = c.beginPath()
         if _looks_like_polygon(pts):

@@ -49,6 +49,34 @@ class GoodnotesExportTests(unittest.TestCase):
         self.assertTrue(data.startswith(b"%PDF"))
         self.assertGreater(len(data), 200)
 
+    def test_pdf_with_text_box_and_table(self):
+        strokes = [
+            {
+                "id": "t",
+                "tool": "text",
+                "color": "#1E1F22",
+                "size": 24,
+                "points": [{"x": 0, "y": 0, "p": 1, "text": "Hallo\nzweite Zeile mit Umbruch"}, {"x": 120, "y": -22, "p": 1}, {"x": 0, "y": 40, "p": 1}],
+                "extra": {"box": True, "width": 120},
+            },
+            {
+                "id": "tab",
+                "tool": "table",
+                "color": "#5f6368",
+                "size": 20,
+                "points": [{"x": 0, "y": 100, "p": 1}, {"x": 300, "y": 192, "p": 1}],
+                "extra": {"rows": 2, "cols": 2, "cw": [1, 2], "rh": [1, 1], "cells": {"0,0": "Name", "1,1": "x", "9,9": "weg"}},
+            },
+        ]
+        data = build_pdf(strokes)
+        self.assertTrue(data.startswith(b"%PDF"))
+
+    def test_wrap_pdf_text(self):
+        lines = ge._wrap_pdf_text("eins zwei drei vier", "Helvetica", 10, 40)
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(" ".join(lines), "eins zwei drei vier")
+        self.assertEqual(ge._wrap_pdf_text("a\nb", "Helvetica", 10, None), ["a", "b"])
+
     def test_empty_board_pdf(self):
         data = build_pdf([])
         self.assertTrue(data.startswith(b"%PDF"))
