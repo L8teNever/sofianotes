@@ -1289,15 +1289,64 @@
     hideEraseAllMenu();
     hidePasteMenu();
     if (settingsBackdrop) settingsBackdrop.classList.remove("hidden");
+    showSettingsPage("main");
     if (window.SofiaUpdates && window.SofiaUpdates.refreshInfo) {
       window.SofiaUpdates.refreshInfo();
     }
   }
 
-  settingsToggleBtn.addEventListener("click", (e) => {
+  if (settingsToggleBtn) settingsToggleBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) hideSettings();
     else openSettings();
+  });
+
+  // Einstellungen: Startseite mit Bereichen, jeder Bereich als Unterseite
+  const SET_TITLES = { main: "Einstellungen" };
+  const GRID_NAMES = { graph: "Kariert", dots: "Punkte", lines: "Liniert", blank: "Blanko" };
+  const DOCK_NAMES = { top: "Oben", bottom: "Unten", left: "Links", right: "Rechts" };
+  function showSettingsPage(page) {
+    if (!settingsPopover) return;
+    settingsPopover.querySelectorAll(".set-page").forEach((el) => el.classList.toggle("hidden", el.dataset.page !== page));
+    const nav = settingsPopover.querySelector('.set-nav[data-go="' + page + '"]');
+    document.getElementById("settings-title").textContent = page === "main" ? SET_TITLES.main : nav ? nav.dataset.title : "";
+    document.getElementById("btn-settings-back")?.classList.toggle("hidden", page === "main");
+    settingsPopover.dataset.page = page;
+    syncSettingsSummary();
+  }
+  function syncSettingsSummary() {
+    const set = (id, t) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = t;
+    };
+    set("set-sum-paper", GRID_NAMES[gridStyle] || "Kariert");
+    const on = [];
+    if (shapeRecognitionEnabled) on.push("Formen");
+    if (mathSolveEnabled) on.push("Rechnungen");
+    if (fingerDrawEnabled) on.push("Finger zeichnet");
+    set("set-sum-write", on.length ? on.join(", ") + " an" : "Alles aus");
+    set("set-sum-bar", DOCK_NAMES[currentDock()] || "Unten");
+    document.querySelectorAll(".set-dlg .btn-dock-quick").forEach((b) => b.classList.toggle("active", b.dataset.pos === currentDock()));
+    const st = document.getElementById("settings-version-status-text");
+    set("set-sum-app", (document.getElementById("settings-version-label")?.textContent || "") + (st ? " · " + st.textContent : ""));
+  }
+  if (settingsPopover) {
+    settingsPopover.querySelectorAll(".set-nav").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showSettingsPage(b.dataset.go);
+      })
+    );
+    document.getElementById("btn-settings-back")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showSettingsPage("main");
+    });
+    settingsPopover.addEventListener("click", () => setTimeout(syncSettingsSummary, 0));
+  }
+  document.getElementById("canvas-menu-settings")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (typeof closeCanvasMenus === "function") closeCanvasMenus();
+    openSettings();
   });
   if (settingsCloseBtn) {
     settingsCloseBtn.addEventListener("click", (e) => {
@@ -2440,7 +2489,8 @@
     if (typing) return;
     if (e.key === "Escape" && settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) {
       e.preventDefault();
-      hideSettings();
+      if (settingsPopover && settingsPopover.dataset.page && settingsPopover.dataset.page !== "main") showSettingsPage("main");
+      else hideSettings();
       return;
     }
     if (meta && key === "z") {
@@ -8711,6 +8761,17 @@
       };
       setConnState("offline");
     }
+    renderLibrary();
+  }
+
+  // Zeichnet die Bibliothek aus libraryCache (ohne Netz) - so koennen Aenderungen sofort
+  // sichtbar werden und laufen im Hintergrund zum Server
+  function persistLibraryCache() {
+    if (!libraryCache || !window.SofiaOffline) return;
+    SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache).catch(() => {});
+  }
+  function renderLibrary() {
+    if (!libraryCache) return;
     const crumbs = document.getElementById("library-crumbs");
     const eyebrow = document.getElementById("library-person");
     const backBtn = document.getElementById("btn-library-home");
@@ -8836,14 +8897,24 @@
       meta: "Ordner",
       starred: folder.starred,
       onOpen: () => navigateToFolder(folder.id),
-      onStar: async () => {
-        folder.starred = !folder.starred;
-        await api("/api/folders/" + encodeURIComponent(folder.id) + "/star", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ starred: folder.starred }),
-        }).catch(() => {});
-        refreshLibrary();
+      onStar: () => {
+        const want = !folder.starred;
+        optimistic({
+          apply: () => {
+            folder.starred = want;
+            renderLibrary();
+          },
+          revert: () => {
+            folder.starred = !want;
+            renderLibrary();
+          },
+          request: () =>
+            api("/api/folders/" + encodeURIComponent(folder.id) + "/star", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ starred: want }),
+            }).then(persistLibraryCache),
+        });
       },
       menu: [
         { icon: "folder-open", label: "Öffnen", run: () => navigateToFolder(folder.id) },
@@ -8873,14 +8944,24 @@
       meta,
       starred: board.starred,
       onOpen: () => openBoard(board.id, board.title),
-      onStar: async () => {
-        board.starred = !board.starred;
-        await api("/api/boards/" + encodeURIComponent(board.id) + "/star", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ starred: board.starred }),
-        }).catch(() => {});
-        refreshLibrary();
+      onStar: () => {
+        const want = !board.starred;
+        optimistic({
+          apply: () => {
+            board.starred = want;
+            renderLibrary();
+          },
+          revert: () => {
+            board.starred = !want;
+            renderLibrary();
+          },
+          request: () =>
+            api("/api/boards/" + encodeURIComponent(board.id) + "/star", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ starred: want }),
+            }).then(persistLibraryCache),
+        });
       },
       menu,
     });
@@ -9016,6 +9097,41 @@
     else if (e.key === "Escape") closeNameSheet(null);
   });
 
+  // ---- Sofort umschalten, im Hintergrund speichern ---------------------------
+  // apply() aendert die Anzeige sofort. Lehnt der Server ab, springt revert() zurueck und
+  // ein kurzer Hinweis erscheint. Ohne Netz geht die Aenderung (falls moeglich) in die
+  // Warteschlange und wird spaeter nachgeholt.
+  let toastEl = null;
+  let toastTimer = null;
+  function showToast(text) {
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.className = "app-toast";
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = text;
+    toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2600);
+  }
+  async function optimistic({ apply, revert, request, offlineOp, failText }) {
+    apply();
+    try {
+      await request();
+      return true;
+    } catch (err) {
+      const status = Number(err && err.message);
+      if (!status && offlineOp) {
+        await enqueueOp(offlineOp);
+        setConnState("offline");
+        return true;
+      }
+      revert();
+      showToast(status ? failText || "Hat nicht geklappt – zurückgesetzt" : "Keine Verbindung – zurückgesetzt");
+      return false;
+    }
+  }
+
   // Bestaetigen (ersetzt window.confirm): Promise<boolean>
   const confirmScrim = document.getElementById("confirm-scrim");
   let confirmResolve = null;
@@ -9068,19 +9184,27 @@
     const res = await openNameSheet({ title: "Blatt umbenennen", label: "Titel", initial: board.title });
     if (res === null) return;
     const title = res.value.trim() || board.title;
-    if (title === board.title) return;
-    try {
-      await api("/api/boards/" + encodeURIComponent(board.id), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, title }),
-      });
-    } catch (err) {
-      await enqueueOp({ type: "board_rename", personId: currentPersonId, id: board.id, title });
-    }
-    if (board.id === currentBoardId && filenameInput) filenameInput.value = title;
-    refreshLibrary();
+    const old = board.title;
+    if (title === old) return;
+    const setTitle = (t) => {
+      board.title = t;
+      if (board.id === currentBoardId && filenameInput) filenameInput.value = t;
+      renderLibrary();
+    };
+    optimistic({
+      apply: () => setTitle(title),
+      revert: () => setTitle(old),
+      request: () =>
+        api("/api/boards/" + encodeURIComponent(board.id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, title }),
+        }).then(persistLibraryCache),
+      offlineOp: { type: "board_rename", personId: currentPersonId, id: board.id, title },
+      failText: "Umbenennen hat nicht geklappt",
+    });
   }
+
 
   async function createBoard() {
     const res = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
@@ -9119,23 +9243,31 @@
     if (res === null) return;
     const name = res.value.trim() || "Ordner";
     const color = res.color;
-    try {
-      await api("/api/folders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, name, parentId: currentFolderId, color }),
-      });
-    } catch (err) {
-      const id = uuid();
-      await enqueueOp({ type: "folder_create", personId: currentPersonId, name, parentId: currentFolderId, id, color });
-      if (libraryCache) {
+    const id = uuid();
+    const folder = { id, parentId: currentFolderId, name, sortOrder: 0, color, starred: false };
+    const parentId = currentFolderId;
+    optimistic({
+      apply: () => {
         libraryCache.folders = libraryCache.folders || [];
-        libraryCache.folders.push({ id, parentId: currentFolderId, name, sortOrder: 0, color });
+        libraryCache.folders.push(folder);
         libraryCache.allFolders = libraryCache.allFolders || [];
-        libraryCache.allFolders.push({ id, parentId: currentFolderId, name });
-      }
-    }
-    refreshLibrary();
+        libraryCache.allFolders.push({ id, parentId, name, color });
+        renderLibrary();
+      },
+      revert: () => {
+        libraryCache.folders = (libraryCache.folders || []).filter((f) => f.id !== id);
+        libraryCache.allFolders = (libraryCache.allFolders || []).filter((f) => f.id !== id);
+        renderLibrary();
+      },
+      request: () =>
+        api("/api/folders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, name, parentId, color, id }),
+        }).then(persistLibraryCache),
+      offlineOp: { type: "folder_create", personId: currentPersonId, name, parentId, id, color },
+      failText: "Ordner konnte nicht angelegt werden",
+    });
   }
 
   async function renameFolder(folder) {
@@ -9149,47 +9281,89 @@
     if (res === null) return;
     const name = res.value.trim() || folder.name;
     const color = res.color;
-    try {
-      await api("/api/folders/" + encodeURIComponent(folder.id), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, name, color }),
-      });
-    } catch (err) {
-      await enqueueOp({ type: "folder_rename", personId: currentPersonId, id: folder.id, name, color });
-    }
-    refreshLibrary();
+    const before = { name: folder.name, color: folder.color };
+    if (name === before.name && color === before.color) return;
+    const set = (v) => {
+      folder.name = v.name;
+      folder.color = v.color;
+      const f2 = (libraryCache.allFolders || []).find((f) => f.id === folder.id);
+      if (f2) Object.assign(f2, v);
+      renderLibrary();
+    };
+    optimistic({
+      apply: () => set({ name, color }),
+      revert: () => set(before),
+      request: () =>
+        api("/api/folders/" + encodeURIComponent(folder.id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ personId: currentPersonId, name, color }),
+        }).then(persistLibraryCache),
+      offlineOp: { type: "folder_rename", personId: currentPersonId, id: folder.id, name, color },
+      failText: "Umbenennen hat nicht geklappt",
+    });
+  }
+
+  // Eintrag sofort aus der Liste nehmen; klappt es nicht, kommt er an dieselbe Stelle zurueck
+  function removeFromCache(list, id) {
+    const arr = libraryCache[list] || [];
+    const idx = arr.findIndex((x) => x.id === id);
+    const item = idx >= 0 ? arr.splice(idx, 1)[0] : null;
+    return () => {
+      if (item) arr.splice(Math.min(idx, arr.length), 0, item);
+    };
   }
 
   async function deleteFolder(folder) {
     const ok = await askConfirm({ title: "Ordner „" + folder.name + "“ löschen?", text: "Die Blätter darin bleiben erhalten – nur der Ordner verschwindet." });
     if (!ok) return;
-    try {
-      await api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
-        method: "DELETE",
-      });
-    } catch (err) {
-      await enqueueOp({ type: "folder_delete", personId: currentPersonId, id: folder.id });
-    }
-    refreshLibrary();
+    let undo = null;
+    optimistic({
+      apply: () => {
+        undo = removeFromCache("folders", folder.id);
+        renderLibrary();
+      },
+      revert: () => {
+        if (undo) undo();
+        renderLibrary();
+      },
+      request: () =>
+        api("/api/folders/" + encodeURIComponent(folder.id) + "?person=" + encodeURIComponent(currentPersonId), {
+          method: "DELETE",
+        }).then(() => {
+          libraryCache.allFolders = (libraryCache.allFolders || []).filter((f) => f.id !== folder.id);
+          persistLibraryCache();
+        }),
+      offlineOp: { type: "folder_delete", personId: currentPersonId, id: folder.id },
+      failText: "Ordner konnte nicht gelöscht werden",
+    });
   }
 
   async function deleteBoard(board) {
     const ok = await askConfirm({ title: "„" + board.title + "“ löschen?", text: "Das Blatt wird endgültig gelöscht – auch für alle, mit denen es geteilt ist." });
     if (!ok) return;
-    try {
-      await api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
-        method: "DELETE",
-      });
-    } catch (err) {
-      await enqueueOp({ type: "board_delete", personId: currentPersonId, id: board.id });
-    }
-    if (currentBoardId === board.id) {
+    let undo = null;
+    const done = await optimistic({
+      apply: () => {
+        undo = removeFromCache("boards", board.id);
+        renderLibrary();
+      },
+      revert: () => {
+        if (undo) undo();
+        renderLibrary();
+      },
+      request: () =>
+        api("/api/boards/" + encodeURIComponent(board.id) + "?person=" + encodeURIComponent(currentPersonId), {
+          method: "DELETE",
+        }).then(persistLibraryCache),
+      offlineOp: { type: "board_delete", personId: currentPersonId, id: board.id },
+      failText: "Blatt konnte nicht gelöscht werden",
+    });
+    if (done && currentBoardId === board.id) {
       currentBoardId = "";
       boardStrokes.clear();
       disconnectWS();
     }
-    refreshLibrary();
   }
 
   function openShare(board) {
@@ -9205,29 +9379,34 @@
       b.querySelector(".dlg-avatar").textContent = (p.name || "?").slice(0, 1).toUpperCase();
       b.querySelector("strong").textContent = p.name;
       b.querySelector("small").textContent = on ? "Hat Zugriff – antippen zum Entfernen" : "Antippen zum Teilen";
-      b.addEventListener("click", async () => {
-        try {
-          if (on) {
-            await api(
-              "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
-              { method: "DELETE" }
-            );
-          } else {
-            await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
-            });
-          }
-        } catch (err) {
-          await enqueueOp(
-            on
-              ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
-              : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
-          );
-        }
-        shareBackdrop.classList.add("hidden");
-        refreshLibrary();
+      b.addEventListener("click", () => {
+        const isOn = (board.sharedWith || []).includes(p.id);
+        const set = (v) => {
+          board.sharedWith = v ? [...new Set([...(board.sharedWith || []), p.id])] : (board.sharedWith || []).filter((x) => x !== p.id);
+          b.classList.toggle("on", v);
+          b.querySelector("small").textContent = v ? "Hat Zugriff – antippen zum Entfernen" : "Antippen zum Teilen";
+          b.lastElementChild.outerHTML = '<i data-lucide="' + (v ? "check" : "plus") + '"></i>';
+          if (window.lucide) lucide.createIcons();
+        };
+        optimistic({
+          apply: () => set(!isOn),
+          revert: () => set(isOn),
+          request: () =>
+            isOn
+              ? api(
+                  "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
+                  { method: "DELETE" }
+                )
+              : api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
+                }),
+          offlineOp: isOn
+            ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
+            : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: p.id },
+          failText: "Teilen hat nicht geklappt",
+        }).then(persistLibraryCache);
       });
       box.appendChild(b);
     }
@@ -9262,28 +9441,36 @@
 
   async function applyMove(kind, id, folderId) {
     moveBackdrop.classList.add("hidden");
-    try {
-      if (kind === "board") {
-        await api("/api/placements", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ personId: currentPersonId, boardId: id, folderId }),
-        });
-      } else {
-        await api("/api/folders/" + encodeURIComponent(id), {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ personId: currentPersonId, parentId: folderId }),
-        });
-      }
-    } catch (err) {
-      await enqueueOp(
+    if ((folderId || null) === (currentFolderId || null)) return;
+    let undo = null;
+    optimistic({
+      apply: () => {
+        undo = removeFromCache(kind === "board" ? "boards" : "folders", id);
+        renderLibrary();
+      },
+      revert: () => {
+        if (undo) undo();
+        renderLibrary();
+      },
+      request: () =>
+        (kind === "board"
+          ? api("/api/placements", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ personId: currentPersonId, boardId: id, folderId }),
+            })
+          : api("/api/folders/" + encodeURIComponent(id), {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ personId: currentPersonId, parentId: folderId }),
+            })
+        ).then(persistLibraryCache),
+      offlineOp:
         kind === "board"
           ? { type: "place", personId: currentPersonId, boardId: id, folderId }
-          : { type: "folder_move", personId: currentPersonId, id, parentId: folderId }
-      );
-    }
-    refreshLibrary();
+          : { type: "folder_move", personId: currentPersonId, id, parentId: folderId },
+      failText: "Verschieben hat nicht geklappt",
+    });
   }
 
   // ---- Admin: Personen + Mail-Adressen verwalten -----------------------
@@ -9490,31 +9677,6 @@
       : { id: currentBoardId, sharedWith: [], ownerId: currentPersonId };
   }
 
-  async function toggleShareWith(board, personId, on) {
-    try {
-      if (on) {
-        await api(
-          "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(personId) + "?person=" + encodeURIComponent(currentPersonId),
-          { method: "DELETE" }
-        );
-      } else {
-        await api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ personId: currentPersonId, withPersonId: personId }),
-        });
-      }
-    } catch (err) {
-      await enqueueOp(
-        on
-          ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: personId }
-          : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: personId }
-      );
-    }
-    if (on) board.sharedWith = (board.sharedWith || []).filter((id) => id !== personId);
-    else board.sharedWith = [...(board.sharedWith || []), personId];
-  }
-
   function openCanvasShareSubmenu(board) {
     canvasShareSubmenu.innerHTML = "";
     for (const p of PEOPLE) {
@@ -9527,11 +9689,33 @@
       row.innerHTML =
         `<span class="material-symbols-rounded" style="visibility:${on ? "visible" : "hidden"};">check</span>` +
         `<span>${p.name}</span>`;
-      row.addEventListener("click", async (e) => {
+      row.addEventListener("click", (e) => {
         e.stopPropagation();
         const nowOn = (board.sharedWith || []).includes(p.id);
-        await toggleShareWith(board, p.id, nowOn);
-        openCanvasShareSubmenu(board);
+        const set = (v) => {
+          board.sharedWith = v ? [...new Set([...(board.sharedWith || []), p.id])] : (board.sharedWith || []).filter((x) => x !== p.id);
+          row.classList.toggle("shared", v);
+          row.firstElementChild.style.visibility = v ? "visible" : "hidden";
+        };
+        optimistic({
+          apply: () => set(!nowOn),
+          revert: () => set(nowOn),
+          request: () =>
+            nowOn
+              ? api(
+                  "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
+                  { method: "DELETE" }
+                )
+              : api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
+                }),
+          offlineOp: nowOn
+            ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
+            : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: p.id },
+          failText: "Teilen hat nicht geklappt",
+        });
       });
       canvasShareSubmenu.appendChild(row);
     }

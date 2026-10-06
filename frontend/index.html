@@ -160,6 +160,10 @@
         <span class="material-symbols-rounded">download</span>
         Herunterladen
       </button>
+      <button type="button" id="canvas-menu-settings" class="lib-add-opt">
+        <span class="material-symbols-rounded">tune</span>
+        Einstellungen
+      </button>
     </div>
     <div id="canvas-share-submenu" class="lib-add-menu hidden"></div>
   </div>
@@ -317,76 +321,112 @@
     </label>
   </div>
 
-  <div class="dock-divider"></div>
-
-  <div class="settings-wrap">
-    <button id="btn-settings-toggle" class="icon-btn" title="Raster &amp; Einstellungen">
-      <span class="material-symbols-rounded">tune</span>
-    </button>
-  </div>
 </nav>
 
-<div id="settings-backdrop" class="settings-backdrop hidden">
-  <div id="settings-popover" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-    <div class="settings-modal-head">
+<div id="settings-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div id="settings-popover" class="settings-modal dlg set-dlg" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-modal-head set-head">
+      <button type="button" id="btn-settings-back" class="icon-btn set-back hidden" title="Zurück">
+        <span class="material-symbols-rounded">arrow_back</span>
+      </button>
       <h2 id="settings-title">Einstellungen</h2>
       <button type="button" id="btn-settings-close" class="icon-btn" title="Schließen">
         <span class="material-symbols-rounded">close</span>
       </button>
     </div>
-    <div class="popover-label">Papier-Raster</div>
-    <div class="grid-style-row">
-      <button class="btn-grid-style active" data-grid="graph"><span class="material-symbols-rounded">grid_4x4</span> Kariert</button>
-      <button class="btn-grid-style" data-grid="dots"><span class="material-symbols-rounded">grain</span> Punkte</button>
-      <button class="btn-grid-style" data-grid="lines"><span class="material-symbols-rounded">reorder</span> Liniert</button>
-      <button class="btn-grid-style" data-grid="blank"><span class="material-symbols-rounded">rectangle</span> Blanko</button>
+
+    <div class="set-page" data-page="main">
+      <button type="button" class="set-nav" data-go="paper" data-title="Papier">
+        <span class="set-ico"><span class="material-symbols-rounded">grid_4x4</span></span>
+        <span class="set-nav-text"><strong>Papier</strong><small id="set-sum-paper">Kariert</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="write" data-title="Schreiben &amp; Erkennung">
+        <span class="set-ico"><span class="material-symbols-rounded">ink_pen</span></span>
+        <span class="set-nav-text"><strong>Schreiben &amp; Erkennung</strong><small id="set-sum-write">Formen, Rechnungen, Finger</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="bar" data-title="Werkzeugleiste">
+        <span class="set-ico"><span class="material-symbols-rounded">tune</span></span>
+        <span class="set-nav-text"><strong>Werkzeugleiste</strong><small id="set-sum-bar">Unten</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="app" data-title="App &amp; Version">
+        <span class="set-ico"><span class="material-symbols-rounded">auto_awesome</span></span>
+        <span class="set-nav-text"><strong>App &amp; Version</strong><small id="set-sum-app">Updates</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
     </div>
-    <div class="popover-label">Leiste</div>
-    <div class="dock-quick-row">
-      <button class="btn-dock-quick" data-pos="top" title="Oben"><span class="material-symbols-rounded">arrow_upward</span></button>
-      <button class="btn-dock-quick" data-pos="bottom" title="Unten"><span class="material-symbols-rounded">arrow_downward</span></button>
-      <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span></button>
-      <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span></button>
+
+    <div class="set-page hidden" data-page="paper">
+      <p class="set-hint">Gilt auf diesem Gerät für alle Blätter.</p>
+      <div class="grid-style-row set-paper-row">
+        <button class="btn-grid-style active" data-grid="graph"><span class="set-paper-prev paper-graph"></span>Kariert</button>
+        <button class="btn-grid-style" data-grid="dots"><span class="set-paper-prev paper-dots"></span>Punkte</button>
+        <button class="btn-grid-style" data-grid="lines"><span class="set-paper-prev paper-lines"></span>Liniert</button>
+        <button class="btn-grid-style" data-grid="blank"><span class="set-paper-prev paper-blank"></span>Blanko</button>
+      </div>
     </div>
-    <div class="popover-label">Zeichnen</div>
-    <button id="shape-toggle" class="setting-toggle active" title="Formen-Erkennung">
-      <span class="material-symbols-rounded">shapes</span> Formen erkennen
-    </button>
-    <p id="shape-learn-info" class="setting-hint">Lernt mit allen Geräten mit.</p>
-    <button id="math-toggle" class="setting-toggle active" title="Rechnungen automatisch lösen">
-      <span class="material-symbols-rounded">calculate</span> Rechnungen lösen
-    </button>
-    <button id="finger-draw-toggle" class="setting-toggle" title="Mit dem Finger zeichnen">
-      <span class="material-symbols-rounded">touch_app</span> Finger zeichnet
-    </button>
-    <button id="eraser-return-toggle" class="setting-toggle active" title="Nach dem Radieren wieder den Stift davor nehmen">
-      <span class="material-symbols-rounded">ink_eraser</span> Nach Radieren zurück zum Stift
-    </button>
-    <div class="popover-label">App &amp; Version</div>
-    <div class="version-card">
-      <div class="version-row">
-        <div>
-          <div class="version-name">sofianotes <span id="settings-commit-badge">#main</span></div>
-          <div id="settings-build-date" class="version-date">Build wird geladen…</div>
-        </div>
-        <div class="version-right">
-          <div id="settings-version-label">v1.0.0</div>
-          <div id="settings-version-status" class="version-status">
-            <span class="material-symbols-rounded">check</span>
-            <span id="settings-version-status-text">Auf neuestem Stand</span>
+
+    <div class="set-page hidden" data-page="write">
+      <button id="shape-toggle" class="setting-toggle set-switch active" title="Formen-Erkennung">
+        <span class="set-ico"><span class="material-symbols-rounded">shapes</span></span>
+        <span class="set-nav-text"><strong>Formen erkennen</strong><small id="shape-learn-info">Lernt mit allen Geräten mit.</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="math-toggle" class="setting-toggle set-switch active" title="Rechnungen automatisch lösen">
+        <span class="set-ico"><span class="material-symbols-rounded">calculate</span></span>
+        <span class="set-nav-text"><strong>Rechnungen lösen</strong><small>Ergebnis erscheint neben „=“</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="finger-draw-toggle" class="setting-toggle set-switch" title="Mit dem Finger zeichnen">
+        <span class="set-ico"><span class="material-symbols-rounded">touch_app</span></span>
+        <span class="set-nav-text"><strong>Finger zeichnet</strong><small>Aus: Finger verschiebt nur das Blatt</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="eraser-return-toggle" class="setting-toggle set-switch active" title="Nach dem Radieren wieder den Stift davor nehmen">
+        <span class="set-ico"><span class="material-symbols-rounded">ink_eraser</span></span>
+        <span class="set-nav-text"><strong>Nach Radieren zurück</strong><small>Danach automatisch wieder der Stift</small></span>
+        <span class="set-knob"></span>
+      </button>
+    </div>
+
+    <div class="set-page hidden" data-page="bar">
+      <p class="set-hint">Wo die Werkzeugleiste sitzt. Du kannst sie auch lange halten und an einen Rand ziehen.</p>
+      <div class="dock-quick-row set-dock-row">
+        <button class="btn-dock-quick" data-pos="top" title="Oben"><span class="material-symbols-rounded">arrow_upward</span><span>Oben</span></button>
+        <button class="btn-dock-quick" data-pos="bottom" title="Unten"><span class="material-symbols-rounded">arrow_downward</span><span>Unten</span></button>
+        <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span><span>Links</span></button>
+        <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span><span>Rechts</span></button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="app">
+      <div class="version-card">
+        <div class="version-row">
+          <div>
+            <div class="version-name">sofianotes <span id="settings-commit-badge">#main</span></div>
+            <div id="settings-build-date" class="version-date">Build wird geladen…</div>
+          </div>
+          <div class="version-right">
+            <div id="settings-version-label">v1.0.0</div>
+            <div id="settings-version-status" class="version-status">
+              <span class="material-symbols-rounded">check</span>
+              <span id="settings-version-status-text">Auf neuestem Stand</span>
+            </div>
           </div>
         </div>
-      </div>
-      <p id="settings-update-desc">Automatische Prüfung beim Öffnen aktiv.</p>
-      <div class="version-actions">
-        <button type="button" id="btn-check-updates" class="version-btn">
-          <span class="material-symbols-rounded">refresh</span>
-          <span id="text-check-updates">Nach Updates suchen</span>
-        </button>
-        <button type="button" id="btn-apply-update" class="version-btn version-btn-apply hidden">
-          <span class="material-symbols-rounded">download</span>
-          Jetzt aktualisieren
-        </button>
+        <p id="settings-update-desc">Automatische Prüfung beim Öffnen aktiv.</p>
+        <div class="version-actions">
+          <button type="button" id="btn-check-updates" class="version-btn">
+            <span class="material-symbols-rounded">refresh</span>
+            <span id="text-check-updates">Nach Updates suchen</span>
+          </button>
+          <button type="button" id="btn-apply-update" class="version-btn version-btn-apply hidden">
+            <span class="material-symbols-rounded">download</span>
+            Jetzt aktualisieren
+          </button>
+        </div>
       </div>
     </div>
   </div>
