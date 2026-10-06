@@ -20,8 +20,7 @@
   const GRID_SIZE = 32;
   // ---- Geraete-Einstellungen mit dem Konto abgleichen ----
   // Stift, Farben, Leisten, Zoom usw. liegen lokal im Browser und zusaetzlich am Konto.
-  // Aenderungen gehen kurz verzoegert hoch; ab und an (und beim Zurueckkehren in die App)
-  // wird nachgesehen, ob ein anderes Geraet etwas geaendert hat.
+  // Nur eigene Aenderungen gehen hoch (kurz gebuendelt); nachgesehen wird einmal beim Oeffnen.
   const PREF_KEYS = [
     "sofianotes-prefs",
     "sofianotes-colors",
@@ -60,7 +59,7 @@
       meta.dirty = true;
       saveMeta();
       clearTimeout(pushTimer);
-      pushTimer = setTimeout(push, 3000);
+      pushTimer = setTimeout(push, 1500);
     };
     proto.setItem = function (key, value) {
       const before = this === window.localStorage ? this.getItem(key) : null;
@@ -143,10 +142,9 @@
         location.reload();
       }
     }
-    setInterval(() => check(false), 5 * 60 * 1000);
+    // noch nicht hochgeladene Aenderung nicht verlieren, wenn die App weggelegt wird
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") check(false);
-      else if (meta.dirty) push();
+      if (document.visibilityState === "hidden" && meta.dirty) push();
     });
     return { check, push };
   })();
