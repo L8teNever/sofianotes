@@ -554,6 +554,27 @@
       ctx.beginPath();
       ctx.arc(rot.x, rot.y, 2.2 / scale, 0, Math.PI * 2);
       ctx.fill();
+      // ausgewaehlte Tabelle: kleine Griffe auf den inneren Linien (zum Ziehen)
+      const selT = typeof selectedTable === "function" ? selectedTable() : null;
+      if (selT) {
+        const g = tableGeom(selT);
+        ctx.fillStyle = "#3b6fe0";
+        const gw = 4 / scale, gl = 14 / scale;
+        const live = dragState && dragState.kind === "tblline" ? dragState : null;
+        for (let i = 1; i < g.xs.length - 1; i++) {
+          if (live && live.axis === "x" && live.i === i) {
+            ctx.fillRect(g.xs[i] - 1 / scale, g.y0, 2 / scale, g.H);
+          }
+          ctx.fillRect(g.xs[i] - gw / 2, g.y0, gw, gl);
+        }
+        for (let i = 1; i < g.ys.length - 1; i++) {
+          if (live && live.axis === "y" && live.i === i) {
+            ctx.fillRect(g.x0, g.ys[i] - 1 / scale, g.W, 2 / scale);
+          }
+          ctx.fillRect(g.x0, g.ys[i] - gw / 2, gl, gw);
+        }
+        ctx.fillStyle = "#fff";
+      }
       const knots = selectedEditKnots();
       const kr = 4.5 / scale;
       ctx.fillStyle = "#fff";
@@ -3592,14 +3613,16 @@
     return tables.length === 1 ? tables[0] : null;
   }
 
-  function insertTable() {
+  function insertTable(spec) {
     if (textEdit) commitTextEditor();
     const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
     const k = 1 / Math.max(scale, 0.25);
-    const cols = 3;
-    const rows = 3;
-    const W = 150 * cols * k;
-    const H = 46 * rows * k;
+    const cols = spec ? spec.cw.length : 3;
+    const rows = spec ? spec.rh.length : 3;
+    const cwAbs = spec ? spec.cw.slice() : new Array(cols).fill(150 * k);
+    const rhAbs = spec ? spec.rh.slice() : new Array(rows).fill(46 * k);
+    const W = cwAbs.reduce((a, b) => a + b, 0);
+    const H = rhAbs.reduce((a, b) => a + b, 0);
     const x0 = center.x - W / 2;
     const y0 = center.y - H / 2;
     const t = {
@@ -3611,7 +3634,7 @@
         { x: x0, y: y0, p: 1 },
         { x: x0 + W, y: y0 + H, p: 1 },
       ],
-      extra: { rows, cols, cw: [1, 1, 1], rh: [1, 1, 1], cells: {} },
+      extra: { rows, cols, cw: cwAbs, rh: rhAbs, cells: {} },
     };
     putStroke(t);
     pushUndo({ type: "replace", before: null, after: cloneStroke(t) });
@@ -3704,6 +3727,331 @@
       { x: g.x0, y: g.y0, p: 1 },
       { x: g.x0 + cw.reduce((a, b) => a + b, 0), y: g.y0 + rh.reduce((a, b) => a + b, 0), p: 1 },
     ];
+  }
+
+  // innere Tabellenlinie unter dem Punkt (Toleranz in Bildschirm-Pixeln)
+  function tableLineAt(t, world, tolPx) {
+    const g = tableGeom(t);
+    const tol = tolPx / scale;
+    let best = null;
+    const grip = tol;
+    if (world.y >= g.y0 - grip && world.y <= g.y0 + g.H + tol) {
+      for (let i = 1; i < g.xs.length - 1; i++) {
+        const d = Math.abs(world.x - g.xs[i]);
+        if (d <= tol && (!best || d < best.d)) best = { axis: "x", i, d };
+      }
+    }
+    if (world.x >= g.x0 - grip && world.x <= g.x0 + g.W + tol) {
+      for (let i = 1; i < g.ys.length - 1; i++) {
+        const d = Math.abs(world.y - g.ys[i]);
+        if (d <= tol && (!best || d < best.d)) best = { axis: "y", i, d };
+      }
+    }
+    return best;
+  }
+  function updateTableLineDrag(world) {
+    const t = boardStrokes.get(dragState.tableId);
+    if (!t) return;
+    const x = dragState.axis === "x";
+    const arr = (x ? dragState.cw0 : dragState.rh0).slice();
+    const delta = x ? world.x - dragState.startWorld.x : world.y - dragState.startWorld.y;
+    const min = t.size * (x ? 1.6 : 1.5);
+    const i = dragState.i - 1;
+    const sum = arr[i] + arr[i + 1];
+    const a = Math.max(min, Math.min(sum - min, arr[i] + delta));
+    arr[i] = a;
+    arr[i + 1] = sum - a;
+    const ex = Object.assign({}, t.extra);
+    if (x) {
+      ex.cw = arr;
+      ex.rh = dragState.rh0.slice();
+    } else {
+      ex.rh = arr;
+      ex.cw = dragState.cw0.slice();
+    }
+    t.extra = ex;
+    requestRedraw();
+  }
+
+  // ---- Tabellen-Dialog: Spalten/Zeilen, Breiten ziehen, Vorschau mit vorhandenem Text ----
+  const tableDialog = document.getElementById("table-dialog");
+  const tdPreview = document.getElementById("td-preview");
+  let tdState = null; // {tableId|null, size, cw[], rh[], cells{}}
+  let tdDrag = null;
+
+  function openTableDialog(t) {
+    if (!tableDialog) return;
+    if (textEdit) commitTextEditor();
+    hidePopovers();
+    const k = 1 / Math.max(scale, 0.25);
+    if (t) {
+      const g = tableGeom(t);
+      tdState = {
+        tableId: t.id,
+        size: t.size,
+        cw: g.xs.slice(1).map((x, i) => x - g.xs[i]),
+        rh: g.ys.slice(1).map((y, i) => y - g.ys[i]),
+        cells: JSON.parse(JSON.stringify((t.extra && t.extra.cells) || {})),
+      };
+    } else {
+      tdState = { tableId: null, size: 20 * k, cw: [150 * k, 150 * k, 150 * k], rh: [46 * k, 46 * k, 46 * k], cells: {} };
+    }
+    document.getElementById("td-title").textContent = t ? "Tabelle bearbeiten" : "Tabelle einfügen";
+    document.getElementById("td-ok").textContent = t ? "Übernehmen" : "Einfügen";
+    tableDialog.classList.remove("hidden");
+    renderTableDialog();
+  }
+  function closeTableDialog() {
+    if (!tableDialog) return;
+    tableDialog.classList.add("hidden");
+    tdState = null;
+    tdDrag = null;
+  }
+  function tdMinCol() {
+    return tdState.size * 1.6;
+  }
+  function tdMinRow() {
+    return tdState.size * 1.5;
+  }
+  // Vorschau-Layout: Tabelle passend in die Flaeche skaliert
+  function tdLayout() {
+    const r = tdPreview.getBoundingClientRect();
+    const W = tdState.cw.reduce((a, b) => a + b, 0);
+    const H = tdState.rh.reduce((a, b) => a + b, 0);
+    const m = 14;
+    const f = Math.min((r.width - m * 2) / W, (r.height - m * 2) / H, 2.5);
+    const ox = (r.width - W * f) / 2;
+    const oy = (r.height - H * f) / 2;
+    const xs = [ox];
+    for (const w of tdState.cw) xs.push(xs[xs.length - 1] + w * f);
+    const ys = [oy];
+    for (const h of tdState.rh) ys.push(ys[ys.length - 1] + h * f);
+    return { r, f, xs, ys };
+  }
+  function renderTableDialog() {
+    if (!tdState) return;
+    document.getElementById("td-cols").textContent = String(tdState.cw.length);
+    document.getElementById("td-rows").textContent = String(tdState.rh.length);
+    const d = window.devicePixelRatio || 1;
+    const L = tdLayout();
+    tdPreview.width = Math.round(L.r.width * d);
+    tdPreview.height = Math.round(L.r.height * d);
+    const c = tdPreview.getContext("2d");
+    c.setTransform(d, 0, 0, d, 0, 0);
+    c.clearRect(0, 0, L.r.width, L.r.height);
+    const x0 = L.xs[0], x1 = L.xs[L.xs.length - 1], y0 = L.ys[0], y1 = L.ys[L.ys.length - 1];
+    c.fillStyle = "#fff";
+    c.fillRect(x0, y0, x1 - x0, y1 - y0);
+    // Text wie auf dem Blatt (gleicher Umbruch, nur verkleinert)
+    const size = tdState.size;
+    const pad = size * 0.4;
+    const lh = size * TEXT_LINE;
+    c.save();
+    c.scale(L.f, L.f);
+    c.fillStyle = "#1E1F22";
+    c.font = textFont(size);
+    c.textBaseline = "alphabetic";
+    for (let r = 0; r < tdState.rh.length; r++) {
+      for (let col = 0; col < tdState.cw.length; col++) {
+        const text = tdState.cells[r + "," + col];
+        if (!text) continue;
+        const cx = L.xs[col] / L.f, cy = L.ys[r] / L.f;
+        c.save();
+        c.beginPath();
+        c.rect(cx, cy, tdState.cw[col], tdState.rh[r]);
+        c.clip();
+        wrapText(text, size, Math.max(4, tdState.cw[col] - pad * 2)).forEach((line, i) =>
+          c.fillText(line, cx + pad, cy + pad + size * 0.95 + i * lh)
+        );
+        c.restore();
+      }
+    }
+    c.restore();
+    c.strokeStyle = "#5f6368";
+    c.lineWidth = 1.2;
+    c.beginPath();
+    for (const x of L.xs) {
+      c.moveTo(x, y0);
+      c.lineTo(x, y1);
+    }
+    for (const y of L.ys) {
+      c.moveTo(x0, y);
+      c.lineTo(x1, y);
+    }
+    c.stroke();
+    // gezogene / greifbare Linie hervorheben
+    if (tdDrag) {
+      c.strokeStyle = "#1A73E8";
+      c.lineWidth = 3;
+      c.beginPath();
+      if (tdDrag.axis === "x") {
+        c.moveTo(L.xs[tdDrag.i], y0 - 6);
+        c.lineTo(L.xs[tdDrag.i], y1 + 6);
+      } else {
+        c.moveTo(x0 - 6, L.ys[tdDrag.i]);
+        c.lineTo(x1 + 6, L.ys[tdDrag.i]);
+      }
+      c.stroke();
+    }
+    // kleine Griffe an jeder Linie
+    c.fillStyle = "#1A73E8";
+    for (let i = 1; i < L.xs.length; i++) {
+      c.beginPath();
+      c.arc(L.xs[i], y0 - 7, 4, 0, Math.PI * 2);
+      c.fill();
+    }
+    for (let i = 1; i < L.ys.length; i++) {
+      c.beginPath();
+      c.arc(x0 - 7, L.ys[i], 4, 0, Math.PI * 2);
+      c.fill();
+    }
+  }
+  function tdStep(kind, d) {
+    if (!tdState) return;
+    const arr = kind === "cols" ? tdState.cw : tdState.rh;
+    if (d > 0) {
+      if (arr.length >= 30) return;
+      arr.push(arr[arr.length - 1] || (kind === "cols" ? tdState.size * 7 : tdState.size * 2.3));
+    } else {
+      if (arr.length <= 1) return;
+      arr.pop();
+      const n = arr.length;
+      for (const key of Object.keys(tdState.cells)) {
+        const [r, col] = key.split(",").map(Number);
+        if ((kind === "rows" && r >= n) || (kind === "cols" && col >= n)) delete tdState.cells[key];
+      }
+    }
+    renderTableDialog();
+  }
+  if (tableDialog) {
+    tableDialog.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (e.target === tableDialog) closeTableDialog();
+    });
+    tableDialog.querySelectorAll(".td-step").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        tdStep(b.dataset.k, Number(b.dataset.d));
+      })
+    );
+    document.getElementById("td-even").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!tdState) return;
+      const W = tdState.cw.reduce((a, b) => a + b, 0);
+      const H = tdState.rh.reduce((a, b) => a + b, 0);
+      tdState.cw = tdState.cw.map(() => W / tdState.cw.length);
+      tdState.rh = tdState.rh.map(() => H / tdState.rh.length);
+      renderTableDialog();
+    });
+    document.getElementById("td-close").addEventListener("click", closeTableDialog);
+    document.getElementById("td-cancel").addEventListener("click", closeTableDialog);
+    document.getElementById("td-ok").addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyTableDialog();
+    });
+    tableDialog.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeTableDialog();
+      if (e.key === "Enter") applyTableDialog();
+    });
+    // Linien in der Vorschau ziehen
+    tdPreview.addEventListener("pointerdown", (e) => {
+      if (!tdState) return;
+      e.preventDefault();
+      const r = tdPreview.getBoundingClientRect();
+      const px = e.clientX - r.left;
+      const py = e.clientY - r.top;
+      const L = tdLayout();
+      const tol = e.pointerType === "touch" ? 16 : 9;
+      let best = null;
+      for (let i = 1; i < L.xs.length; i++) {
+        const dd = Math.abs(px - L.xs[i]);
+        if (dd <= tol && py >= L.ys[0] - 16 && py <= L.ys[L.ys.length - 1] + 16 && (!best || dd < best.dd)) best = { axis: "x", i, dd };
+      }
+      for (let i = 1; i < L.ys.length; i++) {
+        const dd = Math.abs(py - L.ys[i]);
+        if (dd <= tol && px >= L.xs[0] - 16 && px <= L.xs[L.xs.length - 1] + 16 && (!best || dd < best.dd)) best = { axis: "y", i, dd };
+      }
+      if (!best) return;
+      tdDrag = { axis: best.axis, i: best.i, id: e.pointerId, start: best.axis === "x" ? px : py, f: L.f, cw: tdState.cw.slice(), rh: tdState.rh.slice() };
+      try {
+        tdPreview.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      renderTableDialog();
+    });
+    tdPreview.addEventListener("pointermove", (e) => {
+      if (!tdDrag || tdDrag.id !== e.pointerId) {
+        // Zeiger ueber einer Linie: passender Cursor
+        if (tdState && e.pointerType === "mouse") {
+          const r = tdPreview.getBoundingClientRect();
+          const L = tdLayout();
+          const px = e.clientX - r.left, py = e.clientY - r.top;
+          const onX = L.xs.slice(1).some((x) => Math.abs(px - x) <= 9);
+          const onY = L.ys.slice(1).some((y) => Math.abs(py - y) <= 9);
+          tdPreview.style.cursor = onX ? "col-resize" : onY ? "row-resize" : "default";
+        }
+        return;
+      }
+      const r = tdPreview.getBoundingClientRect();
+      const cur = tdDrag.axis === "x" ? e.clientX - r.left : e.clientY - r.top;
+      const delta = (cur - tdDrag.start) / tdDrag.f;
+      const arr = tdDrag.axis === "x" ? tdDrag.cw.slice() : tdDrag.rh.slice();
+      const min = tdDrag.axis === "x" ? tdMinCol() : tdMinRow();
+      const i = tdDrag.i - 1; // Linie rechts/unter Feld i
+      if (i < arr.length - 1) {
+        // innere Linie: Nachbarfelder tauschen Platz, Gesamtgroesse bleibt
+        const sum = arr[i] + arr[i + 1];
+        const a = Math.max(min, Math.min(sum - min, arr[i] + delta));
+        arr[i] = a;
+        arr[i + 1] = sum - a;
+      } else {
+        // aeussere Linie: letztes Feld waechst/schrumpft
+        arr[i] = Math.max(min, arr[i] + delta);
+      }
+      if (tdDrag.axis === "x") tdState.cw = arr;
+      else tdState.rh = arr;
+      renderTableDialog();
+    });
+    const endTd = (e) => {
+      if (!tdDrag || tdDrag.id !== e.pointerId) return;
+      tdDrag = null;
+      renderTableDialog();
+    };
+    tdPreview.addEventListener("pointerup", endTd);
+    tdPreview.addEventListener("pointercancel", endTd);
+    window.addEventListener("resize", () => tdState && renderTableDialog());
+  }
+  function applyTableDialog() {
+    if (!tdState) return;
+    const st = tdState;
+    closeTableDialog();
+    if (!st.tableId) {
+      insertTable({ cw: st.cw, rh: st.rh });
+      return;
+    }
+    const t = boardStrokes.get(st.tableId);
+    if (!t) return;
+    const before = cloneStroke(t);
+    const g = tableGeom(t);
+    const ex = JSON.parse(JSON.stringify(t.extra || {}));
+    ex.cw = st.cw.slice();
+    ex.rh = st.rh.slice();
+    ex.cols = ex.cw.length;
+    ex.rows = ex.rh.length;
+    ex.cells = st.cells;
+    t.extra = ex;
+    t.points = [
+      { x: g.x0, y: g.y0, p: 1 },
+      { x: g.x0 + ex.cw.reduce((a, b) => a + b, 0), y: g.y0 + ex.rh.reduce((a, b) => a + b, 0), p: 1 },
+    ];
+    growTableRows(t);
+    t.bbox = strokeWorldBBox(t);
+    lastTableId = t.id;
+    wsSend({ type: "stroke_move", stroke: serializeStroke(t) });
+    pushUndo({ type: "replace", before, after: cloneStroke(t) });
+    if (selection.ids.size) selectStrokeIds(Array.from(selection.ids));
+    syncSelectionToolbar();
+    syncModeBar();
+    requestRedraw();
   }
 
   function topTextAt(world) {
@@ -3935,6 +4283,7 @@
     st.color = color;
     st.height = "auto";
     st.height = Math.max(minH, textEditorEl.scrollHeight) + "px";
+    syncTextHandles(left, top, Math.max(24, width), textEditorEl.offsetHeight);
     if (!textFormatBar.classList.contains("hidden")) {
       const bw = textFormatBar.offsetWidth || 260;
       const bh = textFormatBar.offsetHeight || 44;
@@ -3946,8 +4295,62 @@
     }
   }
 
+  // Griffe links/rechts am offenen Textfeld: Breite ziehen, der Text bricht dann um
+  const teHandleL = document.getElementById("te-handle-l");
+  const teHandleR = document.getElementById("te-handle-r");
+  let teHandleDrag = null;
+  function syncTextHandles(left, top, width, height) {
+    const show = !!(textEdit && textEdit.kind === "text") && left != null;
+    for (const h of [teHandleL, teHandleR]) if (h) h.classList.toggle("hidden", !show);
+    if (!show) return;
+    const cy = top + height / 2;
+    teHandleL.style.left = left - 6 + "px";
+    teHandleL.style.top = cy + "px";
+    teHandleR.style.left = left + width + 6 + "px";
+    teHandleR.style.top = cy + "px";
+  }
+  for (const [h, side] of [
+    [teHandleL, "l"],
+    [teHandleR, "r"],
+  ]) {
+    if (!h) continue;
+    // Fokus im Textfeld lassen (sonst schliesst die Tastatur)
+    h.addEventListener("mousedown", (e) => e.preventDefault());
+    h.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+    h.addEventListener("pointerdown", (e) => {
+      if (!textEdit || textEdit.kind !== "text") return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        h.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      const r = textEditorEl.getBoundingClientRect();
+      teHandleDrag = { id: e.pointerId, side, left: r.left, right: r.right, x0: textEdit.x };
+    });
+    h.addEventListener("pointermove", (e) => {
+      const d = teHandleDrag;
+      if (!d || d.id !== e.pointerId || !textEdit) return;
+      const min = textEdit.size * scale * 2;
+      if (d.side === "r") {
+        textEdit.width = Math.max(min, e.clientX - d.left) / scale;
+      } else {
+        const newLeft = Math.min(e.clientX, d.right - min);
+        textEdit.width = (d.right - newLeft) / scale;
+        textEdit.x = d.x0 + (newLeft - d.left) / scale;
+      }
+      positionTextEditor();
+    });
+    const end = (e) => {
+      if (teHandleDrag && teHandleDrag.id === e.pointerId) teHandleDrag = null;
+      if (textEdit) textEditorEl.focus({ preventScroll: true });
+    };
+    h.addEventListener("pointerup", end);
+    h.addEventListener("pointercancel", end);
+  }
+
   function cancelTextEditor() {
     textEdit = null;
+    syncTextHandles();
     textFormatBar.classList.add("hidden");
     textEditorEl.classList.add("hidden");
     textEditorEl.blur();
@@ -3960,6 +4363,7 @@
     const runs = serializeEditor();
     const value = runsText(runs);
     textEdit = null;
+    syncTextHandles();
     textFormatBar.classList.add("hidden");
     textEditorEl.classList.add("hidden");
     textEditorEl.blur();
@@ -3989,7 +4393,13 @@
     const plainRuns = runs.every((r) => !r.b && !r.i && !r.s && !r.u);
     const beforeRuns = ed.before ? JSON.stringify(normalizeRuns(strokeRuns(ed.before))) : null;
     const unchanged =
-      ed.before && !ed.fromLabel && JSON.stringify(runs) === beforeRuns && ed.before.size === ed.size && ed.before.color === ed.color;
+      ed.before &&
+      !ed.fromLabel &&
+      JSON.stringify(runs) === beforeRuns &&
+      ed.before.size === ed.size &&
+      ed.before.color === ed.color &&
+      ((ed.before.extra && ed.before.extra.width) || null) === (ed.width || null) &&
+      ed.before.points[0].x === ed.x;
     if (unchanged) return requestRedraw();
     const extra = Object.assign({}, (ed.before && ed.before.extra) || {}, { box: true, width: ed.width || null });
     if (plainRuns) delete extra.runs;
@@ -4422,20 +4832,13 @@
   const insertTableBtn = document.getElementById("btn-insert-table");
   if (insertTableBtn) insertTableBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    insertTable();
+    openTableDialog(null);
   });
-  for (const [id, kind, delta] of [
-    ["btn-tbl-row-add", "row", 1],
-    ["btn-tbl-col-add", "col", 1],
-    ["btn-tbl-row-del", "row", -1],
-    ["btn-tbl-col-del", "col", -1],
-  ]) {
-    const b = document.getElementById(id);
-    if (b) b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      changeTable(kind, delta);
-    });
-  }
+  document.getElementById("btn-tbl-edit")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const t = selectedTable();
+    if (t) openTableDialog(t);
+  });
 
   // ---- Zoom-Fenster (wie GoodNotes) ----------------------------------------
   // Ein Rahmen auf dem Blatt wird unten gross dargestellt. Man schreibt in der grossen
@@ -4962,8 +5365,16 @@
       zoomBoxDrag = { kind, pointerId: e.pointerId, start: screenToWorld(e.clientX, e.clientY), win: { ...zoomWin } };
       zoomNext = null;
     });
-    el.addEventListener("pointermove", (e) => {
+    el.addEventListener("pointermove", (e) => moveZoomBoxDrag(e));
+    const end = (e) => {
+      if (zoomBoxDrag && zoomBoxDrag.pointerId === e.pointerId) zoomBoxDrag = null;
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+  function moveZoomBoxDrag(e) {
       if (!zoomBoxDrag || zoomBoxDrag.pointerId !== e.pointerId || !zoomWin) return;
+      const kind = zoomBoxDrag.kind;
       const w = screenToWorld(e.clientX, e.clientY);
       const dx = w.x - zoomBoxDrag.start.x;
       const dy = w.y - zoomBoxDrag.start.y;
@@ -4977,12 +5388,18 @@
         zoomWin.right = Math.max(o.right + dx, zoomWin.left + zoomWin.w * 0.5);
       }
       requestRedraw();
-    });
-    const end = (e) => {
-      if (zoomBoxDrag && zoomBoxDrag.pointerId === e.pointerId) zoomBoxDrag = null;
-    };
-    el.addEventListener("pointerup", end);
-    el.addEventListener("pointercancel", end);
+  }
+  // Stift/Finger direkt im blauen Rahmen auf dem Blatt: Rahmen verschieben statt schreiben
+  function zoomFrameHit(clientX, clientY) {
+    if (!zoomWin) return false;
+    const w = screenToWorld(clientX, clientY);
+    return w.x >= zoomWin.x && w.x <= zoomWin.x + zoomWin.w && w.y >= zoomWin.y && w.y <= zoomWin.y + zoomBoxH();
+  }
+  function startCanvasZoomDrag(e) {
+    zoomBoxDrag = { kind: "box", canvas: true, pointerId: e.pointerId, start: screenToWorld(e.clientX, e.clientY), win: { ...zoomWin } };
+    zoomNext = null;
+    finishZoomAnim();
+    requestRedraw();
   }
   window.addEventListener("resize", () => {
     if (zoomWin) requestRedraw();
@@ -5400,8 +5817,41 @@
     requestRedraw();
   }
 
+  // Eigene Position (lange halten + ziehen), pro Geraet gemerkt; sonst neben der Werkzeugleiste
+  let rulerBarPos = null;
+  try {
+    const v = JSON.parse(localStorage.getItem("sofianotes-rulerbar-pos") || "null");
+    if (v && Number.isFinite(v.fx) && Number.isFinite(v.fy)) rulerBarPos = v;
+  } catch (err) {}
+  let rulerBarDrag = null;
+
+  function rulerBarDefaultPos() {
+    const tb = toolbarEl.getBoundingClientRect();
+    const w = rulerBar.offsetWidth;
+    const dock = currentDock();
+    let left = tb.left + tb.width / 2 - w / 2;
+    let top;
+    if (dock === "bottom") top = tb.top - 10 - rulerBar.offsetHeight;
+    else if (dock === "top") top = tb.bottom + 10;
+    else {
+      left = window.innerWidth / 2 - w / 2;
+      top = window.innerHeight - rulerBar.offsetHeight - 20;
+    }
+    return { left, top };
+  }
+
   function positionRulerBar() {
     if (!rulerBar || rulerBar.classList.contains("hidden")) return;
+    if (rulerBarDrag && rulerBarDrag.live) return;
+    if (rulerBarPos) {
+      const w = rulerBar.offsetWidth;
+      const h = rulerBar.offsetHeight;
+      const left = rulerBarPos.fx * window.innerWidth - w / 2;
+      const top = rulerBarPos.fy * window.innerHeight - h / 2;
+      rulerBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, left)) + "px";
+      rulerBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, top)) + "px";
+      return;
+    }
     const tb = toolbarEl.getBoundingClientRect();
     const w = rulerBar.offsetWidth;
     const dock = currentDock();
@@ -5427,7 +5877,76 @@
   }
 
   if (rulerBar) {
-    rulerBar.addEventListener("pointerdown", (e) => e.stopPropagation());
+    rulerBar.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (e.target.closest("input")) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const r = rulerBar.getBoundingClientRect();
+      rulerBarDrag = {
+        id: e.pointerId,
+        live: false,
+        dx: e.clientX - r.left,
+        dy: e.clientY - r.top,
+        sx: e.clientX,
+        sy: e.clientY,
+        timer: setTimeout(() => {
+          if (!rulerBarDrag) return;
+          rulerBarDrag.live = true;
+          rulerBar.classList.add("dragging");
+          try {
+            rulerBar.setPointerCapture(rulerBarDrag.id);
+          } catch (err) {}
+          try {
+            if (navigator.vibrate) navigator.vibrate(12);
+          } catch (err) {}
+        }, DOCK_HOLD_MS),
+      };
+    });
+    rulerBar.addEventListener("pointermove", (e) => {
+      const d = rulerBarDrag;
+      if (!d || d.id !== e.pointerId) return;
+      if (!d.live) {
+        if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 10) {
+          clearTimeout(d.timer);
+          rulerBarDrag = null;
+        }
+        return;
+      }
+      const w = rulerBar.offsetWidth;
+      const h = rulerBar.offsetHeight;
+      rulerBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - d.dx)) + "px";
+      rulerBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - d.dy)) + "px";
+    });
+    const endBarDrag = (e) => {
+      const d = rulerBarDrag;
+      if (!d || d.id !== e.pointerId) return;
+      clearTimeout(d.timer);
+      rulerBarDrag = null;
+      if (!d.live) return;
+      rulerBar.classList.remove("dragging");
+      // Klick auf den Knopf unter dem Finger nach dem Ziehen nicht ausloesen
+      rulerBar.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }, { capture: true, once: true });
+      const r = rulerBar.getBoundingClientRect();
+      const def = rulerBarDefaultPos();
+      if (Math.hypot(r.left - def.left, r.top - def.top) < 40) {
+        // zurueck an den Standardplatz gezogen: wieder automatisch neben der Leiste
+        rulerBarPos = null;
+        try {
+          localStorage.removeItem("sofianotes-rulerbar-pos");
+        } catch (err) {}
+      } else {
+        rulerBarPos = { fx: (r.left + r.width / 2) / window.innerWidth, fy: (r.top + r.height / 2) / window.innerHeight };
+        try {
+          localStorage.setItem("sofianotes-rulerbar-pos", JSON.stringify(rulerBarPos));
+        } catch (err) {}
+      }
+      positionRulerBar();
+    };
+    rulerBar.addEventListener("pointerup", endBarDrag);
+    rulerBar.addEventListener("pointercancel", endBarDrag);
     rulerBar.querySelectorAll(".kind-btn").forEach((b) =>
       b.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -5560,9 +6079,7 @@
         b.classList.toggle("active", on);
       });
       const table = activeTable();
-      toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) => {
-        b.disabled = !table;
-      });
+      if (barTblEditBtn) barTblEditBtn.disabled = !table;
     } else if (mode === "eraser") {
       let best = null;
       toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) => {
@@ -5598,27 +6115,14 @@
     })
   );
 
-  toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) => {
-    // Tippt man gerade in einer Zelle, bleibt man nach dem Aendern in derselben Zelle
-    b.addEventListener("pointerdown", (e) => {
-      if (textEdit && e.cancelable) e.preventDefault();
+  const barTblEditBtn = document.getElementById("btn-bar-tbl-edit");
+  if (barTblEditBtn) {
+    barTblEditBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    barTblEditBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      openTableDialog(activeTable());
     });
-    b.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const t = activeTable();
-      if (!t) return;
-      const cell = textEdit && textEdit.kind === "cell" ? { r: textEdit.r, c: textEdit.c } : null;
-      if (textEdit) commitTextEditor();
-      changeTable(b.dataset.tbl, Number(b.dataset.delta), t);
-      const fresh = boardStrokes.get(t.id);
-      if (cell && fresh) {
-        const ex = fresh.extra || {};
-        openCellEditor(fresh, { r: Math.min(cell.r, (ex.rows || 1) - 1), c: Math.min(cell.c, (ex.cols || 1) - 1) });
-      }
-      syncModeBar();
-    });
-  });
+  }
 
   toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) =>
     b.addEventListener("click", (e) => {
@@ -5983,7 +6487,31 @@
     for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
       if (!s) continue;
-      if (s.tool === "text") {
+      if (s.tool === "text" && axisX && isBoxText(s) && !strokeRotation(s)) {
+        // Textfeld seitlich ziehen = Umbruchbreite aendern (Schrift bleibt gleich gross)
+        const a = pts[0];
+        const baseExtra = (dragState.extras && dragState.extras.get(id)) || {};
+        let w0 = baseExtra.width;
+        if (!w0) {
+          let maxX = a.x;
+          for (const p of pts) maxX = Math.max(maxX, p.x);
+          w0 = Math.max(maxX - a.x, s.size);
+        }
+        // die gezogene Seite folgt dem Finger, die andere bleibt stehen
+        const move = s1x - s0x;
+        const min = s.size * 2;
+        let left = a.x;
+        let w = w0;
+        if (dragState.corner === "w") {
+          w = Math.max(min, w0 - move);
+          left = a.x + w0 - w;
+        } else {
+          w = Math.max(min, w0 + move);
+        }
+        s.extra = Object.assign({}, baseExtra, { width: w });
+        s.points = [{ x: left, y: a.y, p: a.p, text: a.text }].concat(pts.slice(1).map((p) => ({ ...p })));
+        relayoutBoxText(s);
+      } else if (s.tool === "text") {
         const a = pts[0];
         const dx = origin.x + (a.x - origin.x) * fx - a.x;
         const dy = origin.y + (a.y - origin.y) * fy - a.y;
@@ -6645,15 +7173,38 @@
     requestRedraw();
   }
 
-  document.getElementById("btn-import")?.addEventListener("click", (e) => {
-    e.preventDefault();
+  // ---- Einfuegen-Menue oben: Tabelle, Bild, PDF ----
+  const insertMenu = document.getElementById("insert-menu");
+  const insertBtn = document.getElementById("btn-insert");
+  function pickImportFiles(accept) {
+    if (!importFileInput) return;
+    importFileInput.accept = accept;
+    importFileInput.value = "";
+    importFileInput.click();
+  }
+  insertBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     hidePopovers();
-    if (importFileInput) {
-      importFileInput.value = "";
-      importFileInput.click();
-    }
+    insertMenu.classList.toggle("hidden");
   });
+  document.getElementById("insert-table")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    insertMenu.classList.add("hidden");
+    openTableDialog(null);
+  });
+  document.getElementById("insert-image")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    insertMenu.classList.add("hidden");
+    pickImportFiles("image/*");
+  });
+  document.getElementById("insert-pdf")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    insertMenu.classList.add("hidden");
+    pickImportFiles("application/pdf,.pdf,image/*");
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap")) insertMenu.classList.add("hidden");
+  }, true);
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) e.preventDefault();
@@ -7080,6 +7631,25 @@
     if (!selection.bbox) return null;
     const pad = SELECT_PAD_PX / scale;
     let kind = null;
+    // ausgewaehlte Tabelle: innere Linien greifen -> Spalte/Zeile breiter oder schmaler
+    const selTable = cropState ? null : selectedTable();
+    const tline = selTable && !pickScaleHandle(world, selection.bbox, pad, slop) ? tableLineAt(selTable, world, touch ? 14 : 8) : null;
+    if (tline) {
+      const g = tableGeom(selTable);
+      dragState = {
+        pointerId: e.pointerId,
+        startWorld: world,
+        kind: "tblline",
+        tableId: selTable.id,
+        axis: tline.axis,
+        i: tline.i,
+        cw0: g.xs.slice(1).map((x, i) => x - g.xs[i]),
+        rh0: g.ys.slice(1).map((y, i) => y - g.ys[i]),
+        pointerType: e.pointerType,
+        ...snapshotSelection(),
+      };
+      return "handle";
+    }
     // Einzelne Knoten verbiegen ist Feinarbeit fuer Stift/Maus; ein Finger wuerde dabei
     // ungewollt die Form verziehen statt die Auswahl zu verschieben.
     const knot = cropState || touch ? null : pickEditKnot(world);
@@ -7215,6 +7785,7 @@
         startRulerGesture();
         return;
       }
+      if (touchPointers.size >= 2 && zoomBoxDrag && zoomBoxDrag.canvas) zoomBoxDrag = null;
       if (touchPointers.size === 2) {
         tapState = null;
         if (currentStroke) abortStroke();
@@ -7235,6 +7806,12 @@
       }
       if (touchPointers.size === 1) {
         const world = screenToWorld(e.clientX, e.clientY);
+        if (!pinchState && currentTool !== "select" && !penIsDown() && zoomFrameHit(e.clientX, e.clientY)) {
+          tapState = null;
+          panState = null;
+          startCanvasZoomDrag(e);
+          return;
+        }
         if (fingerDrawEnabled && !pinchState) {
           dispatchPrimaryDown(e);
           return;
@@ -7266,6 +7843,10 @@
       return;
     }
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (currentTool !== "select" && zoomFrameHit(e.clientX, e.clientY)) {
+      startCanvasZoomDrag(e);
+      return;
+    }
 
     dispatchPrimaryDown(e);
   }, { passive: false });
@@ -7273,6 +7854,11 @@
   canvas.addEventListener("pointermove", (e) => {
     notePasteHoldMove(e);
     activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+    if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
+      if (e.pointerType === "touch") touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      moveZoomBoxDrag(e);
+      return;
+    }
 
     if (e.pointerType === "touch") {
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -7360,6 +7946,7 @@
       if (dragState.kind === "scale") updateSelectionScale(world);
       else if (dragState.kind === "rotate") updateSelectionRotate(world);
       else if (dragState.kind === "point") updatePointEdit(world);
+      else if (dragState.kind === "tblline") updateTableLineDrag(world);
       else updateSelectionDrag(world);
     } else if (lassoPointerId === e.pointerId && lassoPoints) {
       if (touchPointers.size >= 2) {
@@ -7400,6 +7987,12 @@
     const consumed = pasteHoldConsumed;
     clearPasteHold();
     activePointers.delete(e.pointerId);
+    if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
+      zoomBoxDrag = null;
+      touchPointers.delete(e.pointerId);
+      requestRedraw();
+      return;
+    }
 
     if (consumed) {
       pasteHoldConsumed = false;
@@ -7486,6 +8079,7 @@
     }
     if (dragState && dragState.pointerId === e.pointerId) {
       finalizeSelectionDrag();
+      requestRedraw();
       return;
     }
     if (lassoPointerId === e.pointerId) {
@@ -7525,6 +8119,31 @@
   }
   canvas.addEventListener("pointerup", endPointer);
   canvas.addEventListener("pointercancel", endPointer);
+  // Sicherheitsnetz: geht ein "Finger hoch" verloren (Pointer-Capture weg, Overlay,
+  // iOS-Gesten), bliebe ein Geister-Finger in touchPointers haengen - dann gaebe es nie
+  // wieder genau zwei Finger und Zoomen/Verschieben mit den Fingern ginge nicht mehr.
+  const dropTouch = (e) => {
+    if (e.pointerType !== "touch" || e.target === canvas) return;
+    if (touchPointers.has(e.pointerId)) {
+      touchPointers.delete(e.pointerId);
+      activePointers.delete(e.pointerId);
+      if (touchPointers.size < 2) pinchState = null;
+      if (touchPointers.size === 0) panState = null;
+    }
+  };
+  window.addEventListener("pointerup", dropTouch, true);
+  window.addEventListener("pointercancel", dropTouch, true);
+  const resetTouches = (e) => {
+    if (e.touches && e.touches.length > 0) return;
+    if (!touchPointers.size) return;
+    touchPointers.clear();
+    for (const [id, p] of activePointers) if (p.type === "touch") activePointers.delete(id);
+    pinchState = null;
+    panState = null;
+    rulerGesture = null;
+  };
+  window.addEventListener("touchend", (e) => setTimeout(() => resetTouches(e), 0), { capture: true, passive: true });
+  window.addEventListener("touchcancel", (e) => setTimeout(() => resetTouches(e), 0), { capture: true, passive: true });
   canvas.addEventListener("pointerleave", (e) => {
     if (currentTool === "eraser" && !activePointers.has(e.pointerId)) {
       eraserCursorEl.style.display = "none";

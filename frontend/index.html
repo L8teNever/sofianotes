@@ -66,6 +66,8 @@
     <button type="button" id="btn-zw-close" title="Zoom-Fenster schließen"><span class="material-symbols-rounded">close</span></button>
   </div>
 </div>
+<div id="te-handle-l" class="te-handle hidden" title="Breite ziehen"></div>
+<div id="te-handle-r" class="te-handle hidden" title="Breite ziehen"></div>
 <div id="text-editor" class="text-editor hidden" contenteditable="true" spellcheck="true" autocapitalize="sentences" role="textbox" aria-multiline="true" aria-label="Text"></div>
 <div id="text-format-bar" class="text-format-bar hidden" role="toolbar" aria-label="Textformat">
   <button type="button" data-cmd="bold" title="Fett (Strg/Cmd+B)"><span class="material-symbols-rounded">format_bold</span></button>
@@ -97,21 +99,9 @@
   <button type="button" class="txt-btn hidden" data-flag="i" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
   <button type="button" class="txt-btn hidden" data-flag="s" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
   <button type="button" class="txt-btn hidden" data-flag="u" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
-  <button type="button" id="btn-tbl-row-add" class="tbl-btn hidden" title="Zeile unten anfügen">
-    <span class="material-symbols-rounded">add</span>
-    Zeile
-  </button>
-  <button type="button" id="btn-tbl-col-add" class="tbl-btn hidden" title="Spalte rechts anfügen">
-    <span class="material-symbols-rounded">add</span>
-    Spalte
-  </button>
-  <button type="button" id="btn-tbl-row-del" class="tbl-btn hidden" title="Letzte Zeile entfernen">
-    <span class="material-symbols-rounded">remove</span>
-    Zeile
-  </button>
-  <button type="button" id="btn-tbl-col-del" class="tbl-btn hidden" title="Letzte Spalte entfernen">
-    <span class="material-symbols-rounded">remove</span>
-    Spalte
+  <button type="button" id="btn-tbl-edit" class="tbl-btn hidden" title="Tabelle bearbeiten: Spalten, Zeilen, Breiten">
+    <span class="material-symbols-rounded">table</span>
+    Tabelle
   </button>
   <button type="button" id="btn-media-crop" class="hidden" title="Zuschneiden">
     <span class="material-symbols-rounded">crop</span>
@@ -188,6 +178,25 @@
   <button id="btn-zoom-window" class="icon-btn" type="button" title="Zoom-Fenster: groß schreiben, klein aufs Blatt">
     <span class="material-symbols-rounded">zoom_in_map</span>
   </button>
+  <div class="insert-menu-wrap">
+    <button id="btn-insert" class="icon-btn" type="button" title="Einfügen: Tabelle, Bild, PDF">
+      <span class="material-symbols-rounded">add_box</span>
+    </button>
+    <div id="insert-menu" class="lib-add-menu insert-menu hidden">
+      <button type="button" id="insert-table" class="lib-add-opt">
+        <span class="material-symbols-rounded">table</span>
+        Tabelle
+      </button>
+      <button type="button" id="insert-image" class="lib-add-opt">
+        <span class="material-symbols-rounded">add_photo_alternate</span>
+        Bild
+      </button>
+      <button type="button" id="insert-pdf" class="lib-add-opt">
+        <span class="material-symbols-rounded">description</span>
+        PDF / Datei
+      </button>
+    </div>
+  </div>
 </header>
 
 <aside id="undo-redo-dock" class="corner-top-left" title="Lange drücken, dann in eine Ecke ziehen">
@@ -265,10 +274,7 @@
     <div class="mode-group" data-modes="text">
       <span class="mode-sep"></span>
       <button id="btn-insert-table" class="tool-btn" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">table</span></button>
-      <button type="button" class="tool-btn tbl-bar-btn" data-tbl="row" data-delta="1" title="Zeile unten anfügen"><span class="material-symbols-rounded">table_rows</span><span class="mini-badge">+</span></button>
-      <button type="button" class="tool-btn tbl-bar-btn" data-tbl="col" data-delta="1" title="Spalte rechts anfügen"><span class="material-symbols-rounded">view_column</span><span class="mini-badge">+</span></button>
-      <button type="button" class="tool-btn tbl-bar-btn" data-tbl="row" data-delta="-1" title="Letzte Zeile entfernen"><span class="material-symbols-rounded">table_rows</span><span class="mini-badge">−</span></button>
-      <button type="button" class="tool-btn tbl-bar-btn" data-tbl="col" data-delta="-1" title="Letzte Spalte entfernen"><span class="material-symbols-rounded">view_column</span><span class="mini-badge">−</span></button>
+      <button type="button" id="btn-bar-tbl-edit" class="tool-btn" title="Tabelle bearbeiten: Spalten, Zeilen, Breiten"><span class="material-symbols-rounded">tune</span></button>
     </div>
     <div class="mode-group" data-modes="eraser">
       <span class="mode-sep"></span>
@@ -277,11 +283,6 @@
       <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="55" title="Großer Radierer"><span class="eraser-dot" style="width:21px;height:21px"></span></button>
       <span class="mode-sep"></span>
       <button type="button" id="btn-bar-erase-all" class="tool-btn" title="Alle Striche löschen (Bilder, Texte und Tabellen bleiben)"><span class="material-symbols-rounded">delete_sweep</span></button>
-    </div>
-    <div class="tool-wrapper" data-modes="pen lasso">
-      <button id="btn-import" class="tool-btn" type="button" title="Bild oder PDF importieren">
-        <span class="material-symbols-rounded">add_photo_alternate</span>
-      </button>
     </div>
 
     <div id="tool-popover" class="tool-popover hidden">
@@ -501,6 +502,35 @@
   </div>
 </div>
 
+  <div id="table-dialog" class="table-dialog hidden" role="dialog" aria-label="Tabelle">
+    <div class="td-card">
+      <div class="td-head">
+        <span id="td-title">Tabelle einfügen</span>
+        <button type="button" id="td-close" class="icon-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      </div>
+      <div class="td-row">
+        <div class="td-stepper">
+          <span class="td-label">Spalten</span>
+          <button type="button" class="td-step" data-k="cols" data-d="-1" title="Spalte weniger"><span class="material-symbols-rounded">remove</span></button>
+          <span id="td-cols" class="td-num">3</span>
+          <button type="button" class="td-step" data-k="cols" data-d="1" title="Spalte mehr"><span class="material-symbols-rounded">add</span></button>
+        </div>
+        <div class="td-stepper">
+          <span class="td-label">Zeilen</span>
+          <button type="button" class="td-step" data-k="rows" data-d="-1" title="Zeile weniger"><span class="material-symbols-rounded">remove</span></button>
+          <span id="td-rows" class="td-num">3</span>
+          <button type="button" class="td-step" data-k="rows" data-d="1" title="Zeile mehr"><span class="material-symbols-rounded">add</span></button>
+        </div>
+        <button type="button" id="td-even" class="td-chip" title="Alle Spalten gleich breit, alle Zeilen gleich hoch">Gleich verteilen</button>
+      </div>
+      <canvas id="td-preview" class="td-preview"></canvas>
+      <div class="td-hint">Linien in der Vorschau ziehen: Spalten breiter/schmaler, Zeilen höher/niedriger</div>
+      <div class="td-actions">
+        <button type="button" id="td-cancel" class="td-btn">Abbrechen</button>
+        <button type="button" id="td-ok" class="td-btn primary">Einfügen</button>
+      </div>
+    </div>
+  </div>
   <div id="swatch-menu" class="swatch-menu hidden" role="menu">
     <label class="swatch-menu-btn" title="Farbe ändern">
       <span class="material-symbols-rounded">palette</span>
