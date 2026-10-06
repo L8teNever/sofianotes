@@ -20,7 +20,11 @@
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
-  const HOLD_MS = 750; // wie lange der Stift ruhig gehalten werden muss, damit eine Form erkannt wird - bewusst deutlich laenger als eine normale Schreibpause zwischen Buchstaben/Woertern, sonst wird Handschrift faelschlich als Form erkannt
+  // Formen-Erkennung nur bei bewusstem Stillhalten: deutlich laenger als jede normale
+  // Schreibpause, sonst wird Handschrift faelschlich als Form erkannt.
+  const HOLD_MS = 1500; // so lange muss der Stift (fast) ruhig stehen
+  const HOLD_STILL_PX = 6; // "kaum bewegen": Zittern innerhalb dieses Radius (Bildschirm-px) zaehlt nicht als Bewegung
+  const HOLD_HINT_MS = 450; // ab hier zeigt ein Ring an der Stiftspitze, dass gleich eine Form erkannt wird
   const MIN_MOVE_WORLD = 0.35; // kleine Stiftbewegungen zaehlen mit, sonst wirken Kurven eckig
   const GAP_FILL_WORLD = 3.5; // grosse Luecken zwischen Samples mit Zwischenpunkten fuellen
 
@@ -631,6 +635,7 @@
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
     drawLassoAndSelection();
+    drawHoldHint();
     positionInkChips();
     positionScanBoxes();
 
@@ -639,6 +644,7 @@
   }
 
   function tick() {
+    if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
     if (dirty) {
       draw();
       dirty = false;
@@ -2096,22 +2102,84 @@
 
   // ---- Formen-Erkennung (Linie/Rechteck/Dreieck/Kreis beim Halten) ------
   let holdTimer = null;
+  let holdHintTimer = null;
+  let holdAnchor = null; // {x, y, index} Weltpunkt (und Punkt-Index), um den der Stift gerade ruhig steht
+  let holdStartedAt = 0;
+  let holdHint = null; // {x, y} solange der Fortschrittsring angezeigt wird
 
   function clearHoldTimer() {
     if (holdTimer) {
       clearTimeout(holdTimer);
       holdTimer = null;
     }
+    if (holdHintTimer) {
+      clearTimeout(holdHintTimer);
+      holdHintTimer = null;
+    }
+    holdAnchor = null;
+    if (holdHint) {
+      holdHint = null;
+      requestRedraw();
+    }
   }
   function isHoldSnapTool(tool) {
     return tool === "pen" || tool === "marker";
   }
 
+  // Wird bei jedem neuen Punkt aufgerufen. Bleibt der Stift innerhalb von HOLD_STILL_PX um
+  // den Haltepunkt, laeuft die Uhr weiter; erst eine echte Bewegung startet sie neu.
   function armHoldTimer() {
+    if (!shapeRecognitionEnabled) return clearHoldTimer();
+    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return clearHoldTimer();
+    const tip = currentStroke.points[currentStroke.points.length - 1];
+    if (holdAnchor && tip && Math.hypot(tip.x - holdAnchor.x, tip.y - holdAnchor.y) <= HOLD_STILL_PX / scale) return;
     clearHoldTimer();
-    if (!shapeRecognitionEnabled) return;
-    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
+    if (!tip) return;
+    holdAnchor = { x: tip.x, y: tip.y, index: currentStroke.points.length - 1 };
+    holdStartedAt = performance.now();
+    holdHintTimer = setTimeout(showHoldHint, HOLD_HINT_MS);
     holdTimer = setTimeout(tryShapeSnap, HOLD_MS);
+  }
+
+  // Die Zitter-Punkte, die waehrend des Haltens dazukommen, gehoeren nicht zur Form -
+  // sonst verfaelschen sie bei Kreisen den Mittelpunkt und die Erkennung scheitert.
+  function pointsBeforeHold(points) {
+    if (!holdAnchor || holdAnchor.index == null) return points;
+    return points.slice(0, holdAnchor.index + 1);
+  }
+
+  function detectHoldShape(points, tool) {
+    let detected = detectShape(points);
+    if (!detected && tool === "marker") detected = straightenOpenStroke(points);
+    return detected;
+  }
+
+  // Ring nur zeigen, wenn beim Weiterhalten wirklich eine Form entstuende -
+  // eine normale Schreibpause bleibt so komplett ohne Ablenkung.
+  function showHoldHint() {
+    holdHintTimer = null;
+    if (!currentStroke || currentStroke.locked || !holdAnchor) return;
+    if (!detectHoldShape(pointsBeforeHold(currentStroke.points), currentStroke.tool)) return;
+    holdHint = { x: holdAnchor.x, y: holdAnchor.y };
+    requestRedraw();
+  }
+
+  function drawHoldHint() {
+    if (!holdHint) return;
+    const progress = Math.min(1, (performance.now() - holdStartedAt) / HOLD_MS);
+    const r = 14 / scale;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 3 / scale;
+    ctx.strokeStyle = "rgba(26,115,232,0.18)";
+    ctx.beginPath();
+    ctx.arc(holdHint.x, holdHint.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#1A73E8";
+    ctx.beginPath();
+    ctx.arc(holdHint.x, holdHint.y, r, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   function perpDist(p, a, b) {
@@ -2376,7 +2444,10 @@
         const d = perpDist(p, start, end);
         if (d > maxDev) maxDev = d;
       }
-      if (pathLength > 0 && maxDev / pathLength < 0.09) {
+      // Nur wirklich gerade Striche: Weg kaum laenger als die Luftlinie und kaum Ausschlag.
+      // Wellen/Handschrift (m, w, ~) haben deutlich mehr Weg als Luftlinie und bleiben Tinte.
+      const chord = startEndDist;
+      if (chord > 0 && pathLength / chord < 1.12 && maxDev / chord < 0.08) {
         return { type: "line", points: [{ x: start.x, y: start.y, p: avgPressure }, { x: end.x, y: end.y, p: avgPressure }] };
       }
       return null;
@@ -2456,9 +2527,10 @@
 
   function tryShapeSnap() {
     holdTimer = null;
+    const shapePoints = currentStroke ? pointsBeforeHold(currentStroke.points) : null;
+    clearHoldTimer();
     if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
-    let detected = detectShape(currentStroke.points);
-    if (!detected && currentStroke.tool === "marker") detected = straightenOpenStroke(currentStroke.points);
+    const detected = detectHoldShape(shapePoints, currentStroke.tool);
     if (!detected) return;
     const grab = currentStroke.points[currentStroke.points.length - 1];
     currentStroke.points = detected.points;
