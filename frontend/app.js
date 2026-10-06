@@ -23,8 +23,9 @@
   const CURSOR_SEND_MS = 45;
   // Formen-Erkennung nur bei bewusstem Stillhalten: deutlich laenger als jede normale
   // Schreibpause, sonst wird Handschrift faelschlich als Form erkannt.
-  const HOLD_MS = 1500; // so lange muss der Stift (fast) ruhig stehen
-  const HOLD_STILL_PX = 6; // "kaum bewegen": Zittern innerhalb dieses Radius (Bildschirm-px) zaehlt nicht als Bewegung
+  // Haltezeit/Toleranzen lernt der Server aus den Rueckmeldungen aller Geraete (siehe
+  // shape_learning.py) und schickt sie live; das hier sind nur die Startwerte.
+  const shapeParams = { holdMs: 1500, stillPx: 12, ellipseTol: 0.12, lineTol: 1.12 };
   const HOLD_HINT_MS = 450; // ab hier zeigt ein Ring an der Stiftspitze, dass gleich eine Form erkannt wird
   const MIN_MOVE_WORLD = 0.35; // kleine Stiftbewegungen zaehlen mit, sonst wirken Kurven eckig
   const GAP_FILL_WORLD = 3.5; // grosse Luecken zwischen Samples mit Zwischenpunkten fuellen
@@ -1771,6 +1772,9 @@
         }
         requestRedraw();
         break;
+      case "shape_params":
+        applyShapeState(msg);
+        break;
     }
   }
 
@@ -2031,6 +2035,7 @@
     wsSend({ type: "stroke_move", stroke: serializeStroke(copy) });
   }
   function removeStrokes(ids) {
+    for (const id of ids) noteShapeRemoved(id);
     for (const id of ids) boardStrokes.delete(id);
     wsSend({ type: "erase", strokeIds: ids });
   }
@@ -2170,13 +2175,13 @@
     if (!shapeRecognitionEnabled) return clearHoldTimer();
     if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return clearHoldTimer();
     const tip = currentStroke.points[currentStroke.points.length - 1];
-    if (holdAnchor && tip && Math.hypot(tip.x - holdAnchor.x, tip.y - holdAnchor.y) <= HOLD_STILL_PX / scale) return;
+    if (holdAnchor && tip && Math.hypot(tip.x - holdAnchor.x, tip.y - holdAnchor.y) <= shapeParams.stillPx / scale) return;
     clearHoldTimer();
     if (!tip) return;
     holdAnchor = { x: tip.x, y: tip.y, index: currentStroke.points.length - 1 };
     holdStartedAt = performance.now();
     holdHintTimer = setTimeout(showHoldHint, HOLD_HINT_MS);
-    holdTimer = setTimeout(tryShapeSnap, HOLD_MS);
+    holdTimer = setTimeout(tryShapeSnap, shapeParams.holdMs);
   }
 
   // Die Zitter-Punkte, die waehrend des Haltens dazukommen, gehoeren nicht zur Form -
@@ -2204,7 +2209,7 @@
 
   function drawHoldHint() {
     if (!holdHint) return;
-    const progress = Math.min(1, (performance.now() - holdStartedAt) / HOLD_MS);
+    const progress = Math.min(1, (performance.now() - holdStartedAt) / shapeParams.holdMs);
     const r = 14 / scale;
     ctx.save();
     ctx.lineCap = "round";
@@ -2460,8 +2465,71 @@
     return pts;
   }
 
-  function detectShape(rawPoints) {
-    if (rawPoints.length < 6) return null;
+  // Gleichmaessig nach Weglaenge verteilen: wer am Ende langsamer wird, erzeugt sonst
+  // dort viel mehr Punkte, und die verziehen Mittelpunkt und Passung.
+  function resampleByLength(pts) {
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (len <= 0) return pts;
+    const n = Math.max(32, Math.min(160, Math.round(len / 3)));
+    const step = len / (n - 1);
+    const out = [{ ...pts[0] }];
+    let acc = 0;
+    let target = step;
+    for (let i = 1; i < pts.length && out.length < n - 1; i++) {
+      const a = pts[i - 1];
+      const b = pts[i];
+      const seg = Math.hypot(b.x - a.x, b.y - a.y);
+      while (seg > 0 && acc + seg >= target && out.length < n - 1) {
+        const t = (target - acc) / seg;
+        out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p: a.p == null ? b.p : a.p + ((b.p || 0.5) - (a.p || 0.5)) * t });
+        target += step;
+      }
+      acc += seg;
+    }
+    out.push({ ...pts[pts.length - 1] });
+    return out;
+  }
+
+  // Kreise werden gern ueber den Startpunkt hinaus gezogen - das Ueberstehende abschneiden.
+  function trimOvershoot(pts) {
+    if (pts.length < 12) return pts;
+    const s0 = pts[0];
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = Math.floor(pts.length * 0.7); i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - s0.x, pts[i].y - s0.y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    const b = makeBBox(pts);
+    const diag = Math.hypot(b.maxX - b.minX, b.maxY - b.minY);
+    if (best > 0 && best < pts.length - 2 && bestD < diag * 0.2) return pts.slice(0, best + 1);
+    return pts;
+  }
+
+  // Mittlere Abweichung von der Ellipse, die die Bounding-Box aufspannt (relativ zum Radius).
+  function ellipseError(pts, bbox) {
+    const cx = (bbox.minX + bbox.maxX) / 2;
+    const cy = (bbox.minY + bbox.maxY) / 2;
+    const rx = Math.max(1e-6, (bbox.maxX - bbox.minX) / 2);
+    const ry = Math.max(1e-6, (bbox.maxY - bbox.minY) / 2);
+    let sum = 0;
+    for (const p of pts) sum += Math.abs(Math.hypot((p.x - cx) / rx, (p.y - cy) / ry) - 1);
+    return sum / pts.length;
+  }
+
+  let lastShapeMetrics = null; // {ellipse, line, closed} der letzten Erkennung (fuers Lernen)
+
+  function detectShape(inputPoints) {
+    if (inputPoints.length < 6) return null;
+    let rawPoints = resampleByLength(inputPoints);
+    const pre = makeBBox(rawPoints);
+    const preDiag = Math.hypot(pre.maxX - pre.minX, pre.maxY - pre.minY);
+    const preGap = Math.hypot(rawPoints[0].x - rawPoints[rawPoints.length - 1].x, rawPoints[0].y - rawPoints[rawPoints.length - 1].y);
+    if (preGap < preDiag * 0.38) rawPoints = trimOvershoot(rawPoints);
     const bbox = makeBBox(rawPoints);
     const w = bbox.maxX - bbox.minX, h = bbox.maxY - bbox.minY;
     const diagonal = Math.hypot(w, h);
@@ -2475,6 +2543,12 @@
     for (let i = 1; i < rawPoints.length; i++) pathLength += Math.hypot(rawPoints[i].x - rawPoints[i - 1].x, rawPoints[i].y - rawPoints[i - 1].y);
 
     const closed = startEndDist < diagonal * 0.38;
+    const ellErr = ellipseError(rawPoints, bbox);
+    lastShapeMetrics = {
+      closed,
+      ellipse: closed ? ellErr : null,
+      line: !closed && startEndDist > 0 ? pathLength / startEndDist : null,
+    };
 
     if (!closed) {
       let maxDev = 0;
@@ -2485,7 +2559,7 @@
       // Nur wirklich gerade Striche: Weg kaum laenger als die Luftlinie und kaum Ausschlag.
       // Wellen/Handschrift (m, w, ~) haben deutlich mehr Weg als Luftlinie und bleiben Tinte.
       const chord = startEndDist;
-      if (chord > 0 && pathLength / chord < 1.12 && maxDev / chord < 0.08) {
+      if (chord > 0 && pathLength / chord < shapeParams.lineTol && maxDev / chord < 0.08) {
         return { type: "line", points: [{ x: start.x, y: start.y, p: avgPressure }, { x: end.x, y: end.y, p: avgPressure }] };
       }
       return null;
@@ -2510,6 +2584,15 @@
     const quad = collapseToQuad(corners, diagonal);
     const hasSharpQuad = !!(quad && quad.length === 4 && corners.length >= 3 && corners.length <= 6);
 
+    // Sehr deutliche Ellipse/Kreis zuerst - sonst findet die Eckensuche bei Ovalen
+    // an den Enden der langen Achse "Ecken" und macht ein Rechteck daraus.
+    const ellipseLike = ellErr <= shapeParams.ellipseTol && boxy < 0.72 && rectFit > 0.06;
+    if (ellipseLike && ellErr <= shapeParams.ellipseTol * 0.75) {
+      const round = aspectDiff < 0.18;
+      const r = (w + h) / 4;
+      return { type: "circle", round, points: makeEllipsePoints(cx, cy, round ? r : w / 2, round ? r : h / 2, avgPressure, 96) };
+    }
+
     // Rechteck/Quadrat hat Vorrang, sobald vier echte Ecken da sind
     // (auch wenn die Winkel nicht sauber 90° sind) — aber nicht bei runden Pfaden.
     if (hasSharpQuad) {
@@ -2532,7 +2615,7 @@
       };
     }
 
-    if (circular || (circleFit < 0.20 && periFit < 0.26 && rectFit > 0.08)) {
+    if (ellipseLike || circular || (circleFit < 0.20 && periFit < 0.26 && rectFit > 0.08)) {
       const useCircle = aspectDiff < 0.18;
       const rx = useCircle ? meanR : w / 2;
       const ry = useCircle ? meanR : h / 2;
@@ -2569,7 +2652,11 @@
     clearHoldTimer();
     if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return;
     const detected = detectHoldShape(shapePoints, currentStroke.tool);
-    if (!detected) return;
+    if (!detected) {
+      watchShapeMiss(currentStroke.id, lastShapeMetrics);
+      return;
+    }
+    watchShapeSnap(currentStroke.id, detected.type === "circle" && detected.round === false ? "ellipse" : detected.type, lastShapeMetrics);
     const grab = currentStroke.points[currentStroke.points.length - 1];
     currentStroke.points = detected.points;
     currentStroke.unsent = [];
@@ -3771,6 +3858,106 @@
     if (zoomWin) requestRedraw();
   });
 
+  // ---- Lernende Formen-Erkennung (Rueckmeldungen an den Server) ---------------
+  const shapeWatch = new Map(); // strokeId -> {kind: "snap"|"miss", shape, metrics, t, timer}
+  const SNAP_KEPT_MS = 20000; // so lange muss eine Form ueberleben, um als "behalten" zu gelten
+  const MISS_WINDOW_MS = 8000; // wird ein ungewollt ungeformter Strich so schnell entfernt -> verpasst
+  let shapeStats = null;
+  const shapeInfoEl = document.getElementById("shape-learn-info");
+
+  function sendShapeFeedback(ev) {
+    fetch("/api/shape-feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(ev),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((st) => st && applyShapeState(st))
+      .catch(() => {});
+  }
+
+  function applyShapeState(st) {
+    if (!st) return;
+    if (st.params) {
+      for (const k of Object.keys(shapeParams)) {
+        const v = Number(st.params[k]);
+        if (Number.isFinite(v)) shapeParams[k] = v;
+      }
+    }
+    if (st.stats) shapeStats = st.stats;
+    renderShapeInfo();
+  }
+
+  function renderShapeInfo() {
+    if (!shapeInfoEl) return;
+    const sec = (ms) => (ms / 1000).toFixed(1).replace(".", ",") + " s";
+    const st = shapeStats;
+    let text = "Lernt mit allen Geräten mit. Haltezeit gerade " + sec(shapeParams.holdMs) + ".";
+    if (st && st.snaps) {
+      text =
+        `Lernt mit allen Geräten mit: ${st.snaps} erkannt · ${st.kept} behalten · ${st.edited} bearbeitet · ` +
+        `${st.undone} zurückgenommen${st.avgUndoMs ? " (Ø nach " + sec(st.avgUndoMs) + ")" : ""} · ${st.missed} verpasst. ` +
+        `Haltezeit gerade ${sec(shapeParams.holdMs)}.`;
+    }
+    shapeInfoEl.textContent = text;
+  }
+
+  function metricPayload(m, onlyRelevant) {
+    if (!m) return {};
+    if (onlyRelevant) return m.closed ? { ellipse: m.ellipse } : { line: m.line };
+    return { ellipse: m.ellipse, line: m.line };
+  }
+
+  function watchShapeSnap(id, shape, metrics) {
+    unwatchShape(id);
+    const w = { kind: "snap", shape, metrics, t: performance.now() };
+    w.timer = setTimeout(() => {
+      shapeWatch.delete(id);
+      if (boardStrokes.has(id)) sendShapeFeedback({ event: "snap_kept", shape, ...metricPayload(metrics) });
+    }, SNAP_KEPT_MS);
+    shapeWatch.set(id, w);
+  }
+
+  // Nur form-aehnliche Striche beobachten, sonst zaehlt jede Korrektur von Handschrift.
+  function watchShapeMiss(id, metrics) {
+    if (!metrics) return;
+    const shapeish = metrics.closed ? metrics.ellipse != null && metrics.ellipse < 0.3 : metrics.line != null && metrics.line < 1.3;
+    if (!shapeish) return;
+    unwatchShape(id);
+    const w = { kind: "miss", metrics, t: performance.now() };
+    w.timer = setTimeout(() => shapeWatch.delete(id), MISS_WINDOW_MS);
+    shapeWatch.set(id, w);
+  }
+
+  function unwatchShape(id) {
+    const w = shapeWatch.get(id);
+    if (!w) return null;
+    clearTimeout(w.timer);
+    shapeWatch.delete(id);
+    return w;
+  }
+
+  function noteShapeRemoved(id) {
+    const w = unwatchShape(id);
+    if (!w) return;
+    const ms = Math.round(performance.now() - w.t);
+    if (w.kind === "snap") sendShapeFeedback({ event: "snap_undone", shape: w.shape, ms, ...metricPayload(w.metrics) });
+    else sendShapeFeedback({ event: "missed", ms, ...metricPayload(w.metrics, true) });
+  }
+
+  function noteShapeEdited(id) {
+    const w = shapeWatch.get(id);
+    if (!w || w.kind !== "snap") return;
+    unwatchShape(id);
+    sendShapeFeedback({ event: "snap_edited", shape: w.shape, ...metricPayload(w.metrics) });
+  }
+
+  fetch("/api/shape-params", { credentials: "same-origin" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then(applyShapeState)
+    .catch(() => renderShapeInfo());
+
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}
   const touchPointers = new Map(); // pointerId -> {x,y}
@@ -4250,8 +4437,10 @@
         if (m.beforeSize != null && m.afterSize != null && Math.abs(m.beforeSize - m.afterSize) > 0.05) return true;
         return false;
       });
-      if (changed) pushUndo({ type: "move", moves });
-      else if (dragState.kind === "move") {
+      if (changed) {
+        pushUndo({ type: "move", moves });
+        for (const m of moves) noteShapeEdited(m.id);
+      } else if (dragState.kind === "move") {
         // Antippen einer ausgewaehlten Tabelle: direkt in diese Zelle tippen
         const table = selectedTable();
         const start = dragState.startWorld;
@@ -4995,6 +5184,7 @@
         const clones = struck.map((s) => cloneStroke(s));
         const ids = struck.map((s) => s.id);
         for (const id of ids) {
+          noteShapeRemoved(id);
           boardStrokes.delete(id);
           pendingErase.add(id);
         }
@@ -5073,6 +5263,7 @@
     }
     if (erasedThisGesture.size > 0) {
       for (const id of erasedThisGesture) {
+        noteShapeRemoved(id);
         boardStrokes.delete(id);
         pendingErase.add(id);
       }

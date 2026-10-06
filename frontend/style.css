@@ -1552,3 +1552,10 @@ button {
   cursor: ew-resize;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
+
+.setting-hint {
+  margin: -2px 4px 10px 40px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #5f6368;
+}

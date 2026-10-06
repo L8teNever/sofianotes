@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import cloudflare_ocr, db, goodnotes_export, media, spellcheck
+from . import cloudflare_ocr, db, goodnotes_export, media, shape_learning, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
@@ -41,6 +41,7 @@ app.add_middleware(NoCacheStaticMiddleware)
 @app.on_event("startup")
 async def on_startup() -> None:
     await db.init()
+    await shape_learning.init()
     if ADMIN_EMAIL:
         await db.ensure_admin(ADMIN_EMAIL)
 
@@ -158,6 +159,27 @@ async def spell_ink(request: Request) -> dict:
         "misspelled": spellcheck.misspelled(text),
         "suggestions": spellcheck.suggestions(text),
     }
+
+
+@app.get("/api/shape-params")
+async def shape_params(_person: dict = Depends(get_current_person)) -> dict:
+    return await shape_learning.snapshot()
+
+
+@app.post("/api/shape-feedback")
+async def shape_feedback(request: Request, _person: dict = Depends(get_current_person)) -> dict:
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="JSON erwartet")
+    result = await shape_learning.add(body if isinstance(body, dict) else {})
+    if result is None:
+        raise HTTPException(status_code=400, detail="Unbekannte Meldung")
+    state, changed = result
+    if changed:
+        # neue Werte sofort an alle offenen Geraete (alle Blaetter)
+        await manager.broadcast({"type": "shape_params", **state})
+    return state
 
 
 @app.get("/api/people")
