@@ -2675,7 +2675,10 @@
         const ny = (p.y - g.cy) / ry;
         sum += Math.abs(Math.hypot(nx, ny) - 1);
       }
-      if (sum / pts.length < 0.22) return Math.abs(g.rx - g.ry) / Math.max(g.rx, g.ry) < 0.18 ? "circle" : "ellipse";
+      // Nur maschinell exakte Ellipsen (eingerastete Formen ohne Etikett aus aelteren Daten).
+      // Frueher 0.22 - damit galten auch handgeschriebene "o"/"0" als Kreis und wurden beim
+      // Antippen mit dem Stift ploetzlich markiert.
+      if (sum / pts.length < 0.03) return Math.abs(g.rx - g.ry) / Math.max(g.rx, g.ry) < 0.18 ? "circle" : "ellipse";
     }
     return null;
   }
@@ -2803,10 +2806,31 @@
     return null;
   }
 
-  function pickShapedStrokeAt(world) {
+  function grabSelectedShapeWithPen(e, world) {
+    if (!selection.bbox || !selection.ids.size || cropState) return false;
+    const shapes = selectedStrokes().filter((s) => s.extra && s.extra.shape);
+    if (shapes.length !== selection.ids.size) return false;
+    const pad = SELECT_PAD_PX / scale;
+    const knot = pickEditKnot(world);
+    if (knot) {
+      startPointEdit(e.pointerId, world, knot);
+      return true;
+    }
+    const handle = pickScaleHandle(world, selection.bbox, pad);
+    if (handle) {
+      startSelectionScale(e.pointerId, world, handle);
+      return true;
+    }
+    if (pickRotateHandle(world, selection.bbox, pad)) {
+      startSelectionRotate(e.pointerId, world);
+      return true;
+    }
     const hit = pickStrokeAt(world);
-    if (hit && inferShape(hit)) return hit;
-    return null;
+    if (hit && selection.ids.has(hit.id)) {
+      beginStrokeInteraction(e.pointerId, world, hit, e.clientX, e.clientY);
+      return true;
+    }
+    return false;
   }
 
   function beginStrokeInteraction(pointerId, world, stroke, clientX, clientY) {
@@ -4210,13 +4234,12 @@
   function dispatchPrimaryDown(e) {
     const world = screenToWorld(e.clientX, e.clientY);
     lastPointerWorld = world;
-    if (currentTool !== "eraser" && currentTool !== "select") {
-      const shaped = pickShapedStrokeAt(world);
-      if (shaped) {
-        beginStrokeInteraction(e.pointerId, world, shaped, e.clientX, e.clientY);
-        sendCursor(world.x, world.y, currentTool, activeSize());
-        return;
-      }
+    // Stift/Marker greifen nur eine gerade eingerastete, noch ausgewaehlte Form (an ihren
+    // Griffen oder am Strich selbst), um sie direkt weiterzuziehen. Ein Tap auf geschriebenen
+    // Text markiert dagegen nie etwas - der Stift schreibt einfach.
+    if (currentTool !== "eraser" && currentTool !== "select" && grabSelectedShapeWithPen(e, world)) {
+      sendCursor(world.x, world.y, currentTool, activeSize());
+      return;
     }
     if (currentTool === "select") {
       if (dragState && dragState.pointerId !== e.pointerId) {
@@ -4278,10 +4301,6 @@
       }
       if (touchPointers.size === 1) {
         const world = screenToWorld(e.clientX, e.clientY);
-        if (currentTool !== "eraser" && pickShapedStrokeAt(world)) {
-          dispatchPrimaryDown(e);
-          return;
-        }
         if (fingerDrawEnabled && !pinchState) {
           dispatchPrimaryDown(e);
           return;
