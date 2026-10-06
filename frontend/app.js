@@ -3719,9 +3719,43 @@
   }
 
   if (textFormatBar) {
+    const runFormatButton = (b) => {
+      if (!textEdit) return;
+      if (b.dataset.cmd) {
+        restoreEditorRange();
+        document.execCommand(b.dataset.cmd, false, null);
+        rememberEditorRange();
+      } else if (b.dataset.size) {
+        const cfg = toolConfigs.text;
+        const cur = textEdit.size * scale;
+        const next = Math.max(cfg.min, Math.min(cfg.max, Math.round(cur * (b.dataset.size === "up" ? 1.2 : 1 / 1.2))));
+        textSize = next;
+        applyTextEditStyle({ size: next });
+      }
+      positionTextEditor();
+      syncFormatBar();
+    };
     textFormatBar.querySelectorAll("button").forEach((b) => {
-      // pointer-/mousedown verhindern, sonst verliert der Editor Fokus und Markierung
-      for (const type of ["pointerdown", "mousedown", "touchstart"]) {
+      // Fokus und Markierung muessen im Textfeld bleiben -> Standardaktion beim Druecken
+      // verhindern. Auf dem iPad unterdrueckt das aber den "click" - darum loesen die Knoepfe
+      // selbst beim Loslassen aus (Finger, Stift, Maus), "click" nur noch fuer Tastatur.
+      let pressedId = null;
+      b.addEventListener("pointerdown", (e) => {
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+        pressedId = e.pointerId;
+      });
+      b.addEventListener("pointerup", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (pressedId !== e.pointerId) return;
+        pressedId = null;
+        runFormatButton(b);
+      });
+      b.addEventListener("pointercancel", () => {
+        pressedId = null;
+      });
+      for (const type of ["mousedown", "touchstart"]) {
         b.addEventListener(
           type,
           (e) => {
@@ -3734,20 +3768,8 @@
       b.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!textEdit) return;
-        if (b.dataset.cmd) {
-          restoreEditorRange();
-          document.execCommand(b.dataset.cmd, false, null);
-          rememberEditorRange();
-        } else if (b.dataset.size) {
-          const cfg = toolConfigs.text;
-          const cur = textEdit.size * scale;
-          const next = Math.max(cfg.min, Math.min(cfg.max, Math.round(cur * (b.dataset.size === "up" ? 1.2 : 1 / 1.2))));
-          textSize = next;
-          applyTextEditStyle({ size: next });
-        }
-        positionTextEditor();
-        syncFormatBar();
+        // echte Zeiger-Klicks wurden schon bei pointerup erledigt; detail === 0 = Tastatur
+        if (e.detail === 0) runFormatButton(b);
       });
     });
     document.addEventListener("selectionchange", () => {
