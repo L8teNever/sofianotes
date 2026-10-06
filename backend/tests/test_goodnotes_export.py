@@ -71,6 +71,23 @@ class GoodnotesExportTests(unittest.TestCase):
         data = build_pdf(strokes)
         self.assertTrue(data.startswith(b"%PDF"))
 
+    def test_pdf_with_formatted_runs(self):
+        runs = [{"t": "Hallo "}, {"t": "Welt", "b": 1}, {"t": " weg", "s": 1, "u": 1}, {"t": "\nkursiv", "i": 1}]
+        stroke = {
+            "id": "r",
+            "tool": "text",
+            "color": "#1E1F22",
+            "size": 24,
+            "points": [{"x": 0, "y": 0, "p": 1, "text": "Hallo Welt weg\nkursiv"}, {"x": 160, "y": -22, "p": 1}, {"x": 0, "y": 40, "p": 1}],
+            "extra": {"box": True, "width": None, "runs": runs},
+        }
+        self.assertTrue(build_pdf([stroke]).startswith(b"%PDF"))
+        lines = ge.layout_runs(runs, 12, None)
+        self.assertEqual(len(lines), 2)
+        self.assertEqual("".join(t for t, _, _ in lines[0]), "Hallo Welt weg")
+        wrapped = ge.layout_runs([{"t": "eins zwei drei vier fuenf"}], 12, 40)
+        self.assertGreater(len(wrapped), 2)
+
     def test_wrap_pdf_text(self):
         lines = ge._wrap_pdf_text("eins zwei drei vier", "Helvetica", 10, 40)
         self.assertGreater(len(lines), 1)

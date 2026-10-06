@@ -77,6 +77,66 @@ def _wrap_pdf_text(text: str, font: str, size: float, width: float | None) -> li
     return out or [""]
 
 
+def _run_font(run: dict[str, Any]) -> str:
+    bold = bool(run.get("b"))
+    italic = bool(run.get("i"))
+    if bold and italic:
+        return "Helvetica-BoldOblique"
+    if bold:
+        return "Helvetica-Bold"
+    if italic:
+        return "Helvetica-Oblique"
+    return "Helvetica"
+
+
+def layout_runs(runs: list[dict[str, Any]], size: float, width: float | None) -> list[list[tuple[str, float, dict[str, Any]]]]:
+    """Wie layoutRuns im Browser: Wort-Stuecke mit eigener Schrift, Umbruch bei width."""
+    import re
+
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    lines: list[list[tuple[str, float, dict[str, Any]]]] = [[]]
+    widths = [0.0]
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        font = _run_font(run)
+        for part in re.split(r"(\n|\s+)", str(run.get("t") or "")):
+            if not part:
+                continue
+            if part == "\n":
+                lines.append([])
+                widths.append(0.0)
+                continue
+            w = stringWidth(part, font, size)
+            space = part.isspace()
+            if width and not space and widths[-1] > 0 and widths[-1] + w > width:
+                while lines[-1] and lines[-1][-1][0].isspace():
+                    widths[-1] -= lines[-1].pop()[1]
+                lines.append([])
+                widths.append(0.0)
+            if space and widths[-1] == 0 and len(lines) > 1 and width:
+                continue
+            lines[-1].append((part, w, run))
+            widths[-1] += w
+    return lines
+
+
+def _draw_runs(c, runs: list[dict[str, Any]], x0: float, y0: float, size: float, width: float | None) -> None:
+    for li, line in enumerate(layout_runs(runs, size, width)):
+        x = x0
+        y = y0 - li * size * 1.3
+        for text, w, run in line:
+            c.setFont(_run_font(run), size)
+            c.drawString(x, y, text)
+            c.setLineWidth(max(0.3, size * 0.06))
+            if run.get("u"):
+                c.line(x, y - size * 0.12, x + w, y - size * 0.12)
+            if run.get("s"):
+                c.line(x, y + size * 0.3, x + w, y + size * 0.3)
+            x += w
+
+
 def _bbox(strokes: list[dict[str, Any]]) -> tuple[float, float, float, float]:
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
@@ -303,6 +363,10 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
                 c.setFillColor(_hex_color(str(stroke.get("color") or "#0b57d0"), 1.0))
                 c.setFont(font, font_size)
                 wrap = float(extra["width"]) * scale if box and extra.get("width") else None
+                runs = extra.get("runs") if box and isinstance(extra.get("runs"), list) else None
+                if runs:
+                    _draw_runs(c, runs, tx(float(pts[0]["x"])), ty(float(pts[0]["y"])), font_size, wrap)
+                    continue
                 lines = _wrap_pdf_text(label, font, font_size, wrap) if box else [label]
                 for i, line in enumerate(lines):
                     c.drawString(tx(float(pts[0]["x"])), ty(float(pts[0]["y"])) - i * font_size * 1.3, line)

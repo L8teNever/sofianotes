@@ -3042,22 +3042,95 @@
     return out.length ? out : [""];
   }
 
-  function boxTextPoints(x, y, text, size, width) {
-    const lines = wrapText(text, size, width);
-    measureCtx.font = textFont(size);
-    const w = width || Math.max(size * 0.6, ...lines.map((l) => measureCtx.measureText(l).width));
+  // ---- Formatierter Text: runs = [{t, b, i, s, u}] (fett, kursiv, durchgestrichen,
+  // unterstrichen). points[0].text bleibt der reine Text (Suche, KI, aeltere Clients).
+  function runFont(run, size) {
+    return `${run.i ? "italic " : ""}${run.b ? 700 : 400} ${size}px Inter, sans-serif`;
+  }
+  function sameStyle(a, b) {
+    return !!a.b === !!b.b && !!a.i === !!b.i && !!a.s === !!b.s && !!a.u === !!b.u;
+  }
+  function normalizeRuns(runs) {
+    const out = [];
+    for (const r of runs || []) {
+      if (!r || !r.t) continue;
+      const clean = { t: String(r.t) };
+      for (const k of ["b", "i", "s", "u"]) if (r[k]) clean[k] = 1;
+      const last = out[out.length - 1];
+      if (last && sameStyle(last, clean)) last.t += clean.t;
+      else out.push(clean);
+    }
+    return out;
+  }
+  function runsText(runs) {
+    return (runs || []).map((r) => r.t).join("");
+  }
+  function strokeRuns(s) {
+    const ex = s.extra || {};
+    if (Array.isArray(ex.runs) && ex.runs.length) return ex.runs;
+    return [{ t: (s.points[0] && s.points[0].text) || "" }];
+  }
+
+  // Zeilen aus Wort-Stuecken mit eigener Schrift; bricht bei width um (null = nur bei \n).
+  function layoutRuns(runs, size, width) {
+    const lines = [[]];
+    const widths = [0];
+    for (const run of runs) {
+      measureCtx.font = runFont(run, size);
+      const parts = String(run.t).split(/(\n|\s+)/);
+      for (const part of parts) {
+        if (!part) continue;
+        if (part === "\n") {
+          lines.push([]);
+          widths.push(0);
+          continue;
+        }
+        let w = measureCtx.measureText(part).width;
+        const li = lines.length - 1;
+        const isSpace = /^\s+$/.test(part);
+        if (width && !isSpace && widths[li] > 0 && widths[li] + w > width) {
+          // Leerzeichen am Zeilenende gehoeren nicht in die Breite
+          while (lines[li].length && /^\s+$/.test(lines[li][lines[li].length - 1].t)) widths[li] -= lines[li].pop().w;
+          lines.push([]);
+          widths.push(0);
+        }
+        let text = part;
+        // einzelnes ueberlanges Wort hart umbrechen
+        while (width && !isSpace && w > width && text.length > 1) {
+          let cut = text.length - 1;
+          while (cut > 1 && measureCtx.measureText(text.slice(0, cut)).width > width) cut--;
+          const head = text.slice(0, cut);
+          const hw = measureCtx.measureText(head).width;
+          lines[lines.length - 1].push({ t: head, w: hw, run });
+          widths[widths.length - 1] += hw;
+          lines.push([]);
+          widths.push(0);
+          text = text.slice(cut);
+          w = measureCtx.measureText(text).width;
+        }
+        if (isSpace && widths[lines.length - 1] === 0 && lines.length > 1 && width) continue;
+        lines[lines.length - 1].push({ t: text, w, run });
+        widths[widths.length - 1] += w;
+      }
+    }
+    return { lines, widths };
+  }
+
+  function boxTextPoints(x, y, text, size, width, runs) {
+    const lay = layoutRuns(runs && runs.length ? runs : [{ t: text }], size, width);
+    const w = width || Math.max(size * 0.6, ...lay.widths);
     const lh = size * TEXT_LINE;
     return [
       { x, y, p: 1, text },
       { x: x + w, y: y - size * 0.95, p: 1 },
-      { x, y: y + (lines.length - 1) * lh + size * 0.35, p: 1 },
+      { x, y: y + (lay.lines.length - 1) * lh + size * 0.35, p: 1 },
     ];
   }
 
   function relayoutBoxText(s) {
     const a = s.points[0];
     const width = s.extra && s.extra.width ? s.extra.width : null;
-    s.points = boxTextPoints(a.x, a.y, a.text || "", s.size, width);
+    s.points = boxTextPoints(a.x, a.y, a.text || "", s.size, width, strokeRuns(s));
     s.bbox = strokeWorldBBox(s);
   }
 
@@ -3065,17 +3138,38 @@
     if (textEdit && textEdit.kind === "text" && textEdit.strokeId === s.id) return;
     const a = s.points[0];
     const width = s.extra && s.extra.width ? s.extra.width : null;
-    const lines = wrapText(a.text || "", s.size, width);
+    const lay = layoutRuns(strokeRuns(s), s.size, width);
     c.save();
     c.fillStyle = s.color || "#1E1F22";
-    c.font = textFont(s.size);
+    c.strokeStyle = s.color || "#1E1F22";
+    c.lineWidth = Math.max(0.5, s.size * 0.06);
     c.textBaseline = "alphabetic";
     c.textAlign = "left";
     c.translate(a.x, a.y);
     const rot = strokeRotation(s);
     if (rot) c.rotate(rot);
     const lh = s.size * TEXT_LINE;
-    lines.forEach((line, i) => c.fillText(line, 0, i * lh));
+    lay.lines.forEach((line, li) => {
+      let x = 0;
+      const y = li * lh;
+      for (const piece of line) {
+        c.font = runFont(piece.run, s.size);
+        c.fillText(piece.t, x, y);
+        if (piece.run.u) {
+          c.beginPath();
+          c.moveTo(x, y + s.size * 0.12);
+          c.lineTo(x + piece.w, y + s.size * 0.12);
+          c.stroke();
+        }
+        if (piece.run.s) {
+          c.beginPath();
+          c.moveTo(x, y - s.size * 0.3);
+          c.lineTo(x + piece.w, y - s.size * 0.3);
+          c.stroke();
+        }
+        x += piece.w;
+      }
+    });
     c.restore();
   }
 
@@ -3162,6 +3256,39 @@
     }
     return Array.from(set);
   }
+
+  function selectedTextBoxes() {
+    const all = selectedStrokes();
+    const texts = all.filter((s) => s.tool === "text");
+    return texts.length && texts.length === all.length ? texts : [];
+  }
+
+  // Fett/kursiv/... fuer ganze ausgewaehlte Textfelder umschalten (alle an -> alle aus)
+  function toggleTextFlag(flag) {
+    const texts = selectedTextBoxes();
+    if (!texts.length) return;
+    const allOn = texts.every((t) => strokeRuns(t).every((r) => r[flag]));
+    for (const t of texts) {
+      const before = cloneStroke(t);
+      const runs = normalizeRuns(strokeRuns(t).map((r) => ({ ...r, [flag]: allOn ? 0 : 1 })));
+      const ex = Object.assign({}, t.extra || {}, { box: true });
+      if (runs.every((r) => !r.b && !r.i && !r.s && !r.u)) delete ex.runs;
+      else ex.runs = runs;
+      t.extra = ex;
+      relayoutBoxText(t);
+      wsSend({ type: "stroke_move", stroke: serializeStroke(t) });
+      pushUndo({ type: "replace", before, after: cloneStroke(t) });
+    }
+    selectStrokeIds(Array.from(selection.ids));
+    syncSelectionToolbar();
+    requestRedraw();
+  }
+  document.querySelectorAll(".txt-btn").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleTextFlag(b.dataset.flag);
+    })
+  );
 
   function selectedTable() {
     const tables = selectedStrokes().filter((s) => s.tool === "table");
@@ -3332,7 +3459,7 @@
       before: cloneStroke(s),
       fromLabel: bold,
     };
-    showTextEditor(a.text || "");
+    showTextEditor(a.text || "", strokeRuns(s));
     requestRedraw();
   }
 
@@ -3345,13 +3472,95 @@
     requestRedraw();
   }
 
-  function showTextEditor(value) {
-    textEditorEl.value = value;
+  function escapeHtml(t) {
+    return String(t).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+  }
+  function runsToHtml(runs) {
+    let html = "";
+    for (const r of runs) {
+      let inner = escapeHtml(r.t).replace(/\n/g, "<br>");
+      if (r.u) inner = "<u>" + inner + "</u>";
+      if (r.s) inner = "<s>" + inner + "</s>";
+      if (r.i) inner = "<i>" + inner + "</i>";
+      if (r.b) inner = "<b>" + inner + "</b>";
+      html += inner;
+    }
+    // ein abschliessender Zeilenumbruch braucht im Editor ein zweites <br>, sonst ist er unsichtbar
+    if (/\n$/.test(runsText(runs))) html += "<br>";
+    return html;
+  }
+
+  // Liest den Editor-Inhalt als Runs: Stil aus den umgebenden Tags/Styles, Zeilen aus
+  // <br> und Block-Elementen (Chrome/Safari legen pro Zeile ein <div> an).
+  function serializeEditor() {
+    const root = textEditorEl;
+    const runs = [];
+    const styleOf = (node) => {
+      const st = { b: 0, i: 0, s: 0, u: 0 };
+      for (let el = node.parentElement; el && el !== root.parentElement; el = el.parentElement) {
+        const tag = el.tagName;
+        const cs = getComputedStyle(el);
+        if (tag === "B" || tag === "STRONG" || Number(cs.fontWeight) >= 600) st.b = 1;
+        if (tag === "I" || tag === "EM" || cs.fontStyle === "italic" || cs.fontStyle === "oblique") st.i = 1;
+        const deco = cs.textDecorationLine || cs.textDecoration || "";
+        if (tag === "S" || tag === "STRIKE" || tag === "DEL" || deco.includes("line-through")) st.s = 1;
+        if (tag === "U" || deco.includes("underline")) st.u = 1;
+        if (el === root) break;
+      }
+      // die Grundschrift des Editors selbst ist nicht "fett"
+      return st;
+    };
+    let any = false;
+    const walk = (node) => {
+      for (const child of Array.from(node.childNodes)) {
+        if (child.nodeType === 3) {
+          if (child.nodeValue) {
+            runs.push({ t: child.nodeValue.replace(/\u00a0/g, " "), ...styleOf(child) });
+            any = true;
+          }
+        } else if (child.nodeName === "BR") {
+          const parent = child.parentNode;
+          const onlyChild = parent !== root && parent.childNodes.length === 1;
+          if (!onlyChild) runs.push({ t: "\n" });
+        } else if (child.nodeType === 1) {
+          const block = /^(DIV|P)$/.test(child.nodeName);
+          if (block && any) runs.push({ t: "\n" });
+          walk(child);
+          if (block) any = true;
+        }
+      }
+    };
+    walk(root);
+    const out = normalizeRuns(runs);
+    // trailing Leerraum/Umbrueche weg
+    while (out.length) {
+      const last = out[out.length - 1];
+      last.t = last.t.replace(/\s+$/, "");
+      if (last.t) break;
+      out.pop();
+    }
+    return out;
+  }
+
+  function editorPlainText() {
+    return runsText(serializeEditor());
+  }
+
+  function showTextEditor(value, runs) {
+    const rich = runs && runs.length ? normalizeRuns(runs) : [{ t: value || "" }];
+    textEditorEl.innerHTML = runsToHtml(rich);
     textEditorEl.classList.remove("hidden");
+    textFormatBar.classList.toggle("hidden", !textEdit || textEdit.kind !== "text");
     positionTextEditor();
     textEditorEl.focus({ preventScroll: true });
-    const n = textEditorEl.value.length;
-    textEditorEl.setSelectionRange(n, n);
+    const range = document.createRange();
+    range.selectNodeContents(textEditorEl);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    editorRange = range.cloneRange();
+    syncFormatBar();
   }
 
   function applyTextEditStyle(patch) {
@@ -3394,8 +3603,8 @@
       if (textEdit.width) width = textEdit.width * scale;
       else {
         measureCtx.font = textFont(size);
-        const longest = Math.max(...textEditorEl.value.split("\n").map((l) => measureCtx.measureText(l).width), size * 3);
-        width = longest + size;
+        const lay = layoutRuns(serializeEditor(), size, null);
+        width = Math.max(...lay.widths, size * 3) + size;
       }
       minH = size * TEXT_LINE;
     }
@@ -3408,10 +3617,20 @@
     st.color = color;
     st.height = "auto";
     st.height = Math.max(minH, textEditorEl.scrollHeight) + "px";
+    if (!textFormatBar.classList.contains("hidden")) {
+      const bw = textFormatBar.offsetWidth || 260;
+      const bh = textFormatBar.offsetHeight || 44;
+      let bx = Math.max(8, Math.min(window.innerWidth - bw - 8, left));
+      let by = top - bh - 14;
+      if (by < 8) by = top + textEditorEl.offsetHeight + 14;
+      textFormatBar.style.left = bx + "px";
+      textFormatBar.style.top = by + "px";
+    }
   }
 
   function cancelTextEditor() {
     textEdit = null;
+    textFormatBar.classList.add("hidden");
     textEditorEl.classList.add("hidden");
     textEditorEl.blur();
     requestRedraw();
@@ -3420,12 +3639,15 @@
   function commitTextEditor() {
     if (!textEdit) return;
     const ed = textEdit;
-    const value = textEditorEl.value.replace(/\s+$/, "");
+    const runs = serializeEditor();
+    const value = runsText(runs);
     textEdit = null;
+    textFormatBar.classList.add("hidden");
     textEditorEl.classList.add("hidden");
     textEditorEl.blur();
     if (ed.kind === "cell") {
       const t = boardStrokes.get(ed.tableId);
+      const value = runsText(runs);
       if (!t) return requestRedraw();
       const key = ed.r + "," + ed.c;
       const cells = Object.assign({}, (t.extra && t.extra.cells) || {});
@@ -3446,14 +3668,20 @@
       }
       return requestRedraw();
     }
-    if (ed.before && ed.before.points[0].text === value && !ed.fromLabel) return requestRedraw();
+    const plainRuns = runs.every((r) => !r.b && !r.i && !r.s && !r.u);
+    const beforeRuns = ed.before ? JSON.stringify(normalizeRuns(strokeRuns(ed.before))) : null;
+    const unchanged =
+      ed.before && !ed.fromLabel && JSON.stringify(runs) === beforeRuns && ed.before.size === ed.size && ed.before.color === ed.color;
+    if (unchanged) return requestRedraw();
     const extra = Object.assign({}, (ed.before && ed.before.extra) || {}, { box: true, width: ed.width || null });
+    if (plainRuns) delete extra.runs;
+    else extra.runs = runs;
     const stroke = {
       id: ed.strokeId || uuid(),
       tool: "text",
       color: ed.color,
       size: ed.size,
-      points: boxTextPoints(ed.x, ed.y, value, ed.size, ed.width),
+      points: boxTextPoints(ed.x, ed.y, value, ed.size, ed.width, runs),
       extra,
     };
     putStroke(stroke);
@@ -3461,14 +3689,92 @@
     requestRedraw();
   }
 
+  const textFormatBar = document.getElementById("text-format-bar");
+
+  function syncFormatBar() {
+    if (!textFormatBar || textFormatBar.classList.contains("hidden")) return;
+    const state = {
+      bold: document.queryCommandState("bold"),
+      italic: document.queryCommandState("italic"),
+      strikeThrough: document.queryCommandState("strikeThrough"),
+      underline: document.queryCommandState("underline"),
+    };
+    textFormatBar.querySelectorAll("[data-cmd]").forEach((b) => b.classList.toggle("active", !!state[b.dataset.cmd]));
+  }
+
+  let editorRange = null; // letzte Cursor-Position/Markierung im Editor
+  function rememberEditorRange() {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount && textEditorEl.contains(sel.anchorNode)) editorRange = sel.getRangeAt(0).cloneRange();
+  }
+  function restoreEditorRange() {
+    // Hat der Editor den Fokus noch, ist seine aktuelle Markierung die richtige
+    if (document.activeElement === textEditorEl) return;
+    textEditorEl.focus({ preventScroll: true });
+    if (!editorRange) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(editorRange);
+  }
+
+  if (textFormatBar) {
+    textFormatBar.querySelectorAll("button").forEach((b) => {
+      // pointer-/mousedown verhindern, sonst verliert der Editor Fokus und Markierung
+      for (const type of ["pointerdown", "mousedown", "touchstart"]) {
+        b.addEventListener(
+          type,
+          (e) => {
+            if (e.cancelable) e.preventDefault();
+            e.stopPropagation();
+          },
+          { passive: false }
+        );
+      }
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!textEdit) return;
+        if (b.dataset.cmd) {
+          restoreEditorRange();
+          document.execCommand(b.dataset.cmd, false, null);
+          rememberEditorRange();
+        } else if (b.dataset.size) {
+          const cfg = toolConfigs.text;
+          const cur = textEdit.size * scale;
+          const next = Math.max(cfg.min, Math.min(cfg.max, Math.round(cur * (b.dataset.size === "up" ? 1.2 : 1 / 1.2))));
+          textSize = next;
+          applyTextEditStyle({ size: next });
+        }
+        positionTextEditor();
+        syncFormatBar();
+      });
+    });
+    document.addEventListener("selectionchange", () => {
+      if (!textEdit) return;
+      rememberEditorRange();
+      syncFormatBar();
+    });
+  }
+
   if (textEditorEl) {
     textEditorEl.addEventListener("input", positionTextEditor);
+    // Einfuegen nur als reiner Text - fremdes HTML (Farben, Schriften) bleibt draussen
+    textEditorEl.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
+      document.execCommand("insertText", false, text);
+    });
     textEditorEl.addEventListener("keydown", (e) => {
       e.stopPropagation(); // Strg+Z, Entf usw. gehoeren hier dem Text, nicht dem Blatt
       if (e.key === "Escape") {
         e.preventDefault();
         commitTextEditor();
+        return;
       }
+      // Strg/Cmd+B/I/U wie gewohnt; Tabellenzellen bleiben unformatiert
+      const meta = e.ctrlKey || e.metaKey;
+      if (meta && textEdit && textEdit.kind === "cell" && /^[biu]$/i.test(e.key)) e.preventDefault();
+      if (meta && textEdit && textEdit.kind === "text" && /^[biu]$/i.test(e.key)) setTimeout(syncFormatBar, 0);
     });
     textEditorEl.addEventListener("pointerdown", (e) => e.stopPropagation());
   }
@@ -4783,6 +5089,11 @@
     if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
     const table = cropping ? null : selectedTable();
     document.querySelectorAll(".tbl-btn").forEach((b) => b.classList.toggle("hidden", !table));
+    const texts = cropping ? [] : selectedTextBoxes();
+    document.querySelectorAll(".txt-btn").forEach((b) => {
+      b.classList.toggle("hidden", !texts.length);
+      if (texts.length) b.classList.toggle("active", texts.every((t) => strokeRuns(t).every((r) => r[b.dataset.flag])));
+    });
     if (doneBtn) doneBtn.classList.toggle("hidden", !cropping);
     if (cancelBtn) cancelBtn.classList.toggle("hidden", !cropping);
     positionMediaToolbar();
@@ -5751,17 +6062,20 @@
   );
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Textfelder auf dem Blatt sind contenteditable - dort muss Markieren erlaubt bleiben
+  const EDITABLE = "input, textarea, [contenteditable]";
   document.addEventListener("contextmenu", (e) => {
-    if (e.target.closest("input, textarea")) return;
+    if (e.target.closest && e.target.closest(EDITABLE)) return;
     e.preventDefault();
   });
   document.addEventListener("selectstart", (e) => {
-    if (e.target.closest("input, textarea")) return;
+    const el = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+    if (el && el.closest(EDITABLE)) return;
     e.preventDefault();
   });
   document.addEventListener("selectionchange", () => {
     const active = document.activeElement;
-    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
     const sel = window.getSelection && window.getSelection();
     if (sel && sel.rangeCount) sel.removeAllRanges();
   });
