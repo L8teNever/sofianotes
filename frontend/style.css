@@ -232,7 +232,7 @@ button {
   gap: 8px;
   height: var(--bar-h);
   padding: 6px 10px 6px 6px;
-  max-width: min(96vw, 640px);
+  max-width: min(96vw, 900px);
   border-radius: 999px;
   background: var(--dock-bg);
   border: 1px solid var(--dock-border);
@@ -1620,3 +1620,39 @@ button {
 }
 .text-format-bar .material-symbols-rounded { font-size: 22px; }
 .fmt-divider { width: 1px; height: 22px; background: #e0e3e7; margin: 0 4px; }
+
+/* ---- Modus-Auswahl oben + kontextabhaengige Werkzeugleiste ---- */
+.mode-switch { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.mode-btn.active,
+#btn-zoom-window.active {
+  background: var(--accent);
+  color: #fff;
+}
+.mode-group { display: flex; align-items: center; gap: 2px; }
+#toolbar.dock-left .mode-group,
+#toolbar.dock-right .mode-group,
+#toolbar.free-drag.orient-vertical .mode-group { flex-direction: column; }
+.mode-sep { width: 1px; height: 22px; background: #d5d9dd; margin: 0 4px; flex: 0 0 auto; }
+#toolbar.dock-left .mode-sep,
+#toolbar.dock-right .mode-sep { width: 22px; height: 1px; margin: 4px 0; }
+.size-btn .size-a { font-weight: 700; line-height: 1; font-family: Inter, sans-serif; }
+.size-btn.active, .fmt-btn.active, .angle-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.angle-label { font: 700 12px/1 Inter, sans-serif; }
+.tbl-bar-btn { position: relative; }
+.tbl-bar-btn:disabled { opacity: 0.35; cursor: default; }
+.mini-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font: 800 12px/1 Inter, sans-serif;
+}
+.mode-hint { font: 500 12px/1.2 Inter, sans-serif; color: var(--muted); padding: 0 6px; white-space: nowrap; }
+#toolbar.dock-left .mode-hint, #toolbar.dock-right .mode-hint { display: none; }
+#toolbar[data-mode="pen"] [data-modes]:not([data-modes~="pen"]) { display: none; }
+#toolbar[data-mode="text"] [data-modes]:not([data-modes~="text"]) { display: none; }
+#toolbar[data-mode="table"] [data-modes]:not([data-modes~="table"]) { display: none; }
+#toolbar[data-mode="ruler"] [data-modes]:not([data-modes~="ruler"]) { display: none; }
+#toolbar[data-mode="lasso"] [data-modes]:not([data-modes~="lasso"]) { display: none; }

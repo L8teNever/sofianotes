@@ -864,6 +864,8 @@
       lastToolBeforeEraser = currentTool || "pen";
     }
     currentTool = tool;
+    if (tool === "pen" || tool === "marker" || tool === "eraser") lastInkTool = tool;
+    syncModeFromTool(tool);
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === tool);
     });
@@ -3443,6 +3445,9 @@
       before: null,
     };
     showTextEditor("");
+    // voreingestellte Formate (Text-Leiste ohne offenes Feld) direkt am Cursor setzen
+    for (const [cmd, f] of Object.entries(FMT)) if (textDefaults[f.flag]) toggleAtCaret(cmd);
+    syncFormatBar();
   }
 
   function openTextEditorFor(s) {
@@ -3954,11 +3959,13 @@
   }
 
   function syncFormatBar() {
-    if (!textFormatBar || textFormatBar.classList.contains("hidden")) return;
     const sel = window.getSelection();
-    const node = sel && sel.rangeCount && textEditorEl.contains(sel.anchorNode) ? sel.anchorNode : null;
+    const node = textEdit && sel && sel.rangeCount && textEditorEl.contains(sel.anchorNode) ? sel.anchorNode : null;
     const state = node ? formatAt(node) : {};
-    textFormatBar.querySelectorAll("[data-cmd]").forEach((b) => b.classList.toggle("active", !!state[b.dataset.cmd]));
+    if (textFormatBar && !textFormatBar.classList.contains("hidden")) {
+      textFormatBar.querySelectorAll("[data-cmd]").forEach((b) => b.classList.toggle("active", !!state[b.dataset.cmd]));
+    }
+    syncModeBar();
   }
 
   let editorRange = null; // letzte Cursor-Position/Markierung im Editor
@@ -3978,7 +3985,17 @@
 
   if (textFormatBar) {
     const runFormatButton = (b) => {
-      if (!textEdit) return;
+      if (!textEdit) {
+        // kein offenes Textfeld: ausgewaehlte Textfelder ganz umschalten, sonst gilt es
+        // als Voreinstellung fuer das naechste neue Textfeld
+        if (b.dataset.cmd) {
+          const flag = FMT[b.dataset.cmd].flag;
+          if (selectedTextBoxes().length) toggleTextFlag(flag);
+          else textDefaults[flag] = !textDefaults[flag];
+          syncModeBar();
+        }
+        return;
+      }
       if (b.dataset.cmd) {
         applyFormat(b.dataset.cmd);
       } else if (b.dataset.size) {
@@ -3991,7 +4008,11 @@
       positionTextEditor();
       syncFormatBar();
     };
-    textFormatBar.querySelectorAll("button").forEach((b) => {
+    const formatButtons = [
+      ...textFormatBar.querySelectorAll("button"),
+      ...toolbarEl.querySelectorAll(".fmt-btn"),
+    ];
+    formatButtons.forEach((b) => {
       // Fokus und Markierung muessen im Textfeld bleiben -> Standardaktion beim Druecken
       // verhindern. Auf dem iPad unterdrueckt das aber den "click" - darum loesen die Knoepfe
       // selbst beim Loslassen aus (Finger, Stift, Maus), "click" nur noch fuer Tastatur.
@@ -4711,6 +4732,7 @@
       ruler.cx = m1.x + rx * Math.cos(d) - ry * Math.sin(d);
       ruler.cy = m1.y + rx * Math.sin(d) + ry * Math.cos(d);
       ruler.angle = snapRulerAngle(rulerGesture.angle + d);
+      syncModeBar();
     } else {
       ruler.cx = rulerGesture.cx + (a1.x - a0.x);
       ruler.cy = rulerGesture.cy + (a1.y - a0.y);
@@ -4784,6 +4806,152 @@
     rulerBtn.classList.toggle("active", ruler.visible);
     requestRedraw();
   });
+
+  // ---- Modi: Stift / Text / Tabelle / Lineal / Lasso -----------------------
+  // Die Modus-Knoepfe sitzen oben neben dem Blattnamen; die Werkzeugleiste unten zeigt
+  // per CSS (data-mode / data-modes) nur, was zum Modus gehoert.
+  let currentMode = "pen";
+  let lastInkTool = "pen";
+  let modeSyncing = false;
+  const textDefaults = { b: false, i: false, s: false, u: false };
+  const modeButtons = Array.from(document.querySelectorAll(".mode-btn"));
+
+  function showMode(mode) {
+    currentMode = mode;
+    toolbarEl.dataset.mode = mode;
+    modeButtons.forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+    syncModeBar();
+    if (typeof syncSelectionToolbar === "function") syncSelectionToolbar();
+    if (!toolPopover.classList.contains("hidden")) positionToolPopover();
+  }
+
+  function setMode(mode) {
+    if (textEdit) commitTextEditor();
+    // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Lineal/Text aufheben
+    if ((mode === "pen" || mode === "ruler" || mode === "text") && selection.ids.size) clearSelection();
+    if (mode !== "ruler" && ruler.visible) {
+      ruler.visible = false;
+      requestRedraw();
+    }
+    modeSyncing = true;
+    try {
+      if (mode === "pen" || mode === "ruler") {
+        if (!["pen", "marker", "eraser"].includes(currentTool)) setTool(lastInkTool || "pen");
+      } else if (mode === "text") {
+        if (currentTool !== "text") setTool("text");
+      } else if (currentTool !== "select") {
+        setTool("select");
+      }
+    } finally {
+      modeSyncing = false;
+    }
+    if (mode === "ruler" && !ruler.visible) {
+      ruler.visible = true;
+      ruler.cx = window.innerWidth / 2;
+      ruler.cy = window.innerHeight * 0.45;
+      requestRedraw();
+    }
+    toolPopover.classList.add("hidden");
+    showMode(mode);
+  }
+
+  // Wird ein Werkzeug anders gewaehlt (Tastatur, Radierer-Ruecksprung, Tabelle einfuegen ...),
+  // folgt der Modus - Lineal bleibt bei Tinte, Tabelle bleibt bei der Auswahl.
+  function syncModeFromTool(tool) {
+    if (modeSyncing || !toolbarEl.dataset) return;
+    let mode = currentMode;
+    if (tool === "pen" || tool === "marker" || tool === "eraser") mode = currentMode === "ruler" ? "ruler" : "pen";
+    else if (tool === "text") mode = "text";
+    else if (tool === "select") mode = currentMode === "table" ? "table" : "lasso";
+    if (mode !== currentMode) {
+      if (currentMode === "ruler" && ruler.visible) {
+        ruler.visible = false;
+        requestRedraw();
+      }
+      showMode(mode);
+    }
+  }
+
+  function syncModeBar() {
+    if (!toolbarEl) return;
+    const mode = toolbarEl.dataset.mode;
+    if (mode === "text") {
+      // Groesse: naechster Vorschlag zur aktuellen Groesse (offenes Feld > Auswahl > Voreinstellung)
+      const boxes = typeof selectedTextBoxes === "function" ? selectedTextBoxes() : [];
+      const cur = textEdit && textEdit.kind === "text" ? textEdit.size * scale : boxes.length ? boxes[0].size * scale : textSize;
+      let best = null;
+      toolbarEl.querySelectorAll(".size-btn").forEach((b) => {
+        const v = Number(b.dataset.textSize);
+        if (!best || Math.abs(v - cur) < Math.abs(Number(best.dataset.textSize) - cur)) best = b;
+      });
+      toolbarEl.querySelectorAll(".size-btn").forEach((b) => b.classList.toggle("active", b === best));
+      const sel = window.getSelection();
+      const node = textEdit && sel && sel.rangeCount && textEditorEl.contains(sel.anchorNode) ? sel.anchorNode : null;
+      toolbarEl.querySelectorAll(".fmt-btn").forEach((b) => {
+        const f = FMT[b.dataset.cmd].flag;
+        let on;
+        if (node) on = !!formatAt(node)[b.dataset.cmd];
+        else if (boxes.length) on = boxes.every((t) => strokeRuns(t).every((r) => r[f]));
+        else on = !!textDefaults[f];
+        b.classList.toggle("active", on);
+      });
+    } else if (mode === "table") {
+      const table = typeof selectedTable === "function" ? selectedTable() : null;
+      toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) => {
+        b.disabled = !table;
+      });
+      const hint = document.getElementById("tbl-hint");
+      if (hint) hint.classList.toggle("hidden", !!table);
+    } else if (mode === "ruler") {
+      let deg = Math.abs(Math.round((ruler.angle * 180) / Math.PI)) % 180;
+      if (deg > 90) deg = 180 - deg;
+      toolbarEl.querySelectorAll(".angle-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.angle) === deg));
+    }
+  }
+
+  modeButtons.forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMode(b.dataset.mode);
+    })
+  );
+
+  toolbarEl.querySelectorAll(".size-btn").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const v = Number(b.dataset.textSize);
+      textSize = v;
+      if (textEdit && textEdit.kind === "text") applyTextEditStyle({ size: v });
+      else if (selectedTextBoxes().length) restyleSelection({ size: v / Math.max(scale, 0.25) });
+      syncModeBar();
+    })
+  );
+  // Groessen-Knoepfe sollen das offene Textfeld nicht schliessen/den Fokus nehmen
+  toolbarEl.querySelectorAll(".size-btn").forEach((b) =>
+    b.addEventListener("pointerdown", (e) => {
+      if (textEdit && e.cancelable) e.preventDefault();
+      e.stopPropagation();
+    })
+  );
+
+  toolbarEl.querySelectorAll(".tbl-bar-btn").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      changeTable(b.dataset.tbl, Number(b.dataset.delta));
+      syncModeBar();
+    })
+  );
+
+  toolbarEl.querySelectorAll(".angle-btn").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // positive Winkel steigen nach rechts an (Bildschirm-y zeigt nach unten)
+      ruler.angle = (-Number(b.dataset.angle) * Math.PI) / 180;
+      if (!ruler.visible) ruler.visible = true;
+      requestRedraw();
+      syncModeBar();
+    })
+  );
 
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}
@@ -5581,6 +5749,7 @@
     const hasSel = selection.ids.size > 0 || cropping;
     if (!hasSel) {
       mediaToolbar.classList.add("hidden");
+      syncModeBar();
       return;
     }
     mediaToolbar.classList.remove("hidden");
@@ -5599,10 +5768,14 @@
     if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
     if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
     const table = cropping ? null : selectedTable();
-    document.querySelectorAll(".tbl-btn").forEach((b) => b.classList.toggle("hidden", !table));
+    // im Tabellen-/Text-Modus stehen diese Knoepfe schon unten in der Leiste
+    const inTableMode = toolbarEl.dataset.mode === "table";
+    document.querySelectorAll(".tbl-btn").forEach((b) => b.classList.toggle("hidden", !table || inTableMode));
+    syncModeBar();
     const texts = cropping ? [] : selectedTextBoxes();
+    const inTextMode = toolbarEl.dataset.mode === "text";
     document.querySelectorAll(".txt-btn").forEach((b) => {
-      b.classList.toggle("hidden", !texts.length);
+      b.classList.toggle("hidden", !texts.length || inTextMode);
       if (texts.length) b.classList.toggle("active", texts.every((t) => strokeRuns(t).every((r) => r[b.dataset.flag])));
     });
     if (doneBtn) doneBtn.classList.toggle("hidden", !cropping);
