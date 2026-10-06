@@ -175,7 +175,7 @@
       const chord = Math.abs(proj[b] - proj[a]);
       let len = 0;
       for (let i = a + 1; i <= b; i++) len += hypot(even[i].x - even[i - 1].x, even[i].y - even[i - 1].y);
-      if (chord >= extent * 0.5 && len > 0 && chord / len >= 0.78) good++;
+      if (chord >= extent * 0.45 && len > 0 && chord / len >= 0.72) good++;
     }
     return { reversals, density: path / extent, extent, runs: runs.length, good };
   }

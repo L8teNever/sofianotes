@@ -7377,6 +7377,11 @@
     requestRedraw();
   }
 
+  // Safari auf dem iPad liefert in getCoalescedEvents() oft auch die Punkte des vorigen
+  // pointermove noch einmal mit. Ohne Filter landete jeder Abschnitt doppelt im Strich
+  // (vor - zurueck - nochmal vor), was u. a. die Kritzel-Erkennung unbrauchbar machte.
+  // Darum nur Punkte nehmen, die neuer sind als der zuletzt verarbeitete dieses Zeigers.
+  const lastCoalescedT = new Map(); // pointerId -> timeStamp
   function coalescedEvents(e) {
     let list = [];
     if (typeof e.getCoalescedEvents === "function") {
@@ -7386,8 +7391,22 @@
         list = [];
       }
     }
-    if (!list || list.length === 0) return [e];
-    return list;
+    if (!list || list.length === 0) list = [e];
+    const last = lastCoalescedT.get(e.pointerId);
+    let maxT = last == null ? -Infinity : last;
+    const out = [];
+    for (const ev of list) {
+      const t = ev.timeStamp;
+      if (!t) {
+        out.push(ev); // ohne Zeitstempel nicht filtern
+        continue;
+      }
+      if (last != null && !(t > last)) continue;
+      out.push(ev);
+      if (t > maxT) maxT = t;
+    }
+    if (Number.isFinite(maxT)) lastCoalescedT.set(e.pointerId, maxT);
+    return out;
   }
 
   function strokePathLength(pts) {
