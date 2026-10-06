@@ -652,6 +652,7 @@
     drawTextDragPreview();
     drawZoomBoxOnPage();
     drawLassoAndSelection();
+    drawRuler();
     drawHoldHint();
     positionTextEditor();
     positionInkChips();
@@ -2183,7 +2184,7 @@
   // den Haltepunkt, laeuft die Uhr weiter; erst eine echte Bewegung startet sie neu.
   function armHoldTimer() {
     if (!shapeRecognitionEnabled) return clearHoldTimer();
-    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked) return clearHoldTimer();
+    if (!currentStroke || !isHoldSnapTool(currentStroke.tool) || currentStroke.locked || currentStroke.rulerEdge) return clearHoldTimer();
     const tip = currentStroke.points[currentStroke.points.length - 1];
     if (holdAnchor && tip && Math.hypot(tip.x - holdAnchor.x, tip.y - holdAnchor.y) <= shapeParams.stillPx / scale) return;
     clearHoldTimer();
@@ -4274,6 +4275,151 @@
     .then(applyShapeState)
     .catch(() => renderShapeInfo());
 
+  // ---- Lineal -----------------------------------------------------------------
+  // Liegt im Bildschirm (wie in GoodNotes), nicht auf dem Papier. Ein Finger schiebt,
+  // zwei Finger drehen; der Stift zieht an der naeheren Kante eine exakt gerade Linie.
+  const RULER_HALF = 42; // halbe Linealbreite in Bildschirm-px
+  const RULER_SNAP = 26; // so nah an der Kante (ausserhalb) rastet der Stift noch ein
+  const ruler = { visible: false, cx: window.innerWidth / 2, cy: window.innerHeight * 0.45, angle: 0 };
+  let rulerGesture = null; // {start: Map(id->{x,y}), cx, cy, angle}
+  let mouseRulerDrag = null;
+  const rulerBtn = document.getElementById("btn-ruler");
+
+  function rulerAxes() {
+    return { u: { x: Math.cos(ruler.angle), y: Math.sin(ruler.angle) }, n: { x: -Math.sin(ruler.angle), y: Math.cos(ruler.angle) } };
+  }
+  function rulerLocal(x, y) {
+    const { u, n } = rulerAxes();
+    const dx = x - ruler.cx;
+    const dy = y - ruler.cy;
+    return { along: dx * u.x + dy * u.y, across: dx * n.x + dy * n.y };
+  }
+  function rulerHit(x, y, extra = 6) {
+    return ruler.visible && Math.abs(rulerLocal(x, y).across) <= RULER_HALF + extra;
+  }
+  // Kante (+1 = unten/rechts, -1 = oben/links), an der der Stift gerade zeichnen wuerde
+  function rulerEdgeAt(x, y) {
+    if (!ruler.visible) return null;
+    const { across } = rulerLocal(x, y);
+    if (Math.abs(across) > RULER_HALF + RULER_SNAP) return null;
+    return { side: across >= 0 ? 1 : -1 };
+  }
+  function rulerProject(x, y, edge) {
+    const { u, n } = rulerAxes();
+    const { along } = rulerLocal(x, y);
+    // Strichmitte knapp ausserhalb der Kante, damit die Linie am Lineal anliegt
+    const half = ((currentStroke && currentStroke.size) || activeSize()) * scale * 0.5;
+    const off = edge.side * (RULER_HALF + half);
+    return { x: ruler.cx + n.x * off + u.x * along, y: ruler.cy + n.y * off + u.y * along };
+  }
+  function snapRulerAngle(a) {
+    const deg = ((a * 180) / Math.PI) % 360;
+    for (const t of [-180, -135, -90, -45, 0, 45, 90, 135, 180]) {
+      if (Math.abs(deg - t) < 2) return (t * Math.PI) / 180;
+    }
+    return a;
+  }
+
+  function startRulerGesture() {
+    const start = new Map();
+    for (const [id, p] of touchPointers) start.set(id, { x: p.x, y: p.y });
+    rulerGesture = { start, cx: ruler.cx, cy: ruler.cy, angle: ruler.angle };
+    pinchState = null;
+    panState = null;
+  }
+  function updateRulerGesture() {
+    const ids = Array.from(rulerGesture.start.keys()).filter((id) => touchPointers.has(id));
+    if (!ids.length) return;
+    const a0 = rulerGesture.start.get(ids[0]);
+    const a1 = touchPointers.get(ids[0]);
+    if (ids.length >= 2) {
+      const b0 = rulerGesture.start.get(ids[1]);
+      const b1 = touchPointers.get(ids[1]);
+      const ang0 = Math.atan2(b0.y - a0.y, b0.x - a0.x);
+      const ang1 = Math.atan2(b1.y - a1.y, b1.x - a1.x);
+      const m0 = { x: (a0.x + b0.x) / 2, y: (a0.y + b0.y) / 2 };
+      const m1 = { x: (a1.x + b1.x) / 2, y: (a1.y + b1.y) / 2 };
+      const d = ang1 - ang0;
+      // Lineal um den Fingermittelpunkt drehen und mitschieben
+      const rx = rulerGesture.cx - m0.x;
+      const ry = rulerGesture.cy - m0.y;
+      ruler.cx = m1.x + rx * Math.cos(d) - ry * Math.sin(d);
+      ruler.cy = m1.y + rx * Math.sin(d) + ry * Math.cos(d);
+      ruler.angle = snapRulerAngle(rulerGesture.angle + d);
+    } else {
+      ruler.cx = rulerGesture.cx + (a1.x - a0.x);
+      ruler.cy = rulerGesture.cy + (a1.y - a0.y);
+    }
+    requestRedraw();
+  }
+
+  function drawRuler() {
+    if (!ruler.visible) return;
+    const len = Math.hypot(window.innerWidth, window.innerHeight) * 1.2;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(ruler.cx, ruler.cy);
+    ctx.rotate(ruler.angle);
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.strokeStyle = "rgba(60,64,67,0.55)";
+    ctx.lineWidth = 1;
+    ctx.fillRect(-len, -RULER_HALF, len * 2, RULER_HALF * 2);
+    ctx.beginPath();
+    ctx.moveTo(-len, -RULER_HALF);
+    ctx.lineTo(len, -RULER_HALF);
+    ctx.moveTo(-len, RULER_HALF);
+    ctx.lineTo(len, RULER_HALF);
+    ctx.stroke();
+    // Skala in Papier-Massstab: 1 cm ~ 38 Welt-px (96 dpi), mm-Striche ab genug Zoom
+    const cm = 37.8 * scale;
+    const mm = cm / 10;
+    const showMm = mm >= 4;
+    const step = showMm ? mm : cm / 2;
+    const n = Math.ceil(len / step);
+    ctx.strokeStyle = "rgba(60,64,67,0.7)";
+    ctx.fillStyle = "rgba(60,64,67,0.85)";
+    ctx.font = "600 10px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.beginPath();
+    for (let i = -n; i <= n; i++) {
+      const x = i * step;
+      const isCm = showMm ? i % 10 === 0 : i % 2 === 0;
+      const isHalf = showMm ? i % 5 === 0 : false;
+      const h = isCm ? 14 : isHalf ? 9 : 5;
+      ctx.moveTo(x, -RULER_HALF);
+      ctx.lineTo(x, -RULER_HALF + h);
+      ctx.moveTo(x, RULER_HALF);
+      ctx.lineTo(x, RULER_HALF - h);
+    }
+    ctx.stroke();
+    for (let i = -n; i <= n; i++) {
+      const isCm = showMm ? i % 10 === 0 : i % 2 === 0;
+      if (!isCm) continue;
+      const label = Math.round((i * step) / cm);
+      if (label !== 0) ctx.fillText(String(label), i * step, -RULER_HALF + 26);
+    }
+    // Winkel in der Mitte
+    // Winkel zur Waagrechten, 0-90° (wie in GoodNotes)
+    let deg = Math.abs(Math.round((ruler.angle * 180) / Math.PI)) % 180;
+    if (deg > 90) deg = 180 - deg;
+    ctx.font = "700 13px Inter, sans-serif";
+    ctx.fillStyle = "#1a73e8";
+    ctx.fillText(deg + "°", 0, 6);
+    ctx.restore();
+  }
+
+  if (rulerBtn) rulerBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    ruler.visible = !ruler.visible;
+    if (ruler.visible) {
+      ruler.cx = window.innerWidth / 2;
+      ruler.cy = window.innerHeight * 0.45;
+      ruler.angle = 0;
+    }
+    rulerBtn.classList.toggle("active", ruler.visible);
+    requestRedraw();
+  });
+
   // ---- drawing (pointer handling with palm rejection) -------------------
   const activePointers = new Map(); // pointerId -> {type,x,y}
   const touchPointers = new Map(); // pointerId -> {x,y}
@@ -5735,7 +5881,16 @@
       eraseSegment(world.x, world.y, world.x, world.y);
       updateEraserCursor(e.clientX, e.clientY);
     } else {
-      startStroke(e.pointerId, e.pointerType, world.x, world.y, pointerPressure(e));
+      const edge = e.pointerType === "touch" && !fingerDrawEnabled ? null : rulerEdgeAt(e.clientX, e.clientY);
+      if (edge) {
+        const q = rulerProject(e.clientX, e.clientY, edge);
+        const w0 = screenToWorld(q.x, q.y);
+        startStroke(e.pointerId, e.pointerType, w0.x, w0.y, pointerPressure(e));
+        currentStroke.rulerEdge = edge;
+        clearHoldTimer();
+      } else {
+        startStroke(e.pointerId, e.pointerType, world.x, world.y, pointerPressure(e));
+      }
     }
     sendCursor(world.x, world.y, currentTool, activeSize());
     armPasteHold(e, world);
@@ -5763,6 +5918,18 @@
 
     if (e.pointerType === "touch") {
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (rulerGesture && touchPointers.size === 2) {
+        // zweiter Finger zum ersten aufs Lineal: drehen statt zoomen
+        tapState = null;
+        startRulerGesture();
+        return;
+      }
+      if (touchPointers.size === 1 && ruler.visible && !fingerDrawEnabled && rulerHit(e.clientX, e.clientY)) {
+        tapState = null;
+        panState = null;
+        startRulerGesture();
+        return;
+      }
       if (touchPointers.size === 2) {
         tapState = null;
         if (currentStroke) abortStroke();
@@ -5805,6 +5972,10 @@
     }
 
     tapState = null; // Stift/Maus beruehrt -> ein laufender Finger-Kontakt ist kein Tap mehr
+    if (e.pointerType === "mouse" && e.button === 0 && ruler.visible && rulerHit(e.clientX, e.clientY, 0)) {
+      mouseRulerDrag = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+      return;
+    }
     if (e.pointerType === "mouse" && (spacePressed || e.button === 1)) {
       panState = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
       return;
@@ -5822,6 +5993,10 @@
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (tapState && tapState.pointerId === e.pointerId && Math.hypot(e.clientX - tapState.x, e.clientY - tapState.y) > TAP_MAX_MOVE_PX) {
         tapState = null;
+      }
+      if (rulerGesture) {
+        updateRulerGesture();
+        return;
       }
       if (pinchState && touchPointers.size === 2) {
         const pts = Array.from(touchPointers.values());
@@ -5852,6 +6027,13 @@
         return;
       }
       // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Logik unten
+    } else if (mouseRulerDrag && mouseRulerDrag.pointerId === e.pointerId) {
+      ruler.cx += e.clientX - mouseRulerDrag.lastX;
+      ruler.cy += e.clientY - mouseRulerDrag.lastY;
+      mouseRulerDrag.lastX = e.clientX;
+      mouseRulerDrag.lastY = e.clientY;
+      requestRedraw();
+      return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       offsetX += e.clientX - panState.lastX;
       offsetY += e.clientY - panState.lastY;
@@ -5917,7 +6099,9 @@
         }
       } else {
         for (const ev of coalescedEvents(e)) {
-          const w = screenToWorld(ev.clientX, ev.clientY);
+          // am Lineal: jeder Punkt wird exakt auf die Kante gelegt
+          const q = currentStroke.rulerEdge ? rulerProject(ev.clientX, ev.clientY, currentStroke.rulerEdge) : { x: ev.clientX, y: ev.clientY };
+          const w = screenToWorld(q.x, q.y);
           extendStroke(w.x, w.y, pointerPressure(ev));
         }
       }
@@ -5956,6 +6140,11 @@
 
     if (e.pointerType === "touch") {
       touchPointers.delete(e.pointerId);
+      if (rulerGesture) {
+        if (touchPointers.size === 0) rulerGesture = null;
+        else startRulerGesture(); // mit dem verbliebenen Finger nahtlos weiterschieben
+        return;
+      }
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) panState = null;
       if (tapState && tapState.pointerId === e.pointerId) {
@@ -5978,6 +6167,9 @@
         return;
       }
       // aktiver Finger-Zeichnen-Pointer: faellt durch zur gemeinsamen Abschluss-Logik unten
+    } else if (mouseRulerDrag && mouseRulerDrag.pointerId === e.pointerId) {
+      mouseRulerDrag = null;
+      return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       panState = null;
       return;
@@ -6051,6 +6243,12 @@
     "wheel",
     (e) => {
       e.preventDefault();
+      // Shift + Mausrad ueber dem Lineal dreht es (Desktop)
+      if (ruler.visible && e.shiftKey && rulerHit(e.clientX, e.clientY, 0)) {
+        ruler.angle = snapRulerAngle(ruler.angle + Math.sign(e.deltaY || e.deltaX) * (Math.PI / 180));
+        requestRedraw();
+        return;
+      }
       const anchor = screenToWorld(e.clientX, e.clientY);
       const factor = Math.exp(-e.deltaY * 0.0015);
       scale = clampZoom(scale * factor);
