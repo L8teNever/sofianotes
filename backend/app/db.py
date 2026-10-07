@@ -300,6 +300,28 @@ async def load_all(board_id: str | None = None) -> list[dict[str, Any]]:
         return await asyncio.get_event_loop().run_in_executor(None, _load_all_sync, board_id)
 
 
+def _insert_many_sync(board_id: str, strokes: list[dict[str, Any]]) -> None:
+    base = time.time()
+    _conn.executemany(
+        "INSERT OR REPLACE INTO strokes (id, tool, color, size, points, extra, created_at, board_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                s["id"], s["tool"], s["color"], s["size"], json.dumps(s["points"]),
+                json.dumps(s["extra"]) if s.get("extra") is not None else None,
+                base + i * 1e-6, board_id,
+            )
+            for i, s in enumerate(strokes)
+        ],
+    )
+    _conn.execute("UPDATE boards SET updated_at = ? WHERE id = ?", (time.time(), board_id))
+    _conn.commit()
+
+
+async def insert_strokes(board_id: str, strokes: list[dict[str, Any]]) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _insert_many_sync, board_id, strokes)
+
+
 async def insert_stroke(stroke: dict[str, Any]) -> None:
     async with _lock:
         await asyncio.get_event_loop().run_in_executor(None, _insert_sync, stroke)

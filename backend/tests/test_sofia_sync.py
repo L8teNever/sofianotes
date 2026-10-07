@@ -191,3 +191,38 @@ class SolutionTests(unittest.TestCase):
         b = run(db.create_board("simon", "D", f["id"]))
         self.assertTrue(run(db.set_board_paper(b["id"], "blank")))
         self.assertEqual(run(db.get_board(b["id"]))["paper"], "blank")
+
+
+class BoardFileTests(unittest.TestCase):
+    def test_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+        from app import board_file, media
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = media.MEDIA_DIR
+            media.MEDIA_DIR = Path(tmp)
+            try:
+                mid = "11111111-2222-3333-4444-555555555555"
+                media.path_for(mid).write_bytes(b"\xff\xd8fakejpeg")
+                board = {"title": "Mathe", "paper": "lines", "refs": [{"mediaId": mid, "name": "Buch"}]}
+                strokes = [
+                    {"id": "a", "tool": "pen", "color": "#000", "size": 2, "points": [{"x": 1, "y": 2, "p": 0.5}]},
+                    {"id": "b", "tool": "image", "color": "#000", "size": 1, "points": [{"x": 0, "y": 0}, {"x": 9, "y": 9}], "extra": {"mediaId": mid, "crop": {"l": 0}}},
+                    {"id": "c", "tool": "text", "color": "#000", "size": 1, "points": [{"x": 0, "y": 0}], "extra": {"html": "<b>Hi</b>"}},
+                ]
+                data = board_file.build(board, strokes)
+                out = board_file.parse(data)
+                self.assertEqual(out["title"], "Mathe")
+                self.assertEqual(out["paper"], "lines")
+                self.assertEqual(len(out["strokes"]), 3)
+                self.assertNotEqual(out["strokes"][0]["id"], "a")
+                new_mid = out["strokes"][1]["extra"]["mediaId"]
+                self.assertNotEqual(new_mid, mid)
+                self.assertEqual(media.load_bytes(new_mid), b"\xff\xd8fakejpeg")
+                self.assertEqual(out["refs"][0]["mediaId"], new_mid)
+                self.assertEqual(out["strokes"][2]["extra"]["html"], "<b>Hi</b>")
+                with self.assertRaises(ValueError):
+                    board_file.parse(b"kein zip")
+            finally:
+                media.MEDIA_DIR = old

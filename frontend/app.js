@@ -7745,7 +7745,9 @@
   }
 
   async function importFiles(fileList) {
-    const files = Array.from(fileList || []);
+    let files = Array.from(fileList || []);
+    for (const f of files.filter(isBoardFile)) await importBoardFile(f);
+    files = files.filter((f) => !isBoardFile(f));
     if (!files.length) return;
     const worldOrigin = screenToWorld(window.innerWidth * 0.18, window.innerHeight * 0.16);
     let x = worldOrigin.x;
@@ -10784,6 +10786,7 @@
     const menu = [
       { icon: "square-pen", label: "Öffnen", run: () => openBoard(board.id, board.title) },
       { icon: "folder-input", label: "In Ordner legen", run: () => openMove("board", board.id) },
+      { icon: "save", label: "Als Datei sichern", run: () => exportBoardFile(board.id) },
     ];
     if (!board.shared) {
       menu.splice(1, 0, { icon: "pencil", label: "Umbenennen", run: () => renameBoard(board) });
@@ -11678,6 +11681,57 @@
     libAddMenu.classList.add("hidden");
     createFolder();
   });
+  // ---- Eigenes Dateiformat .sofianotes: Blatt komplett sichern und wieder importieren ----
+  function exportBoardFile(boardId) {
+    if (!boardId) return;
+    const a = document.createElement("a");
+    a.href = "/api/boards/" + encodeURIComponent(boardId) + "/export.sofianotes";
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  async function importBoardFile(file) {
+    showToast("Importiere „" + file.name + "“…");
+    try {
+      const r = await fetch("/api/import.sofianotes" + (currentFolderId ? "?folder=" + encodeURIComponent(currentFolderId) : ""), {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      if (!r.ok) throw new Error(r.status === 400 ? "format" : "fail");
+      const res = await r.json();
+      refreshLibrary();
+      showToast("Importiert: " + res.board.title);
+      openBoard(res.board.id, res.board.title);
+    } catch (err) {
+      showToast(String(err.message) === "format" ? "Das ist keine gültige .sofianotes-Datei" : "Import hat nicht geklappt");
+    }
+  }
+  function isBoardFile(file) {
+    return /\.sofianotes$/i.test(file.name || "");
+  }
+  const boardFileInput = document.createElement("input");
+  boardFileInput.type = "file";
+  // ohne Filter: iOS graut unbekannte Endungen sonst aus
+  boardFileInput.multiple = true;
+  boardFileInput.style.display = "none";
+  document.body.appendChild(boardFileInput);
+  boardFileInput.addEventListener("change", async () => {
+    const files = Array.from(boardFileInput.files || []);
+    boardFileInput.value = "";
+    for (const f of files) await importBoardFile(f);
+  });
+  document.getElementById("lib-add-import")?.addEventListener("click", () => {
+    libAddMenu.classList.add("hidden");
+    boardFileInput.click();
+  });
+  document.getElementById("canvas-menu-export")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeCanvasMenus();
+    exportBoardFile(currentBoardId);
+  });
+
   // ---- Canvas-Kopfzeile: Teilen + Herunterladen in einem Menü ----------
   const canvasMenu = document.getElementById("canvas-menu");
   const canvasShareSubmenu = document.getElementById("canvas-share-submenu");

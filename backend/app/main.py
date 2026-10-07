@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import cloudflare_ocr, db, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
+from . import board_file, cloudflare_ocr, db, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
@@ -624,6 +624,46 @@ async def erase_board_strokes(board_id: str, request: Request, me: dict = Depend
     if stroke_ids:
         await db.delete_strokes(stroke_ids)
     return {"ok": True}
+
+
+@app.get("/api/boards/{board_id}/export.sofianotes")
+async def export_board_file(board_id: str, me: dict = Depends(get_current_person)) -> Response:
+    """Ganzes Blatt als .sofianotes-Datei (zum Sichern, Weitergeben, wieder Importieren)."""
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    board = await db.get_board(board_id)
+    strokes = await db.load_all(board_id)
+    data = board_file.build(board, strokes)
+    title = (board.get("title") or "Blatt").strip()
+    safe = "".join(c if c.isalnum() or c in " -_()" else "_" for c in title).strip() or "Blatt"
+    from urllib.parse import quote
+
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=\"blatt.sofianotes\"; filename*=UTF-8''{quote(safe)}.sofianotes"},
+    )
+
+
+@app.post("/api/import.sofianotes")
+async def import_board_file(request: Request, me: dict = Depends(get_current_person)) -> dict:
+    """Legt aus einer .sofianotes-Datei ein neues Blatt an (Body = Dateiinhalt)."""
+    folder = request.query_params.get("folder") or None
+    data = await request.body()
+    try:
+        parsed = board_file.parse(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    board = await db.create_board(me["id"], parsed["title"], folder, None)
+    if board is None:
+        raise HTTPException(status_code=400, detail="unknown person")
+    bid = board["id"]
+    await db.set_board_paper(bid, parsed["paper"])
+    if parsed["refs"]:
+        await db.set_board_refs(bid, parsed["refs"])
+    if parsed["strokes"]:
+        await db.insert_strokes(bid, parsed["strokes"])
+    return {"ok": True, "board": await db.get_board(bid), "strokes": len(parsed["strokes"])}
 
 
 @app.get("/api/export.goodnotes")
