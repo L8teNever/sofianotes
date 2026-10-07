@@ -170,8 +170,10 @@
     }
     return out;
   }
-  function drawPagePattern(paper, r) {
+  function drawPagePattern(paper, r, target, unit) {
     if (paper === "blank") return;
+    const ctx = target || window.__sofiaMainCtx;
+    const scale = unit || currentScale();
     const g = GRID_SIZE;
     if (paper === "dots") {
       ctx.fillStyle = "rgba(0,0,0,0.18)";
@@ -392,8 +394,15 @@
     canvas.style.left = viewLeft + "px";
     requestRedraw();
   }
+  function currentScale() {
+    return scale;
+  }
+  window.sofiaView = () => ({ scale, offsetX, offsetY });
+  let pagesInsetLeft = 0; // Seiten-Leiste im Notizbuch (links)
+  let requestedInsets = [0, 0];
   function setViewInsets(left, right) {
-    left = Math.max(0, Math.round(left || 0));
+    requestedInsets = [left || 0, right || 0];
+    left = Math.max(pagesInsetLeft, Math.round(left || 0));
     right = Math.max(0, Math.round(right || 0));
     if (left === viewLeft && right === viewRight) return;
     // was vorher in der Mitte des Sichtbereichs lag, bleibt dort
@@ -1038,10 +1047,17 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+    let pageClip = false;
     if (notebook) {
       clampNotebookView();
       ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
       drawPages();
+      // alles Geschriebene endet am Seitenrand
+      ctx.save();
+      ctx.beginPath();
+      for (const r of pageRects(notebook)) ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.clip();
+      pageClip = true;
     } else drawGrid();
     if (window.sofiaPagesUi) window.sofiaPagesUi();
     // im Versionsverlauf: alter Stand statt des aktuellen Blatts
@@ -1072,6 +1088,10 @@
     drawHistoryGhosts();
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
+    if (pageClip) {
+      ctx.restore();
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+    }
 
     drawTextDragPreview();
     drawZoomBoxOnPage();
@@ -2440,6 +2460,7 @@
 
   function wsSend(obj) {
     if (window.sofiaHistoryChanged && /^(stroke_end|stroke_move|erase)$/.test(obj && obj.type)) window.sofiaHistoryChanged();
+    if (window.sofiaPagesChanged && /^(stroke_end|stroke_move|erase)$/.test(obj && obj.type)) window.sofiaPagesChanged();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
       scheduleSaveBoard();
@@ -2704,6 +2725,7 @@
 
   function handleMessage(msg) {
     if (window.sofiaHistoryChanged && /^(stroke_end|stroke_move|erase|board_reload)$/.test(msg.type)) window.sofiaHistoryChanged();
+    if (window.sofiaPagesChanged && /^(stroke_end|stroke_move|erase|board_notebook)$/.test(msg.type)) window.sofiaPagesChanged();
     switch (msg.type) {
       case "init": {
         myClientId = msg.clientId;
@@ -6949,6 +6971,37 @@
   }
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
+  // Schwung: nach schnellem Wischen laeuft das Blatt weiter und bremst sanft ab
+  let fling = null;
+  function startFling(ps) {
+    const age = performance.now() - (ps.t || 0);
+    let vx = ps.vx || 0;
+    let vy = ps.vy || 0;
+    if (age > 80 || Math.hypot(vx, vy) < 0.25) return;
+    vx *= 1.15;
+    vy *= 1.15;
+    let last = performance.now();
+    const f = { stop: false };
+    fling = f;
+    const step = (now) => {
+      if (f.stop || fling !== f) return;
+      const dt = Math.min(40, now - last);
+      last = now;
+      offsetX += vx * dt;
+      offsetY += vy * dt;
+      const decay = Math.exp(-dt / 330);
+      vx *= decay;
+      vy *= decay;
+      requestRedraw();
+      if (Math.hypot(vx, vy) > 0.02) requestAnimationFrame(step);
+      else fling = null;
+    };
+    requestAnimationFrame(step);
+  }
+  function stopFling() {
+    if (fling) fling.stop = true;
+    fling = null;
+  }
   let tapState = null; // {pointerId, x, y, t} - moeglicher Finger-Tap (kurz, kaum bewegt)
   const TAP_MAX_MOVE_PX = 10; // ein Finger-Tap darf sich hoechstens so weit bewegen (Bildschirm-px) ...
   const TAP_MAX_MS = 350; // ... und hoechstens so lange dauern, sonst ist es ein Pan
@@ -8518,9 +8571,14 @@
     else if (selection.ids.size > 0 || cropState) clearSelection();
   }
 
+  function onSomePage(w) {
+    return pageRects(notebook).some((r) => w.x >= r.x && w.x <= r.x + r.w && w.y >= r.y && w.y <= r.y + r.h);
+  }
   function dispatchPrimaryDown(e) {
     if (historyView) return;
     const world = screenToWorld(e.clientX, e.clientY);
+    // Notizbuch: neben den Seiten wird nicht geschrieben (Radierer und Lasso gehen ueberall)
+    if (notebook && currentTool !== "eraser" && currentTool !== "select" && !onSomePage(world)) return;
     lastPointerWorld = world;
     if (currentTool === "text") {
       textDrag = { pointerId: e.pointerId, startWorld: world, cur: world };
@@ -8576,6 +8634,7 @@
 
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
+    stopFling();
     // Vorschau einer alten Version: nur ansehen (Finger/Maus verschieben, nicht schreiben)
     if (historyView && e.pointerType !== "touch") {
       if (e.pointerType === "mouse") {
@@ -8736,8 +8795,16 @@
         (currentStroke && currentStroke.pointerId === e.pointerId);
       if (!isActiveDrawTouch) {
         if (panState && touchPointers.size === 1) {
-          offsetX += e.clientX - panState.lastX;
-          offsetY += e.clientY - panState.lastY;
+          const dx = e.clientX - panState.lastX;
+          const dy = e.clientY - panState.lastY;
+          offsetX += dx;
+          offsetY += dy;
+          // Geschwindigkeit fuer das Weiterlaufen nach dem Loslassen
+          const now = performance.now();
+          const dt = Math.max(1, now - (panState.t || now - 16));
+          panState.vx = 0.7 * (dx / dt) + 0.3 * (panState.vx || 0);
+          panState.vy = 0.7 * (dy / dt) + 0.3 * (panState.vy || 0);
+          panState.t = now;
           panState.lastX = e.clientX;
           panState.lastY = e.clientY;
           requestRedraw();
@@ -8898,7 +8965,10 @@
         return;
       }
       if (touchPointers.size < 2) pinchState = null;
-      if (touchPointers.size === 0) panState = null;
+      if (touchPointers.size === 0) {
+        if (panState && e.type === "pointerup") startFling(panState);
+        panState = null;
+      }
       if (tapState && tapState.pointerId === e.pointerId) {
         const isTap =
           e.type === "pointerup" &&
@@ -12408,8 +12478,6 @@
 
   // ---- Notizbuch: Seiten-Leiste, Seiten anlegen/loeschen, Hintergruende, PDF-Seiten ----
   (() => {
-    const bar = document.getElementById("page-bar");
-    const label = document.getElementById("page-label");
     const menu = document.getElementById("page-menu");
     const addBig = document.getElementById("page-add-big");
     const PAPER_LABELS = { graph: "Kariert", lines: "Liniert", dots: "Punkte", blank: "Blanko" };
@@ -12483,6 +12551,7 @@
       notebook = next;
       if (currentBoardMeta) currentBoardMeta.notebook = next;
       requestRedraw();
+      if (window.sofiaPagesChanged) window.sofiaPagesChanged();
       try {
         await api("/api/boards/" + encodeURIComponent(bid), {
           method: "PATCH",
@@ -12615,11 +12684,11 @@
       }
     });
 
-    // ---- Menue ----
+    // ---- Menue (an einem Anker) ----
     function closeMenu() {
       menu.classList.add("hidden");
     }
-    function openMenu(items) {
+    function openMenu(items, anchor) {
       menu.innerHTML = "";
       for (const it of items) {
         if (it.head) {
@@ -12643,77 +12712,297 @@
         menu.appendChild(b);
       }
       menu.classList.remove("hidden");
-      const r = document.getElementById("page-more").getBoundingClientRect();
+      const r = anchor.getBoundingClientRect();
       const mh = menu.offsetHeight;
       const mw = menu.offsetWidth;
+      let top = r.bottom + 6;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
       menu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left)) + "px";
-      menu.style.top = Math.max(8, r.top - mh - 8) + "px";
+      menu.style.top = top + "px";
     }
-    function pageMenu() {
-      const i = currentPage();
+    // Menue einer Seite (▾ unter dem Vorschaubild)
+    function pageMenu(i, anchor) {
       const pg = notebook.pages[i];
-      const t = notebook.template || {};
       const items = [{ head: "Seite " + (i + 1) + " – Hintergrund" }];
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBg(i, { paper: k }) });
       items.push({ icon: "description", label: "Bild oder PDF als Hintergrund …", active: !!pg.mediaId, run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
-      items.push({ head: "Seiten" });
+      items.push({ head: "Seite" });
       items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
-      items.push({ icon: "content_copy", label: "Seite davor einfügen", run: () => addPages(i - 1, [templatePage()]) });
+      items.push({ icon: "content_copy", label: "Neue Seite davor", run: () => addPages(i - 1, [templatePage()]) });
       items.push({ icon: "delete", label: "Seite löschen", danger: true, run: () => deletePage(i) });
-      items.push({ head: "Notizbuch" });
-      items.push({ icon: "view_column", label: notebook.layout === "horizontal" ? "Seiten untereinander anordnen" : "Seiten nebeneinander anordnen", run: () => setLayout(notebook.layout === "horizontal" ? "vertical" : "horizontal") });
+      openMenu(items, anchor);
+    }
+    // Menue des ganzen Notizbuchs (⋯ oben in der Seiten-Leiste)
+    function notebookMenu(anchor) {
+      const t = notebook.template || {};
+      const items = [{ head: "Anordnung" }];
+      items.push({ icon: "view_agenda", label: "Seiten untereinander", active: notebook.layout !== "horizontal", run: () => setLayout("vertical") });
+      items.push({ icon: "view_column", label: "Seiten nebeneinander", active: notebook.layout === "horizontal", run: () => setLayout("horizontal") });
       items.push({ head: "Neue Seiten bekommen" });
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: "note_add", label: PAPER_LABELS[k], active: !t.mediaId && (t.paper || "graph") === k, run: () => setTemplate({ paper: k }) });
       items.push({ icon: "upload_file", label: "Eigene Vorlage (Bild/PDF) …", active: !!t.mediaId, run: () => ((bgTarget = { kind: "template" }), bgInput.click()) });
-      openMenu(items);
+      openMenu(items, anchor);
     }
-    document.getElementById("page-more").addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!menu.classList.contains("hidden")) return closeMenu();
-      pageMenu();
-    });
-    document.getElementById("page-label").addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!menu.classList.contains("hidden")) return closeMenu();
-      const items = [{ head: "Zu Seite springen" }];
-      notebook.pages.forEach((pg, i) => items.push({ icon: pg.mediaId ? "description" : "crop_portrait", label: "Seite " + (i + 1), active: i === currentPage(), run: () => fitPage(i) }));
-      openMenu(items);
-    });
     document.addEventListener("pointerdown", (e) => {
-      if (!menu.classList.contains("hidden") && !e.target.closest("#page-menu") && !e.target.closest("#page-bar")) closeMenu();
+      if (!menu.classList.contains("hidden") && !e.target.closest("#page-menu") && !e.target.closest(".page-thumb-menu") && !e.target.closest("#pages-more")) closeMenu();
+      if (!addPop.classList.contains("hidden") && !e.target.closest("#page-add-pop") && !e.target.closest(".page-thumb-add")) addPop.classList.add("hidden");
     }, true);
     menu.addEventListener("pointerdown", (e) => e.stopPropagation());
-    bar.addEventListener("pointerdown", (e) => e.stopPropagation());
-    document.getElementById("page-prev").addEventListener("click", (e) => {
-      e.stopPropagation();
-      fitPage(currentPage() - 1);
-    });
-    document.getElementById("page-next").addEventListener("click", (e) => {
-      e.stopPropagation();
-      fitPage(currentPage() + 1);
-    });
-    document.getElementById("page-add").addEventListener("click", (e) => {
-      e.stopPropagation();
-      addPages(currentPage(), [templatePage()]);
-    });
     addBig.addEventListener("pointerdown", (e) => e.stopPropagation());
     addBig.addEventListener("click", (e) => {
       e.stopPropagation();
       addPages(notebook.pages.length - 1, [templatePage()]);
     });
 
-    // bei jedem Zeichnen: Leiste und "Neue Seite"-Knopf hinter der letzten Seite
-    let lastLabel = "";
+    // ---- Seiten-Leiste links (wie in GoodNotes) ----
+    const panel = document.getElementById("pages-panel");
+    const grid = document.getElementById("pages-grid");
+    const pagesBtn = document.getElementById("btn-pages");
+    const addPop = document.getElementById("page-add-pop");
+    const PANEL_W = 300;
+    let panelOpen = false;
+    let thumbTimer = null;
+    function setPanel(open) {
+      panelOpen = open && !!notebook;
+      panel.classList.toggle("hidden", !panelOpen);
+      pagesBtn.classList.toggle("active", panelOpen);
+      pagesInsetLeft = panelOpen ? Math.min(PANEL_W, Math.round(window.innerWidth * 0.4)) : 0;
+      panel.style.width = pagesInsetLeft + "px";
+      setViewInsets(requestedInsets[0], requestedInsets[1]);
+      try {
+        localStorage.setItem("sofianotes-pages-panel", panelOpen ? "1" : "0");
+      } catch (err) {}
+      if (panelOpen) renderPanel();
+      else addPop.classList.add("hidden");
+    }
+    pagesBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const i = currentPage();
+      setPanel(!panelOpen);
+      fitPage(i);
+    });
+    document.getElementById("pages-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      setPanel(false);
+    });
+    document.getElementById("pages-more").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!menu.classList.contains("hidden")) return closeMenu();
+      notebookMenu(e.currentTarget);
+    });
+    panel.addEventListener("pointerdown", (e) => e.stopPropagation());
+    addPop.addEventListener("pointerdown", (e) => e.stopPropagation());
+
+    // Vorschaubild einer Seite: Hintergrund + alles, was auf der Seite liegt
+    function renderThumb(cv, r) {
+      const W = cv.clientWidth || 120;
+      const k = W / r.w;
+      const d = Math.max(1, window.devicePixelRatio || 1);
+      cv.width = Math.round(W * d);
+      cv.height = Math.round(r.h * k * d);
+      cv.style.height = r.h * k + "px";
+      const c = cv.getContext("2d");
+      c.setTransform(d, 0, 0, d, 0, 0);
+      c.fillStyle = "#fff";
+      c.fillRect(0, 0, W, r.h * k);
+      c.setTransform(k * d, 0, 0, k * d, -r.x * k * d, -r.y * k * d);
+      const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
+      if (img && img.complete && img.naturalWidth) c.drawImage(img, r.x, r.y, r.w, r.h);
+      else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r, c, k);
+      c.save();
+      c.beginPath();
+      c.rect(r.x, r.y, r.w, r.h);
+      c.clip();
+      for (const st of boardStrokes.values()) {
+        const b = st.bbox;
+        if (!b || b.maxX < r.x || b.minX > r.x + r.w || b.maxY < r.y || b.minY > r.y + r.h) continue;
+        try {
+          drawStroke(st, c, st.tool === "marker" ? { alpha: 0.38 } : undefined);
+        } catch (err) {}
+      }
+      c.restore();
+    }
+    function renderPanel() {
+      if (!panelOpen || !notebook) return;
+      const rects = pageRects(notebook);
+      const cur = currentPage();
+      grid.innerHTML = "";
+      rects.forEach((r, i) => {
+        const cell = document.createElement("div");
+        cell.className = "page-thumb" + (i === cur ? " active" : "");
+        cell.dataset.index = i;
+        const cv = document.createElement("canvas");
+        cv.className = "page-thumb-img";
+        cell.appendChild(cv);
+        const foot = document.createElement("div");
+        foot.className = "page-thumb-foot";
+        foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite"><span class="material-symbols-rounded">expand_more</span></button>';
+        foot.firstChild.textContent = i + 1;
+        cell.appendChild(foot);
+        cv.addEventListener("click", (e) => {
+          e.stopPropagation();
+          fitPage(i);
+        });
+        foot.querySelector("button").addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!menu.classList.contains("hidden")) return closeMenu();
+          pageMenu(i, e.currentTarget);
+        });
+        grid.appendChild(cell);
+        requestAnimationFrame(() => renderThumb(cv, r));
+      });
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "page-thumb-add";
+      add.title = "Seite hinzufügen";
+      add.innerHTML = '<span class="material-symbols-rounded">add</span>';
+      add.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAddPop(add);
+      });
+      const addCell = document.createElement("div");
+      addCell.className = "page-thumb";
+      addCell.appendChild(add);
+      grid.appendChild(addCell);
+    }
+    // nach Aenderungen die Vorschaubilder kurz verzoegert neu zeichnen
+    window.sofiaPagesChanged = () => {
+      if (!panelOpen) return;
+      clearTimeout(thumbTimer);
+      thumbTimer = setTimeout(renderPanel, 700);
+    };
+
+    // ---- "Seite hinzufuegen" ----
+    const photoInput = document.createElement("input");
+    photoInput.type = "file";
+    photoInput.accept = "image/*";
+    photoInput.setAttribute("capture", "environment");
+    photoInput.style.display = "none";
+    document.body.appendChild(photoInput);
+    const imageInput = document.createElement("input");
+    imageInput.type = "file";
+    imageInput.accept = "image/*";
+    imageInput.style.display = "none";
+    document.body.appendChild(imageInput);
+    const pdfInput = document.createElement("input");
+    pdfInput.type = "file";
+    pdfInput.accept = "application/pdf,.pdf";
+    pdfInput.style.display = "none";
+    document.body.appendChild(pdfInput);
+    async function addFromFile(input) {
+      const file = input.files && input.files[0];
+      input.value = "";
+      if (!file) return;
+      try {
+        showToast("Wird hinzugefügt…");
+        const imgs = await fileToPageImages(file, 200);
+        const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        addPages(currentPage(), pages);
+      } catch (err) {
+        showToast("Hinzufügen hat nicht geklappt");
+      }
+    }
+    photoInput.addEventListener("change", () => addFromFile(photoInput));
+    imageInput.addEventListener("change", () => addFromFile(imageInput));
+    pdfInput.addEventListener("change", () => addFromFile(pdfInput));
+    function templateCard(label, sub, bg, onPick) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pap-card";
+      const cv = document.createElement("canvas");
+      cv.className = "pap-prev";
+      b.appendChild(cv);
+      const l = document.createElement("span");
+      l.className = "pap-label";
+      l.textContent = label;
+      b.appendChild(l);
+      if (sub) {
+        const sm = document.createElement("small");
+        sm.textContent = sub;
+        b.appendChild(sm);
+      }
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        addPop.classList.add("hidden");
+        onPick();
+      });
+      requestAnimationFrame(() => {
+        const W = 84;
+        const H = Math.round((W * (bg.h || A4_H)) / (bg.w || A4_W));
+        const d = Math.max(1, window.devicePixelRatio || 1);
+        cv.width = W * d;
+        cv.height = H * d;
+        cv.style.width = W + "px";
+        cv.style.height = H + "px";
+        const c = cv.getContext("2d");
+        const k = W / (bg.w || A4_W);
+        c.setTransform(d, 0, 0, d, 0, 0);
+        c.fillStyle = "#fff";
+        c.fillRect(0, 0, W, H);
+        c.setTransform(k * d, 0, 0, k * d, 0, 0);
+        const r = { x: 0, y: 0, w: bg.w || A4_W, h: bg.h || A4_H };
+        const img = bg.mediaId ? ensureMedia(bg.mediaId) : null;
+        if (img && img.complete && img.naturalWidth) c.drawImage(img, 0, 0, r.w, r.h);
+        else if (!bg.mediaId) drawPagePattern(bg.paper || "graph", r, c, k * 2.5);
+      });
+      return b;
+    }
+    function openAddPop(anchor) {
+      const box = document.getElementById("pap-templates");
+      box.innerHTML = "";
+      const at = currentPage();
+      const tpl = templatePage();
+      box.appendChild(templateCard("Aktuelle Vorlage", "A4", tpl, () => addPages(at, [templatePage()])));
+      for (const k of Object.keys(PAPER_LABELS)) {
+        box.appendChild(templateCard(PAPER_LABELS[k], "", { paper: k }, () => addPages(at, [{ id: newId(), paper: k, w: A4_W, h: A4_H }])));
+      }
+      addPop.classList.remove("hidden");
+      const r = anchor.getBoundingClientRect();
+      const pw = addPop.offsetWidth;
+      const ph = addPop.offsetHeight;
+      addPop.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.right + 14)) + "px";
+      addPop.style.top = Math.max(8, Math.min(window.innerHeight - ph - 8, r.top + r.height / 2 - ph / 2)) + "px";
+    }
+    addPop.querySelectorAll(".pap-list [data-act]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        addPop.classList.add("hidden");
+        if (b.dataset.act === "photo") photoInput.click();
+        else if (b.dataset.act === "image") imageInput.click();
+        else pdfInput.click();
+      })
+    );
+
+    // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste, "Neue Seite"-Knopf hinter der letzten Seite
+    let lastCur = -1;
+    let lastNb = null;
     window.sofiaPagesUi = () => {
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
-      bar.classList.toggle("hidden", !show);
+      pagesBtn.classList.toggle("hidden", !show);
       if (!show) {
         addBig.classList.add("hidden");
         closeMenu();
+        if (panelOpen) setPanel(false);
         return;
       }
-      const t = currentPage() + 1 + " / " + notebook.pages.length;
-      if (t !== lastLabel) label.textContent = lastLabel = t;
+      if (!panelOpen && lastNb !== notebookBoardId) {
+        lastNb = notebookBoardId;
+        let want = false;
+        try {
+          want = localStorage.getItem("sofianotes-pages-panel") === "1";
+        } catch (err) {}
+        if (want) setTimeout(() => setPanel(true), 0);
+      }
+      if (panelOpen) {
+        const cur = currentPage();
+        if (cur !== lastCur) {
+          lastCur = cur;
+          grid.querySelectorAll(".page-thumb[data-index]").forEach((el) => el.classList.toggle("active", Number(el.dataset.index) === cur));
+          const act = grid.querySelector(".page-thumb.active");
+          if (act && act.scrollIntoView) act.scrollIntoView({ block: "nearest" });
+        }
+        if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
+      }
       const rects = pageRects(notebook);
       const last = rects[rects.length - 1];
       if (!last || historyView) {
