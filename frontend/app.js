@@ -41,6 +41,8 @@
     "sofianotes-nb-paging",
     "sofianotes-nb-spread",
     "sofianotes-templates",
+    "sofianotes-school",
+    "sofianotes-school-pos",
   ];
   const PREF_META = "sofianotes-prefs-sync"; // {at, dirty}
   const prefSync = (() => {
@@ -2461,6 +2463,7 @@
       e.target.closest("#selection-toolbar") ||
       e.target.closest("#undo-redo-dock") ||
       e.target.closest("#top-filename-bar") ||
+      e.target.closest(".bar-menu") ||
       e.target.closest("#who-backdrop") ||
       e.target.closest("#library-backdrop") ||
       e.target.closest("#share-backdrop") ||
@@ -8284,7 +8287,7 @@
     pickImportFiles("application/pdf,.pdf,image/*");
   });
   document.addEventListener("pointerdown", (e) => {
-    if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap")) insertMenu.classList.add("hidden");
+    if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
   }, true);
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
@@ -10008,6 +10011,7 @@
       const next = await r.json();
       const changed = JSON.stringify(next) !== JSON.stringify(sofiaNow);
       sofiaNow = next;
+      if (window.sofiaSchoolData) window.sofiaSchoolData(next);
       if (changed && !libraryBackdrop.classList.contains("hidden")) renderLibrary();
     } catch (err) {
       /* offline - Hervorhebung bleibt einfach weg */
@@ -12662,19 +12666,14 @@
     // (wie schon bei .lib-add-menu) und wird relativ zum gemeinsamen
     // offsetParent (canvas-menu-wrap) in Pixeln berechnet, nicht relativ
     // zum Viewport.
+    // Menues der Kopfleiste haengen am <body> (position: fixed) - Bildschirm-Koordinaten
     canvasShareSubmenu.style.right = "auto";
     canvasShareSubmenu.classList.remove("hidden");
-    const wrapRect = canvasMenu.offsetParent.getBoundingClientRect();
     const menuRect = canvasMenu.getBoundingClientRect();
     const subRect = canvasShareSubmenu.getBoundingClientRect();
-    const menuLeft = menuRect.left - wrapRect.left;
-    if (menuRect.left - subRect.width - 8 >= 0) {
-      canvasShareSubmenu.style.left = menuLeft - subRect.width - 8 + "px";
-    } else {
-      const maxLeft = window.innerWidth - wrapRect.left - subRect.width - 8;
-      canvasShareSubmenu.style.left = Math.min(menuRect.right - wrapRect.left + 8, maxLeft) + "px";
-    }
-    canvasShareSubmenu.style.top = menuRect.top - wrapRect.top + "px";
+    if (menuRect.left - subRect.width - 8 >= 0) canvasShareSubmenu.style.left = menuRect.left - subRect.width - 8 + "px";
+    else canvasShareSubmenu.style.left = Math.min(menuRect.right + 8, window.innerWidth - subRect.width - 8) + "px";
+    canvasShareSubmenu.style.top = menuRect.top + "px";
   }
 
   document.getElementById("btn-canvas-menu")?.addEventListener("click", (e) => {
@@ -13061,6 +13060,15 @@
       if (typeof closeCanvasMenus === "function") closeCanvasMenus();
       if (notebook) rotatePage(currentPage());
     });
+    // Seite an eine andere Stelle schieben (Seiten-Leiste: lange druecken und ziehen)
+    function movePage(from, to) {
+      if (from === to || from < 0 || to < 0) return;
+      const nb = clone();
+      const [pg] = nb.pages.splice(from, 1);
+      nb.pages.splice(to, 0, pg);
+      withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
+      fitPage(to);
+    }
     function setLayout(layout) {
       if (notebook.layout === layout) return;
       const i = currentPage();
@@ -13299,6 +13307,96 @@
       }
       c.restore();
     }
+    // Lange druecken: Seite wird ausgewaehlt und haengt am Finger; loslassen = neue Stelle
+    let thumbDrag = null; // {from, cell, ghost, to, timer, x0, y0, active, done}
+    function startThumbHold(e, i, cell) {
+      if (e.button > 0) return;
+      cancelThumbDrag();
+      const d = { from: i, cell, to: i, x0: e.clientX, y0: e.clientY, active: false, done: false, pointerId: e.pointerId };
+      d.timer = setTimeout(() => {
+        d.active = true;
+        cell.classList.add("lifted");
+        const r = cell.getBoundingClientRect();
+        const g = cell.cloneNode(true);
+        const src = cell.querySelector("canvas");
+        const dst = g.querySelector("canvas");
+        if (src && dst) dst.getContext("2d").drawImage(src, 0, 0);
+        g.className = "page-thumb page-thumb-ghost";
+        g.style.width = r.width + "px";
+        g.style.left = r.left + "px";
+        g.style.top = r.top + "px";
+        document.body.appendChild(g);
+        d.ghost = g;
+        d.dx = e.clientX - r.left;
+        d.dy = e.clientY - r.top;
+        if (navigator.vibrate) navigator.vibrate(15);
+      }, 380);
+      thumbDrag = d;
+    }
+    function cancelThumbDrag() {
+      if (!thumbDrag) return;
+      clearTimeout(thumbDrag.timer);
+      thumbDrag.ghost?.remove();
+      thumbDrag.cell?.classList.remove("lifted");
+      grid.querySelectorAll(".drop-before,.drop-after").forEach((c) => c.classList.remove("drop-before", "drop-after"));
+      thumbDrag = null;
+    }
+    function thumbTargetAt(x, y) {
+      const cells = Array.from(grid.querySelectorAll(".page-thumb[data-index]"));
+      let best = null;
+      let bestD = Infinity;
+      for (const c of cells) {
+        const r = c.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const dd = (x - cx) ** 2 + (y - cy) ** 2;
+        if (dd < bestD) {
+          bestD = dd;
+          best = { cell: c, index: +c.dataset.index, after: x > cx || (Math.abs(x - cx) < r.width / 4 && y > cy) };
+        }
+      }
+      return best;
+    }
+    window.addEventListener("pointermove", (e) => {
+      const d = thumbDrag;
+      if (!d || e.pointerId !== d.pointerId) return;
+      if (!d.active) {
+        if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > 10) cancelThumbDrag(); // war Scrollen
+        return;
+      }
+      d.ghost.style.left = e.clientX - d.dx + "px";
+      d.ghost.style.top = e.clientY - d.dy + "px";
+      grid.querySelectorAll(".drop-before,.drop-after").forEach((c) => c.classList.remove("drop-before", "drop-after"));
+      const t = thumbTargetAt(e.clientX, e.clientY);
+      if (!t) return;
+      t.cell.classList.add(t.after ? "drop-after" : "drop-before");
+      let to = t.index + (t.after ? 1 : 0);
+      if (to > d.from) to -= 1;
+      d.to = to;
+      // am Rand der Leiste weiterscrollen
+      const gr = grid.getBoundingClientRect();
+      if (e.clientY < gr.top + 40) grid.scrollTop -= 12;
+      else if (e.clientY > gr.bottom - 40) grid.scrollTop += 12;
+    }, true);
+    const endThumb = (e) => {
+      const d = thumbDrag;
+      if (!d || e.pointerId !== d.pointerId) return;
+      if (!d.active) return cancelThumbDrag();
+      const { from, to } = d;
+      d.done = true;
+      cancelThumbDrag();
+      thumbDrag = { done: true };
+      setTimeout(() => {
+        if (thumbDrag && thumbDrag.done && !thumbDrag.cell) thumbDrag = null;
+      }, 50);
+      if (e.type === "pointerup" && to !== from) movePage(from, to);
+    };
+    window.addEventListener("pointerup", endThumb, true);
+    window.addEventListener("pointercancel", endThumb, true);
+    // waehrend des Ziehens nicht die Leiste scrollen (iPad)
+    document.addEventListener("touchmove", (e) => {
+      if (thumbDrag && thumbDrag.active) e.preventDefault();
+    }, { passive: false });
     let renderedSig = "";
     function renderPanel() {
       if (!panelOpen || !notebook) return;
@@ -13324,9 +13422,12 @@
         });
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (thumbDrag && thumbDrag.done) return;
           if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
           fitPage(i);
         });
+        cv.addEventListener("pointerdown", (e) => startThumbHold(e, i, cell));
+        cv.addEventListener("contextmenu", (e) => e.preventDefault());
         foot.querySelector(".page-thumb-menu").addEventListener("click", (e) => {
           e.stopPropagation();
           if (!menu.classList.contains("hidden")) return closeMenu();
@@ -13384,6 +13485,27 @@
       } catch (err) {}
       renderNbSettings();
     }
+    // Eigene Vorlage nachtraeglich bearbeiten: umbenennen, als Standard, loeschen
+    async function renameTemplate(t) {
+      const res = await openNameSheet({ title: "Vorlage umbenennen", label: "Name", initial: t.name || "" });
+      const name = res && String(res.value || "").trim();
+      if (!name) return;
+      saveUserTemplates(userTemplates().map((x) => (x.id === t.id ? { ...x, name: name.slice(0, 60) } : x)));
+      showToast("Vorlage umbenannt");
+    }
+    async function deleteTemplate(t) {
+      const ok = await askConfirm({ title: "Vorlage „" + t.name + "“ löschen?", text: "Seiten, die sie schon benutzen, bleiben so wie sie sind.", ok: "Löschen" });
+      if (!ok) return;
+      saveUserTemplates(userTemplates().filter((x) => x.id !== t.id));
+      showToast("Vorlage gelöscht");
+    }
+    function templateActions(t, anchor) {
+      const items = [{ head: t.name }];
+      items.push({ icon: "edit", label: "Umbenennen", run: () => renameTemplate(t) });
+      if (notebook) items.push({ icon: "note_add", label: "Für neue Seiten nehmen", run: () => setTemplate({ paper: "blank", mediaId: t.mediaId, w: t.w, h: t.h }) });
+      items.push({ icon: "delete", label: "Vorlage löschen", danger: true, run: () => deleteTemplate(t) });
+      openMenu(items, anchor);
+    }
     const tplInput = document.createElement("input");
     tplInput.type = "file";
     tplInput.accept = "image/*,application/pdf,.pdf";
@@ -13435,14 +13557,24 @@
         const name = document.createElement("span");
         name.textContent = t.name;
         row.appendChild(name);
+        const ed = document.createElement("button");
+        ed.type = "button";
+        ed.className = "hw-panel-btn";
+        ed.title = "Umbenennen";
+        ed.innerHTML = '<span class="material-symbols-rounded">edit</span>';
+        ed.addEventListener("click", (e) => {
+          e.stopPropagation();
+          renameTemplate(t);
+        });
+        row.appendChild(ed);
         const del = document.createElement("button");
         del.type = "button";
         del.className = "hw-panel-btn";
-        del.title = "Vorlage entfernen";
-        del.innerHTML = '<span class="material-symbols-rounded">close</span>';
+        del.title = "Vorlage löschen";
+        del.innerHTML = '<span class="material-symbols-rounded">delete</span>';
         del.addEventListener("click", (e) => {
           e.stopPropagation();
-          saveUserTemplates(userTemplates().filter((x) => x.id !== t.id));
+          deleteTemplate(t);
         });
         row.appendChild(del);
         box.appendChild(row);
@@ -13520,10 +13652,24 @@
     photoInput.addEventListener("change", () => addFromFile(photoInput));
     imageInput.addEventListener("change", () => addFromFile(imageInput));
     pdfInput.addEventListener("change", () => addFromFile(pdfInput));
-    function templateCard(label, sub, bg, onPick) {
+    function templateCard(label, sub, bg, onPick, onMore) {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "pap-card";
+      if (onMore) {
+        // kleiner Bearbeiten-Knopf an eigenen Vorlagen (span: kein Knopf im Knopf)
+        const more = document.createElement("span");
+        more.className = "pap-more material-symbols-rounded";
+        more.setAttribute("role", "button");
+        more.title = "Vorlage bearbeiten";
+        more.textContent = "more_horiz";
+        more.addEventListener("click", (e) => {
+          e.stopPropagation();
+          addPop.classList.add("hidden");
+          onMore(more);
+        });
+        b.appendChild(more);
+      }
       const cv = document.createElement("canvas");
       cv.className = "pap-prev";
       b.appendChild(cv);
@@ -13572,7 +13718,7 @@
         box.appendChild(templateCard(PAPER_LABELS[k], "", { paper: k }, () => addPages(at, [{ id: newId(), paper: k, w: A4_W, h: A4_H }])));
       }
       for (const t of userTemplates()) {
-        box.appendChild(templateCard(t.name, "Eigene", t, () => addPages(at, [{ id: newId(), paper: "blank", mediaId: t.mediaId, w: t.w, h: t.h }])));
+        box.appendChild(templateCard(t.name, "Eigene", t, () => addPages(at, [{ id: newId(), paper: "blank", mediaId: t.mediaId, w: t.w, h: t.h }]), (el) => templateActions(t, anchor || el)));
       }
       const own = document.createElement("button");
       own.type = "button";
@@ -14009,6 +14155,301 @@
         requestAnimationFrame(autoDetect);
       });
     };
+  })();
+
+  // ---- Schul-Timer: Restzeit der Stunde / des Schultags aus dem Sofia-Stundenplan ----
+  // Der Stundenplan wird selten geholt (alle 10 Min.), gezaehlt wird lokal jede Sekunde -
+  // die Anzeige ist dadurch sofort da und braucht den Server kaum.
+  (() => {
+    const box = document.getElementById("school-timer");
+    const subjEl = document.getElementById("st-subject");
+    const leftEl = document.getElementById("st-left");
+    const endEl = document.getElementById("st-end");
+    const notes = document.getElementById("school-notes");
+    const DEF = { mode: "off", before: 5, end: 10, start: 0 };
+    let cfg = Object.assign({}, DEF);
+    try {
+      cfg = Object.assign(cfg, JSON.parse(lsGetRaw("sofianotes-school") || "{}"));
+    } catch (err) {}
+    let day = null; // {date, blocks:[{subject, room, s, e}]} - Minuten seit Mitternacht
+    let status = "";
+    let fetchedAt = 0;
+    const fired = new Set();
+    const toMin = (hhmm) => {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+      return m ? +m[1] * 60 + +m[2] : null;
+    };
+    const today = () => new Date().toDateString();
+    function saveCfg() {
+      try {
+        localStorage.setItem("sofianotes-school", JSON.stringify(cfg));
+      } catch (err) {}
+    }
+    function setData(data) {
+      fetchedAt = Date.now();
+      if (!data || !data.enabled) status = "Sofia ist nicht verbunden.";
+      else if (!data.linked) status = "Dein Konto ist nicht mit Sofia verknüpft.";
+      else if (data.error) status = "Stundenplan gerade nicht erreichbar.";
+      else status = "";
+      const lessons = (data && data.lessons) || [];
+      // Doppelstunden (gleiches Fach, hoechstens 5 Min. Luecke) zu einem Block
+      const blocks = [];
+      for (const l of lessons) {
+        const s0 = toMin(l.start);
+        const e0 = toMin(l.end);
+        if (s0 == null || e0 == null) continue;
+        const prev = blocks[blocks.length - 1];
+        if (prev && prev.subject === l.subject && s0 - prev.e <= 5) prev.e = Math.max(prev.e, e0);
+        else blocks.push({ subject: l.subject || "Unterricht", room: l.room || "", s: s0, e: e0 });
+      }
+      day = { date: today(), blocks };
+      if (!status && !blocks.length) status = "Heute stehen keine Stunden im Plan.";
+      renderStatus();
+      tick();
+    }
+    window.sofiaSchoolData = setData;
+    async function load() {
+      try {
+        const r = await fetch("/api/sofia/now", { credentials: "same-origin" });
+        if (r.ok) setData(await r.json());
+      } catch (err) {
+        /* offline: alter Plan zaehlt weiter */
+      }
+    }
+    const fmt = (min) => {
+      min = Math.max(0, Math.ceil(min));
+      if (min < 60) return min + " min";
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      return h + " h" + (m ? " " + m + " min" : "");
+    };
+    const hm = (min) => String(Math.floor(min / 60)).padStart(2, "0") + ":" + String(min % 60).padStart(2, "0");
+    function note(text, icon) {
+      const el = document.createElement("div");
+      el.className = "school-note";
+      el.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+      el.children[0].textContent = icon || "timer";
+      el.children[1].textContent = text;
+      el.addEventListener("click", () => el.remove());
+      notes.appendChild(el);
+      requestAnimationFrame(() => el.classList.add("in"));
+      setTimeout(() => {
+        el.classList.remove("in");
+        setTimeout(() => el.remove(), 400);
+      }, 9000);
+    }
+    const showWidget = () => cfg.mode === "widget" || cfg.mode === "both";
+    const showNotes = () => cfg.mode === "notes" || cfg.mode === "both";
+    function tick() {
+      if (cfg.mode === "off") {
+        box.classList.add("hidden");
+        return;
+      }
+      if (!day || day.date !== today() || Date.now() - fetchedAt > 10 * 60 * 1000) {
+        if (Date.now() - fetchedAt > 60 * 1000) load();
+      }
+      const now = new Date();
+      const t = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+      const blocks = (day && day.date === today() && day.blocks) || [];
+      const cur = blocks.find((b) => b.s <= t && t < b.e);
+      const nxt = blocks.find((b) => b.s > t);
+      const endOfDay = blocks.length ? blocks[blocks.length - 1].e : null;
+      const visible = showWidget() && blocks.length && (cur || nxt);
+      box.classList.toggle("hidden", !visible);
+      if (visible) {
+        if (cur) {
+          subjEl.textContent = cur.subject + (cur.room ? " · " + cur.room : "");
+          leftEl.textContent = "noch " + fmt(cur.e - t);
+          box.classList.toggle("st-soon", cur.e - t <= Math.max(1, cfg.before || 5));
+        } else {
+          subjEl.textContent = "Pause";
+          leftEl.textContent = nxt.subject + " in " + fmt(nxt.s - t);
+          box.classList.remove("st-soon");
+        }
+        endEl.textContent = "Schulschluss " + hm(endOfDay) + " · noch " + fmt(endOfDay - t);
+      }
+      if (!showNotes() || !blocks.length) return;
+      const key = (k) => today() + "|" + k;
+      for (const b of blocks) {
+        const kEnd = key("end" + b.s);
+        if (cfg.before && b.e !== endOfDay && t >= b.e - cfg.before && t < b.e && !fired.has(kEnd)) {
+          fired.add(kEnd);
+          note(b.subject + ": noch " + fmt(b.e - t) + " bis Stundenende", "timer");
+        }
+        const kStart = key("start" + b.s);
+        if (cfg.start && t >= b.s && t < b.s + 1 && !fired.has(kStart)) {
+          fired.add(kStart);
+          note(b.subject + " fängt an" + (b.room ? " · " + b.room : ""), "school");
+        }
+      }
+      const kDay = key("day");
+      if (cfg.end && endOfDay != null && t >= endOfDay - cfg.end && t < endOfDay && !fired.has(kDay)) {
+        fired.add(kDay);
+        note("Noch " + fmt(endOfDay - t) + " bis Schulschluss (" + hm(endOfDay) + ")", "celebration");
+      }
+    }
+    // beim Oeffnen nicht alle laengst vergangenen Hinweise auf einmal zeigen
+    function markPast() {
+      const now = new Date();
+      const t = now.getHours() * 60 + now.getMinutes();
+      for (const b of (day && day.blocks) || []) if (b.s < t) fired.add(today() + "|start" + b.s);
+    }
+    setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        if (Date.now() - fetchedAt > 5 * 60 * 1000) load();
+        tick();
+      }
+    });
+    load().then(markPast);
+
+    // ---- Fenster: ziehen zum Verschieben, antippen fuer klein/gross ----
+    function applyPos() {
+      let pos = null;
+      try {
+        pos = JSON.parse(lsGetRaw("sofianotes-school-pos") || "null");
+      } catch (err) {}
+      if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+        box.style.left = Math.max(4, Math.min(window.innerWidth - 60, pos.x * window.innerWidth)) + "px";
+        box.style.top = Math.max(4, Math.min(window.innerHeight - 40, pos.y * window.innerHeight)) + "px";
+        box.style.right = "auto";
+        box.style.bottom = "auto";
+      }
+      box.classList.toggle("st-compact", !!(pos && pos.compact));
+    }
+    applyPos();
+    window.addEventListener("resize", applyPos);
+    let drag = null;
+    box.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#st-close")) return;
+      const r = box.getBoundingClientRect();
+      drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
+      try {
+        box.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      e.preventDefault();
+    });
+    box.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+      drag.moved = true;
+      const w = box.offsetWidth;
+      const h = box.offsetHeight;
+      box.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, e.clientX - drag.dx)) + "px";
+      box.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, e.clientY - drag.dy)) + "px";
+      box.style.right = "auto";
+      box.style.bottom = "auto";
+    });
+    const endDrag = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const r = box.getBoundingClientRect();
+      const compact = drag.moved ? box.classList.contains("st-compact") : !box.classList.contains("st-compact");
+      box.classList.toggle("st-compact", compact);
+      drag = null;
+      try {
+        localStorage.setItem("sofianotes-school-pos", JSON.stringify({ x: r.left / window.innerWidth, y: r.top / window.innerHeight, compact }));
+      } catch (err) {}
+    };
+    box.addEventListener("pointerup", endDrag);
+    box.addEventListener("pointercancel", endDrag);
+    document.getElementById("st-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      cfg.mode = cfg.mode === "both" ? "notes" : "off";
+      saveCfg();
+      renderSettings();
+      tick();
+      showToast("Schul-Timer ausgeblendet – in den Einstellungen wieder an");
+    });
+
+    // ---- Einstellungen ----
+    function renderStatus() {
+      const el = document.getElementById("set-school-status");
+      if (el) el.textContent = status;
+    }
+    function renderSettings() {
+      document.querySelectorAll("#set-school-mode [data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === cfg.mode));
+      document.querySelectorAll("#set-school-before [data-min]").forEach((b) => b.classList.toggle("active", +b.dataset.min === +cfg.before));
+      document.querySelectorAll("#set-school-end [data-min]").forEach((b) => b.classList.toggle("active", +b.dataset.min === +cfg.end));
+      document.querySelectorAll("#set-school-start [data-on]").forEach((b) => b.classList.toggle("active", +b.dataset.on === +(cfg.start ? 1 : 0)));
+      const sum = document.getElementById("set-sum-school");
+      if (sum) sum.textContent = { off: "Aus", widget: "Kleines Fenster", notes: "Hinweise links", both: "Fenster + Hinweise" }[cfg.mode] || "";
+      renderStatus();
+    }
+    const bind = (sel, fn) =>
+      document.querySelectorAll(sel).forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          fn(b);
+          saveCfg();
+          renderSettings();
+          tick();
+        })
+      );
+    bind("#set-school-mode [data-mode]", (b) => {
+      cfg.mode = b.dataset.mode;
+      if (cfg.mode !== "off") {
+        markPast();
+        if (!fetchedAt || Date.now() - fetchedAt > 60 * 1000) load();
+      }
+    });
+    bind("#set-school-before [data-min]", (b) => (cfg.before = +b.dataset.min));
+    bind("#set-school-end [data-min]", (b) => (cfg.end = +b.dataset.min));
+    bind("#set-school-start [data-on]", (b) => (cfg.start = +b.dataset.on));
+    document.querySelector('.set-nav[data-go="school"]')?.addEventListener("click", () => setTimeout(renderSettings, 0));
+    // Einstellungen von einem anderen Geraet (Prefs-Sync) uebernehmen
+    window.addEventListener("storage", () => {
+      try {
+        cfg = Object.assign({}, DEF, JSON.parse(lsGetRaw("sofianotes-school") || "{}"));
+      } catch (err) {}
+      renderSettings();
+      applyPos();
+    });
+    renderSettings();
+  })();
+
+  // ---- Menues der Kopfleiste: am <body> statt in der Leiste ----
+  // Die Leiste kann (z. B. bei offener Seiten-Leiste) scrollen und schneidet dann alles ab,
+  // was aus ihr herausragt. Deshalb haengen die Menues am <body> und werden beim Oeffnen
+  // an ihren Knopf gesetzt.
+  (() => {
+    const bar = document.getElementById("top-filename-bar");
+    const pairs = [
+      ["canvas-menu", "btn-canvas-menu"],
+      ["insert-menu", "btn-insert"],
+      ["split-menu", "btn-split"],
+      ["canvas-share-submenu", null],
+    ];
+    function place(menu, btn) {
+      if (!btn) return;
+      const b = btn.getBoundingClientRect();
+      const bb = bar.getBoundingClientRect();
+      menu.style.right = "auto";
+      menu.style.bottom = "auto";
+      const m = menu.getBoundingClientRect();
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      let left;
+      let top;
+      if (bar.classList.contains("tb-left") || bar.classList.contains("tb-right")) {
+        left = bar.classList.contains("tb-left") ? bb.right + 10 : bb.left - 10 - m.width;
+        top = b.top;
+      } else {
+        left = b.right - m.width;
+        top = bar.classList.contains("tb-bottom") ? b.top - 6 - m.height : b.bottom + 8;
+      }
+      menu.style.left = Math.round(Math.max(8, Math.min(W - m.width - 8, left))) + "px";
+      menu.style.top = Math.round(Math.max(8, Math.min(H - m.height - 8, top))) + "px";
+    }
+    for (const [id, btnId] of pairs) {
+      const menu = document.getElementById(id);
+      if (!menu) continue;
+      document.body.appendChild(menu);
+      menu.classList.add("bar-menu");
+      const btn = btnId ? document.getElementById(btnId) : null;
+      new MutationObserver(() => {
+        if (!menu.classList.contains("hidden")) place(menu, btn);
+      }).observe(menu, { attributes: true, attributeFilter: ["class"] });
+    }
   })();
 
   // ---- Schau-Ansicht: nur ansehen, mit Fingern/Stift/Maus verschieben und zoomen ----

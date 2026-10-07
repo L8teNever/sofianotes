@@ -188,7 +188,8 @@ async def current_lesson(person_id: str) -> dict[str, Any]:
 
     current = next((l for l in lessons if int(l.get("startTime") or 0) <= hm < int(l.get("endTime") or 0)), None)
     upcoming = next((l for l in lessons if int(l.get("startTime") or 0) > hm), None)
-    return {"enabled": True, "linked": True, "current": pack(current), "next": pack(upcoming)}
+    # ganzer Tag (fuer den Schul-Timer im Blatt: rechnet lokal weiter)
+    return {"enabled": True, "linked": True, "current": pack(current), "next": pack(upcoming), "lessons": [pack(l) for l in lessons]}
 
 
 # ---- Hausaufgaben -------------------------------------------------------------
