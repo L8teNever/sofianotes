@@ -298,3 +298,51 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(res["restored"], 1)
 
             asyncio.run(run())
+
+
+class SendTests(unittest.TestCase):
+    def test_send_copy_and_pdf(self):
+        import asyncio
+        import tempfile
+        from pathlib import Path
+        from fastapi import HTTPException
+        from app import db, files, main, media
+
+        class Req:
+            def __init__(self, body):
+                self.body = body
+
+            async def json(self):
+                return self.body
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db.use_database(tmp + "/s.db")
+            old_f, old_m = files.FILES_DIR, media.MEDIA_DIR
+            files.FILES_DIR, media.MEDIA_DIR = Path(tmp) / "f", Path(tmp) / "m"
+            try:
+                people = db._people_sync()
+                me, other = {"id": people[0]["id"]}, {"id": people[1]["id"]}
+
+                async def run():
+                    b = await db.create_board(me["id"], "Mathe", None)
+                    await db.insert_stroke({"id": "x1", "tool": "pen", "color": "#000", "size": 3, "points": [{"x": 0, "y": 0}, {"x": 50, "y": 20}], "board_id": b["id"]}, me["id"])
+                    r = await main.send_board(b["id"], Req({"to": [other["id"]], "format": "sofianotes"}), me)
+                    self.assertEqual(r["sent"], 1)
+                    await main.send_board(b["id"], Req({"to": [other["id"]], "format": "pdf"}), me)
+                    inbox = await main.get_inbox(other)
+                    self.assertEqual(inbox["unseen"], 2)
+                    self.assertEqual(sorted(i["kind"] for i in inbox["items"]), ["board", "pdf"])
+                    copy = next(i for i in inbox["items"] if i["kind"] == "board")
+                    self.assertNotEqual(copy["boardId"], b["id"])
+                    self.assertEqual(db._board_row(copy["boardId"])["ownerId"], other["id"])
+                    self.assertEqual(len(await db.load_all(copy["boardId"])), 1)
+                    pdf = next(i for i in inbox["items"] if i["kind"] == "pdf")
+                    self.assertTrue(files.load(pdf["fileId"])[0].startswith(b"%PDF"))
+                    await main.inbox_seen(other)
+                    self.assertEqual((await main.get_inbox(other))["unseen"], 0)
+                    with self.assertRaises(HTTPException):
+                        await main.send_board(b["id"], Req({"to": [me["id"]], "format": "pdf"}), me)
+
+                asyncio.run(run())
+            finally:
+                files.FILES_DIR, media.MEDIA_DIR = old_f, old_m

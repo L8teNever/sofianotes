@@ -9399,6 +9399,7 @@
     refreshLibrary();
     startSofiaNow();
     refreshHomework();
+    if (typeof refreshInbox === "function") refreshInbox();
   }
 
   function hideLibrary(opts) {
@@ -11948,17 +11949,155 @@
   // Exportieren: Auswahl PDF oder .sofianotes
   const exportScrim = document.getElementById("export-scrim");
   let exportBoardId = null;
+  let exportTitle = "";
+  const sendState = { to: new Set(), format: "sofianotes" };
+  function showExportPane(send) {
+    document.getElementById("export-main").classList.toggle("hidden", send);
+    document.getElementById("export-send").classList.toggle("hidden", !send);
+    document.getElementById("export-send-go").classList.toggle("hidden", !send);
+    document.getElementById("export-title").textContent = send ? "An Person senden" : "Exportieren";
+    document.getElementById("export-name").textContent = send ? "„" + exportTitle + "“" : "„" + exportTitle + "“ speichern als:";
+    document.getElementById("export-cancel").textContent = send ? "Zurück" : "Abbrechen";
+    if (send) renderSendPane();
+  }
+  function renderSendPane() {
+    const box = document.getElementById("export-people");
+    box.innerHTML = "";
+    const others = PEOPLE.filter((p) => p.id !== currentPersonId);
+    if (!others.length) box.innerHTML = '<p class="set-hint">Keine anderen Personen vorhanden.</p>';
+    for (const p of others) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "export-person" + (sendState.to.has(p.id) ? " active" : "");
+      b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+      b.children[0].textContent = sendState.to.has(p.id) ? "check_circle" : "person";
+      b.children[1].textContent = p.name;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (sendState.to.has(p.id)) sendState.to.delete(p.id);
+        else sendState.to.add(p.id);
+        renderSendPane();
+      });
+      box.appendChild(b);
+    }
+    document.querySelectorAll("#export-send-format [data-format]").forEach((b) => b.classList.toggle("active", b.dataset.format === sendState.format));
+    document.getElementById("export-send-hint").textContent =
+      sendState.format === "pdf" ? "Die Person bekommt ein PDF in ihren Eingang – zum Ansehen, nicht bearbeitbar." : "Die Person bekommt eine eigene Kopie des Blatts in ihre Bibliothek – voll bearbeitbar, mit Material.";
+    const go = document.getElementById("export-send-go");
+    go.disabled = !sendState.to.size;
+    go.textContent = sendState.to.size > 1 ? "An " + sendState.to.size + " senden" : "Senden";
+  }
+  document.querySelectorAll("#export-send-format [data-format]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      sendState.format = b.dataset.format;
+      renderSendPane();
+    })
+  );
+  document.getElementById("export-to-person").addEventListener("click", (e) => {
+    e.stopPropagation();
+    showExportPane(true);
+  });
+  document.getElementById("export-send-go").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!sendState.to.size || !exportBoardId) return;
+    const go = e.currentTarget;
+    go.disabled = true;
+    go.textContent = "Sende…";
+    try {
+      await api("/api/boards/" + encodeURIComponent(exportBoardId) + "/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: [...sendState.to], format: sendState.format }),
+      });
+      const names = [...sendState.to].map(personName).join(", ");
+      closeExport();
+      showToast("Gesendet an " + names);
+    } catch (err) {
+      showToast("Senden hat nicht geklappt");
+      renderSendPane();
+    }
+  });
   function openExportDialog(boardId, title) {
     if (!boardId) return;
     exportBoardId = boardId;
-    document.getElementById("export-name").textContent = "„" + (title || "Blatt") + "“ speichern als:";
+    exportTitle = title || "Blatt";
+    sendState.to.clear();
+    showExportPane(false);
     exportScrim.classList.remove("hidden");
   }
   const closeExport = () => exportScrim.classList.add("hidden");
   exportScrim.addEventListener("click", (e) => {
     if (e.target === exportScrim) closeExport();
   });
-  document.getElementById("export-cancel").addEventListener("click", closeExport);
+  document.getElementById("export-cancel").addEventListener("click", () => {
+    if (!document.getElementById("export-send").classList.contains("hidden")) showExportPane(false);
+    else closeExport();
+  });
+
+  // ---- Eingang: Blaetter und PDFs, die einem jemand geschickt hat ----
+  const inboxScrim = document.getElementById("inbox-scrim");
+  let inboxData = { items: [], unseen: 0 };
+  function renderInboxBadge() {
+    const c = document.getElementById("inbox-count");
+    c.textContent = inboxData.unseen > 9 ? "9+" : String(inboxData.unseen);
+    c.classList.toggle("hidden", !inboxData.unseen);
+  }
+  async function refreshInbox() {
+    try {
+      inboxData = await api("/api/inbox");
+    } catch (err) {
+      return;
+    }
+    renderInboxBadge();
+    if (!inboxScrim.classList.contains("hidden")) renderInbox();
+  }
+  function renderInbox() {
+    const list = document.getElementById("inbox-list");
+    list.innerHTML = "";
+    if (!inboxData.items.length) {
+      list.innerHTML = '<div class="inbox-empty"><span class="material-symbols-rounded">inbox</span><p>Noch nichts bekommen. Wenn dir jemand ein Blatt oder PDF schickt, landet es hier.</p></div>';
+      return;
+    }
+    for (const it of inboxData.items) {
+      const row = document.createElement("div");
+      row.className = "inbox-item" + (it.seen ? "" : " unseen");
+      row.innerHTML = '<span class="set-ico"><span class="material-symbols-rounded"></span></span><span class="set-nav-text"><strong></strong><small></small></span><button type="button" class="hw-panel-btn" title="Aus dem Eingang entfernen"><span class="material-symbols-rounded">close</span></button>';
+      row.querySelector(".set-ico .material-symbols-rounded").textContent = it.kind === "pdf" ? "picture_as_pdf" : "description";
+      row.querySelector("strong").textContent = it.title;
+      row.querySelector("small").textContent = "Von " + (personName(it.from) || "?") + " · " + (it.kind === "pdf" ? "PDF" : "Blatt (Kopie)") + " · " + relTime(it.at);
+      row.addEventListener("click", () => {
+        inboxScrim.classList.add("hidden");
+        if (it.kind === "pdf") window.open("/api/files/" + encodeURIComponent(it.fileId), "_blank", "noopener");
+        else openBoard(it.boardId, it.title);
+      });
+      row.querySelector("button").addEventListener("click", async (e) => {
+        e.stopPropagation();
+        inboxData.items = inboxData.items.filter((x) => x.id !== it.id);
+        renderInbox();
+        try {
+          await api("/api/inbox/" + it.id, { method: "DELETE" });
+        } catch (err) {
+          refreshInbox();
+        }
+      });
+      list.appendChild(row);
+    }
+  }
+  document.getElementById("btn-library-inbox").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    renderInbox();
+    inboxScrim.classList.remove("hidden");
+    if (inboxData.unseen) {
+      inboxData.unseen = 0;
+      renderInboxBadge();
+      api("/api/inbox/seen", { method: "POST" }).catch(() => {});
+    }
+  });
+  document.getElementById("inbox-close").addEventListener("click", () => inboxScrim.classList.add("hidden"));
+  inboxScrim.addEventListener("click", (e) => {
+    if (e.target === inboxScrim) inboxScrim.classList.add("hidden");
+  });
   exportScrim.querySelectorAll(".export-opt").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();

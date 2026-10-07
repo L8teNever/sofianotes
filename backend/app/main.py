@@ -732,9 +732,15 @@ async def import_board_file(request: Request, me: dict = Depends(get_current_per
         parsed = board_file.parse(data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    board = await db.create_board(me["id"], parsed["title"], folder, None)
+    return await _create_from_parsed(me["id"], parsed, folder)
+
+
+async def _create_from_parsed(person_id: str, parsed: dict, folder: str | None) -> dict:
+    """Neues Blatt aus einer gelesenen .sofianotes-Datei (Import oder Senden an jemanden)."""
+    board = await db.create_board(person_id, parsed["title"], folder, None)
     if board is None:
         raise HTTPException(status_code=400, detail="unknown person")
+    me = {"id": person_id}
     bid = board["id"]
     await db.set_board_paper(bid, parsed["paper"])
     if parsed["refs"]:
@@ -756,6 +762,57 @@ async def import_board_file(request: Request, me: dict = Depends(get_current_per
     return {"ok": True, "board": await db.get_board(bid), "strokes": len(parsed["strokes"]), "homework": homework}
 
 
+def _safe_filename(title: str) -> str:
+    return "".join(c if c.isalnum() or c in " -_()" else "_" for c in (title or "Blatt")).strip() or "Blatt"
+
+
+@app.post("/api/boards/{board_id}/send")
+async def send_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
+    """Blatt an andere Personen schicken - als eigene Kopie (sofianotes) oder als PDF.
+    Keine Zusammenarbeit: Aenderungen danach bleiben getrennt."""
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    body = await _json_body(request)
+    fmt = body.get("format")
+    known = {p["id"] for p in await db.people()}
+    to = [str(t) for t in (body.get("to") or []) if str(t) in known and str(t) != me["id"]]
+    if fmt not in ("pdf", "sofianotes") or not to:
+        raise HTTPException(status_code=400, detail="format und Empfänger nötig")
+    board = await db.get_board(board_id)
+    strokes = await db.load_all(board_id)
+    title = board.get("title") or "Blatt"
+    if fmt == "pdf":
+        pdf = goodnotes_export.build_pdf(strokes)
+        for pid in to:
+            meta = files.save(pdf, _safe_filename(title) + ".pdf", "application/pdf")
+            await db.inbox_add(pid, me["id"], "pdf", title, file_id=meta["id"])
+    else:
+        data = board_file.build(board, strokes)
+        for pid in to:
+            parsed = board_file.parse(data)
+            res = await _create_from_parsed(pid, parsed, None)
+            await db.inbox_add(pid, me["id"], "board", title, board_id=res["board"]["id"])
+    return {"ok": True, "sent": len(to)}
+
+
+@app.get("/api/inbox")
+async def get_inbox(me: dict = Depends(get_current_person)) -> dict:
+    return await db.inbox_list(me["id"])
+
+
+@app.post("/api/inbox/seen")
+async def inbox_seen(me: dict = Depends(get_current_person)) -> dict:
+    await db.inbox_seen(me["id"])
+    return {"ok": True}
+
+
+@app.delete("/api/inbox/{item_id}")
+async def inbox_remove(item_id: int, me: dict = Depends(get_current_person)) -> dict:
+    if not await db.inbox_remove(me["id"], item_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return {"ok": True}
+
+
 @app.get("/api/export.goodnotes")
 async def download_goodnotes(board: str) -> FileResponse:
     if not await db.get_board(board):
@@ -769,14 +826,17 @@ async def download_goodnotes(board: str) -> FileResponse:
 
 
 @app.get("/api/export.pdf")
-async def download_pdf(board: str) -> FileResponse:
-    if not await db.get_board(board):
+async def download_pdf(board: str, me: dict = Depends(get_current_person)) -> Response:
+    if not await db.can_access(me["id"], board):
         raise HTTPException(status_code=404, detail="not found")
-    goodnotes_export.write_exports(await db.load_all(board))
-    return FileResponse(
-        goodnotes_export.PDF_PATH,
+    b = await db.get_board(board)
+    pdf = goodnotes_export.build_pdf(await db.load_all(board))
+    from urllib.parse import quote
+
+    return Response(
+        content=pdf,
         media_type="application/pdf",
-        filename="sofianotes.pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"blatt.pdf\"; filename*=UTF-8''{quote(_safe_filename(b.get('title') or 'Blatt'))}.pdf"},
     )
 
 

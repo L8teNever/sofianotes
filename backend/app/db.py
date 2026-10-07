@@ -143,6 +143,22 @@ def _init_sync() -> None:
         """
     )
     _conn.execute("CREATE INDEX IF NOT EXISTS stroke_log_board ON stroke_log (board_id, id)")
+    # Eingang: Blaetter/PDFs, die jemand einem geschickt hat (Kopie, keine Zusammenarbeit)
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            to_person TEXT NOT NULL,
+            from_person TEXT,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            board_id TEXT,
+            file_id TEXT,
+            at REAL NOT NULL,
+            seen INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     _seed_people_sync()
     _refresh_person_cache_sync()
     cols = {row[1] for row in _conn.execute("PRAGMA table_info(strokes)").fetchall()}
@@ -1553,3 +1569,56 @@ async def star_board(person_id: str, board_id: str, starred: bool) -> bool:
 async def star_folder(person_id: str, folder_id: str, starred: bool) -> bool:
     async with _lock:
         return await asyncio.get_event_loop().run_in_executor(None, _star_folder_sync, person_id, folder_id, starred)
+
+
+
+# ---- Eingang -------------------------------------------------------------
+def _inbox_add_sync(to_person: str, from_person: str, kind: str, title: str, board_id: str | None, file_id: str | None) -> None:
+    _conn.execute(
+        "INSERT INTO inbox (to_person, from_person, kind, title, board_id, file_id, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (to_person, from_person, kind, title, board_id, file_id, time.time()),
+    )
+    _conn.commit()
+
+
+def _inbox_list_sync(person_id: str) -> dict[str, Any]:
+    rows = _conn.execute(
+        "SELECT id, from_person, kind, title, board_id, file_id, at, seen FROM inbox WHERE to_person = ? ORDER BY id DESC LIMIT 100",
+        (person_id,),
+    ).fetchall()
+    items = [
+        {"id": r[0], "from": r[1], "kind": r[2], "title": r[3], "boardId": r[4], "fileId": r[5], "at": r[6], "seen": bool(r[7])}
+        for r in rows
+    ]
+    return {"items": items, "unseen": sum(1 for i in items if not i["seen"])}
+
+
+def _inbox_seen_sync(person_id: str) -> None:
+    _conn.execute("UPDATE inbox SET seen = 1 WHERE to_person = ?", (person_id,))
+    _conn.commit()
+
+
+def _inbox_remove_sync(person_id: str, item_id: int) -> bool:
+    cur = _conn.execute("DELETE FROM inbox WHERE id = ? AND to_person = ?", (item_id, person_id))
+    _conn.commit()
+    return cur.rowcount > 0
+
+
+async def inbox_add(to_person: str, from_person: str, kind: str, title: str, board_id: str | None = None, file_id: str | None = None) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _inbox_add_sync, to_person, from_person, kind, title, board_id, file_id)
+
+
+async def inbox_list(person_id: str) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _inbox_list_sync, person_id)
+
+
+async def inbox_seen(person_id: str) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _inbox_seen_sync, person_id)
+
+
+async def inbox_remove(person_id: str, item_id: int) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _inbox_remove_sync, person_id, item_id)
