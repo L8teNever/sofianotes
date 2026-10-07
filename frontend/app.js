@@ -213,6 +213,47 @@
       ctx.stroke();
     }
   }
+  // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
+  function clampNotebookView() {
+    const rects = pageRects(notebook);
+    if (!rects.length) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0, maxH = 0;
+    for (const r of rects) {
+      minX = Math.min(minX, r.x);
+      minY = Math.min(minY, r.y);
+      maxX = Math.max(maxX, r.x + r.w);
+      maxY = Math.max(maxY, r.y + r.h);
+      maxW = Math.max(maxW, r.w);
+      maxH = Math.max(maxH, r.h);
+    }
+    const left = viewLeft;
+    const right = window.innerWidth - viewRight;
+    const top = 76;
+    const bottom = window.innerHeight - 20;
+    const availW = right - left;
+    const availH = bottom - top;
+    // hoechstens so weit raus, dass eine ganze Seite drauf passt
+    const minScale = Math.max(MIN_ZOOM, Math.min(availW / maxW, availH / maxH) * 0.92);
+    if (scale < minScale) {
+      const c = screenToWorld(left + availW / 2, top + availH / 2);
+      scale = minScale;
+      offsetX = left + availW / 2 - c.x * scale;
+      offsetY = top + availH / 2 - c.y * scale;
+    }
+    const fit = (lo, hi, a, b, endRoom) => {
+      // a..b = Inhalt am Bildschirm; lo..hi = sichtbarer Bereich -> Verschiebung.
+      // Hinter der letzten Seite bleibt Platz fuer den "Neue Seite"-Knopf.
+      const m = 24;
+      if (b - a <= hi - lo - m - endRoom) return (lo + hi - endRoom) / 2 - (a + b) / 2; // kleiner als Bildschirm: mittig
+      if (a > lo + m) return lo + m - a;
+      if (b < hi - endRoom) return hi - endRoom - b;
+      return 0;
+    };
+    const horiz = notebook.layout === "horizontal";
+    offsetX += fit(left, right, minX * scale + offsetX, maxX * scale + offsetX, horiz ? 110 : 24);
+    offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : 130);
+  }
+
   function drawPages() {
     const a = screenToWorld(viewLeft, 0);
     const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
@@ -997,8 +1038,11 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
-    if (notebook) drawPages();
-    else drawGrid();
+    if (notebook) {
+      clampNotebookView();
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+      drawPages();
+    } else drawGrid();
     if (window.sofiaPagesUi) window.sofiaPagesUi();
     // im Versionsverlauf: alter Stand statt des aktuellen Blatts
     const src = historyView ? historyView.strokes : boardStrokes;
