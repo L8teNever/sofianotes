@@ -2858,7 +2858,11 @@
         if (currentBoardId) openBoard(currentBoardId, filenameInput ? filenameInput.value : "", { fromHistory: true });
         break;
       case "board_notebook":
+        // eigenes Echo, waehrend lokal noch gespeichert wird: lokaler Stand ist neuer
+        if (window.sofiaNbBusy && window.sofiaNbBusy()) break;
+        if (JSON.stringify(msg.notebook || null) === JSON.stringify(notebook)) break;
         notebook = msg.notebook || null;
+        if (window.sofiaPagesChanged) window.sofiaPagesChanged(true);
         if (currentBoardMeta) currentBoardMeta.notebook = notebook;
         requestRedraw();
         break;
@@ -12825,8 +12829,37 @@
       return true;
     };
 
+    // Verschobene Striche erst nach dem Neuzeichnen und in kleinen Portionen an den Server
+    // schicken - die Ansicht ist sofort fertig, das Speichern laeuft im Hintergrund.
+    let moveQueue = new Set();
+    let moveQueueBoard = null;
+    let moveTimer = null;
+    function queueStrokeMoves(ids) {
+      if (moveQueueBoard && moveQueueBoard !== currentBoardId) flushStrokeMoves(true);
+      moveQueueBoard = currentBoardId;
+      for (const id of ids) moveQueue.add(id);
+      if (!moveTimer) moveTimer = setTimeout(() => flushStrokeMoves(false), 30);
+    }
+    function flushStrokeMoves(all) {
+      moveTimer = null;
+      const bid = moveQueueBoard;
+      const ids = Array.from(moveQueue);
+      const now = all ? ids : ids.slice(0, 60);
+      for (const id of now) moveQueue.delete(id);
+      for (const id of now) {
+        const st = boardStrokes.get(id);
+        if (!st) continue;
+        if (bid === currentBoardId) wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
+        else if (currentPersonId) enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: bid, stroke: serializeStroke(st) });
+      }
+      if (moveQueue.size) moveTimer = setTimeout(() => flushStrokeMoves(false), 16);
+      else moveQueueBoard = null;
+    }
+    window.sofiaFlushPageMoves = () => moveQueue.size && flushStrokeMoves(true);
+
     // Striche wandern mit ihrer Seite mit (bzw. verschwinden mit einer geloeschten Seite)
     function moveStrokesWithPages(oldRects, newRects) {
+      const moved = [];
       const byId = new Map(newRects.map((r) => [r.id, r]));
       const erase = [];
       for (const st of boardStrokes.values()) {
@@ -12849,31 +12882,51 @@
         }
         st.bbox = strokeWorldBBox(st);
         tagShape(st);
-        wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
+        moved.push(st.id);
       }
+      if (moved.length) queueStrokeMoves(moved);
       if (erase.length) {
         for (const id of erase) boardStrokes.delete(id);
         wsSend({ type: "erase", strokeIds: erase });
       }
     }
-    async function saveNotebook(next, opts) {
+    // Notizbuch sofort lokal uebernehmen; zum Server geht nur der neueste Stand,
+    // kurz gesammelt und im Hintergrund (mehrmals schnell drehen = ein Speichern).
+    let nbQueued = null; // {bid, nb}
+    let nbInFlight = false;
+    let nbTimer = null;
+    window.sofiaNbBusy = () => !!(nbQueued || nbInFlight);
+    async function pushNotebook() {
+      nbTimer = null;
+      if (nbInFlight || !nbQueued) return;
+      const { bid, nb } = nbQueued;
+      nbQueued = null;
+      nbInFlight = true;
+      try {
+        await api("/api/boards/" + encodeURIComponent(bid), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notebook: nb }),
+        });
+      } catch (err) {
+        showToast("Seiten speichern hat nicht geklappt");
+      }
+      nbInFlight = false;
+      if (nbQueued) pushNotebook();
+    }
+    function saveNotebook(next, opts) {
       const bid = currentBoardId;
       const before = notebook;
       if (opts && opts.moveStrokes) moveStrokesWithPages(pageRects(before), pageRects(next));
       notebook = next;
       if (currentBoardMeta) currentBoardMeta.notebook = next;
       requestRedraw();
-      if (window.sofiaPagesChanged) window.sofiaPagesChanged();
+      if (window.sofiaPagesChanged) window.sofiaPagesChanged(true);
       renderNbSettings();
-      try {
-        await api("/api/boards/" + encodeURIComponent(bid), {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ notebook: next }),
-        });
-      } catch (err) {
-        showToast("Seiten speichern hat nicht geklappt");
-      }
+      if (nbQueued && nbQueued.bid !== bid) pushNotebook();
+      nbQueued = { bid, nb: next };
+      clearTimeout(nbTimer);
+      nbTimer = setTimeout(pushNotebook, 250);
     }
     const clone = () => JSON.parse(JSON.stringify(notebook));
     function templatePage() {
@@ -12927,6 +12980,7 @@
       const o = oldRects[i];
       const n = newRects[i];
       const oc = { x: o.x + o.w / 2, y: o.y + o.h / 2 };
+      const moved = [];
       for (const st of boardStrokes.values()) {
         const b = st.bbox || strokeWorldBBox(st);
         const cx = (b.minX + b.maxX) / 2;
@@ -12947,9 +13001,10 @@
           st.bbox = strokeWorldBBox(st);
         }
         tagShape(st);
-        wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
+        moved.push(st.id);
       }
       saveNotebook(nb);
+      if (moved.length) queueStrokeMoves(moved);
       fitPage(i);
     }
     // ⋯-Menue oben: aktuelle Seite drehen
@@ -13237,8 +13292,13 @@
     }
     // nach Aenderungen die Vorschaubilder kurz verzoegert neu zeichnen
     // Nur bei geaenderten Seiten alles neu, sonst nur das Bild der aktuellen Seite (schnell)
-    window.sofiaPagesChanged = () => {
+    window.sofiaPagesChanged = (now) => {
       if (!panelOpen) return;
+      if (now && notebook && JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) {
+        clearTimeout(thumbTimer);
+        requestAnimationFrame(() => panelOpen && notebook && renderPanel());
+        return;
+      }
       clearTimeout(thumbTimer);
       thumbTimer = setTimeout(() => {
         if (!panelOpen || !notebook) return;
