@@ -259,3 +259,42 @@ class BoardFileFilesTests(unittest.TestCase):
                 self.assertEqual(m2["mime"], "application/pdf")
             finally:
                 files.FILES_DIR = old
+
+
+class HistoryTests(unittest.TestCase):
+    def test_log_view_restore(self):
+        import asyncio
+        import tempfile
+        from app import db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db.use_database(tmp + "/h.db")
+
+            async def run():
+                b = await db.create_board("simon", "Verlauf", None)
+                bid = b["id"]
+                s1 = {"id": "s1", "tool": "pen", "color": "#000", "size": 2, "points": [{"x": 0, "y": 0}], "board_id": bid}
+                await db.insert_stroke(dict(s1), "simon")
+                g = await db.history_groups(bid)
+                upto1 = g["groups"][0]["toId"]
+                s2 = dict(s1, id="s2")
+                await db.insert_stroke(s2, "simon")
+                await db.insert_stroke(dict(s1, color="#f00"), "simon")
+                await db.delete_strokes(["s2"], "simon")
+                g = await db.history_groups(bid)
+                self.assertEqual(len(g["groups"]), 1)
+                grp = g["groups"][0]
+                self.assertEqual((grp["added"], grp["changed"], grp["removed"]), (2, 1, 1))
+                view = await db.history_view(bid, upto1, upto1)
+                self.assertEqual([s["id"] for s in view["strokes"]], ["s1"])
+                self.assertEqual(view["added"], ["s1"])
+                full = await db.history_view(bid, grp["fromId"], grp["toId"])
+                self.assertEqual([s["id"] for s in full["removed"]], [])  # s2 neu und wieder weg -> nicht "entfernt"
+                authors = await db.stroke_authors(bid)
+                self.assertEqual(authors["s1"]["person"], "simon")
+                res = await db.restore_version(bid, upto1, "simon")
+                strokes = await db.load_all(bid)
+                self.assertEqual(strokes[0]["color"], "#000")
+                self.assertEqual(res["restored"], 1)
+
+            asyncio.run(run())

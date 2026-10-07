@@ -625,6 +625,46 @@ async def get_media(media_id: str) -> Response:
     )
 
 
+@app.get("/api/boards/{board_id}/history")
+async def board_history(board_id: str, me: dict = Depends(get_current_person)) -> dict:
+    """Versionsverlauf: Abschnitte (wer, wann, wie viel) - neueste zuerst."""
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return await db.history_groups(board_id)
+
+
+@app.get("/api/boards/{board_id}/history/view")
+async def board_history_view(board_id: str, upto: int, start: int = 0, me: dict = Depends(get_current_person)) -> dict:
+    """Stand des Blatts nach Eintrag `upto`, dazu was im Abschnitt start..upto geaendert wurde."""
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    return await db.history_view(board_id, start or upto, upto)
+
+
+@app.get("/api/boards/{board_id}/authors")
+async def board_authors(board_id: str, me: dict = Depends(get_current_person)) -> dict:
+    """Wer hat welchen Strich zuletzt geaendert (fuer die farbige Markierung)."""
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    board = await db.get_board(board_id)
+    return {"authors": await db.stroke_authors(board_id), "owner": board.get("ownerId") if board else None}
+
+
+@app.post("/api/boards/{board_id}/history/restore")
+async def board_history_restore(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    body = await _json_body(request)
+    try:
+        upto = int(body.get("upto"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="upto required") from exc
+    res = await db.restore_version(board_id, upto, me["id"])
+    # alle offenen Fenster laden das Blatt neu
+    await manager.broadcast({"type": "board_reload"}, board_id=board_id)
+    return {"ok": True, **res}
+
+
 @app.get("/api/boards/{board_id}/snapshot")
 async def board_snapshot(board_id: str, me: dict = Depends(get_current_person)) -> dict:
     if not await db.can_access(me["id"], board_id):
@@ -643,7 +683,7 @@ async def upsert_stroke(board_id: str, request: Request, me: dict = Depends(get_
     if not isinstance(stroke, dict) or not stroke.get("id"):
         raise HTTPException(status_code=400, detail="stroke required")
     stroke["board_id"] = board_id
-    await db.insert_stroke(stroke)
+    await db.insert_stroke(stroke, me["id"])
     return {"ok": True}
 
 
@@ -654,7 +694,7 @@ async def erase_board_strokes(board_id: str, request: Request, me: dict = Depend
         raise HTTPException(status_code=404, detail="not found")
     stroke_ids = [s for s in body.get("strokeIds", []) if s]
     if stroke_ids:
-        await db.delete_strokes(stroke_ids)
+        await db.delete_strokes(stroke_ids, me["id"])
     return {"ok": True}
 
 
@@ -848,7 +888,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     entry["extra"] = extra
                 if entry is not None and len(entry["points"]) >= 1:
                     entry["board_id"] = room
-                    await db.insert_stroke(entry)
+                    await db.insert_stroke(entry, person)
                     persist_changed = True
                 await manager.broadcast(
                     {"type": "stroke_end", "id": client.id, "strokeId": stroke_id},
@@ -879,7 +919,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 stroke = msg.get("stroke")
                 if stroke and stroke.get("id"):
                     stroke["board_id"] = room
-                    await db.insert_stroke(stroke)
+                    await db.insert_stroke(stroke, person)
                     persist_changed = True
                     await manager.broadcast(
                         {"type": "stroke_move", "id": client.id, "stroke": stroke},
@@ -899,7 +939,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             elif msg_type == "erase":
                 stroke_ids = [s for s in msg.get("strokeIds", []) if s]
                 if stroke_ids:
-                    await db.delete_strokes(stroke_ids)
+                    await db.delete_strokes(stroke_ids, person)
                     persist_changed = True
                     await manager.broadcast(
                         {"type": "erase", "id": client.id, "strokeIds": stroke_ids},

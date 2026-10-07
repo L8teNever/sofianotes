@@ -128,6 +128,21 @@ def _init_sync() -> None:
         )
         """
     )
+    # Versionsverlauf: jede Aenderung an einem Strich (vorher/nachher, wer, wann)
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stroke_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            board_id TEXT NOT NULL,
+            stroke_id TEXT NOT NULL,
+            person_id TEXT,
+            at REAL NOT NULL,
+            before TEXT,
+            after TEXT
+        )
+        """
+    )
+    _conn.execute("CREATE INDEX IF NOT EXISTS stroke_log_board ON stroke_log (board_id, id)")
     _seed_people_sync()
     _refresh_person_cache_sync()
     cols = {row[1] for row in _conn.execute("PRAGMA table_info(strokes)").fetchall()}
@@ -251,10 +266,45 @@ def _load_all_sync(board_id: str | None = None) -> list[dict[str, Any]]:
     return strokes
 
 
-def _insert_sync(stroke: dict[str, Any]) -> None:
+def _stroke_json_sync(stroke_id: str) -> tuple[str | None, str | None]:
+    """(board_id, JSON des Strichs) oder (None, None)."""
+    row = _conn.execute("SELECT id, tool, color, size, points, extra, board_id FROM strokes WHERE id = ?", (stroke_id,)).fetchone()
+    if not row:
+        return None, None
+    item: dict[str, Any] = {"id": row[0], "tool": row[1], "color": row[2], "size": row[3], "points": json.loads(row[4])}
+    if row[5]:
+        try:
+            extra = json.loads(row[5])
+        except ValueError:
+            extra = None
+        if extra:
+            item["extra"] = extra
+    return row[6], json.dumps(item)
+
+
+def _clean_stroke(stroke: dict[str, Any]) -> dict[str, Any]:
+    item = {k: stroke[k] for k in ("id", "tool", "color", "size", "points") if k in stroke}
+    if stroke.get("extra") is not None:
+        item["extra"] = stroke["extra"]
+    return item
+
+
+def _log_sync(board_id: str | None, stroke_id: str, person_id: str | None, before: str | None, after: str | None) -> None:
+    if not board_id or before == after:
+        return
+    _conn.execute(
+        "INSERT INTO stroke_log (board_id, stroke_id, person_id, at, before, after) VALUES (?, ?, ?, ?, ?, ?)",
+        (board_id, stroke_id, person_id, time.time(), before, after),
+    )
+
+
+def _insert_sync(stroke: dict[str, Any], person_id: str | None = None) -> None:
     extra = stroke.get("extra")
     extra_json = json.dumps(extra) if extra is not None else None
     board_id = stroke.get("boardId") or stroke.get("board_id")
+    if person_id:
+        _, before = _stroke_json_sync(stroke["id"])
+        _log_sync(board_id, stroke["id"], person_id, before, json.dumps(_clean_stroke(stroke)))
     _conn.execute(
         "INSERT OR REPLACE INTO strokes (id, tool, color, size, points, extra, created_at, board_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -274,9 +324,14 @@ def _insert_sync(stroke: dict[str, Any]) -> None:
     _conn.commit()
 
 
-def _delete_sync(stroke_ids: list[str]) -> None:
+def _delete_sync(stroke_ids: list[str], person_id: str | None = None) -> None:
     if not stroke_ids:
         return
+    if person_id:
+        for sid in stroke_ids:
+            bid, before = _stroke_json_sync(sid)
+            if before:
+                _log_sync(bid, sid, person_id, before, None)
     placeholders = ",".join("?" for _ in stroke_ids)
     _conn.execute(f"DELETE FROM strokes WHERE id IN ({placeholders})", stroke_ids)
     _conn.commit()
@@ -322,14 +377,128 @@ async def insert_strokes(board_id: str, strokes: list[dict[str, Any]]) -> None:
         await asyncio.get_event_loop().run_in_executor(None, _insert_many_sync, board_id, strokes)
 
 
-async def insert_stroke(stroke: dict[str, Any]) -> None:
+async def insert_stroke(stroke: dict[str, Any], person_id: str | None = None) -> None:
     async with _lock:
-        await asyncio.get_event_loop().run_in_executor(None, _insert_sync, stroke)
+        await asyncio.get_event_loop().run_in_executor(None, _insert_sync, stroke, person_id)
 
 
-async def delete_strokes(stroke_ids: list[str]) -> None:
+async def delete_strokes(stroke_ids: list[str], person_id: str | None = None) -> None:
     async with _lock:
-        await asyncio.get_event_loop().run_in_executor(None, _delete_sync, stroke_ids)
+        await asyncio.get_event_loop().run_in_executor(None, _delete_sync, stroke_ids, person_id)
+
+
+# ---- Versionsverlauf ----------------------------------------------------
+HISTORY_GAP = 600  # Pause, ab der ein neuer Abschnitt beginnt (Sekunden)
+HISTORY_SPAN = 3600  # ein Abschnitt umfasst hoechstens so lange
+
+
+def _history_groups_sync(board_id: str) -> dict[str, Any]:
+    rows = _conn.execute(
+        "SELECT id, person_id, at, before IS NULL, after IS NULL FROM stroke_log WHERE board_id = ? ORDER BY id",
+        (board_id,),
+    ).fetchall()
+    groups: list[dict[str, Any]] = []
+    for lid, pid, at, was_new, gone in rows:
+        g = groups[-1] if groups else None
+        if not g or g["person"] != pid or at - g["end"] > HISTORY_GAP or at - g["start"] > HISTORY_SPAN:
+            g = {"fromId": lid, "toId": lid, "person": pid, "start": at, "end": at, "added": 0, "removed": 0, "changed": 0}
+            groups.append(g)
+        g["toId"] = lid
+        g["end"] = at
+        if was_new:
+            g["added"] += 1
+        elif gone:
+            g["removed"] += 1
+        else:
+            g["changed"] += 1
+    groups.reverse()
+    return {"groups": groups[:400], "total": len(groups)}
+
+
+def _state_at_sync(board_id: str, upto: int) -> dict[str, dict[str, Any]]:
+    state = {s["id"]: s for s in _load_all_sync(board_id)}
+    rows = _conn.execute(
+        "SELECT stroke_id, before FROM stroke_log WHERE board_id = ? AND id > ? ORDER BY id DESC",
+        (board_id, upto),
+    ).fetchall()
+    for sid, before in rows:
+        if before:
+            state[sid] = json.loads(before)
+        else:
+            state.pop(sid, None)
+    return state
+
+
+def _history_view_sync(board_id: str, from_id: int, upto: int) -> dict[str, Any]:
+    state = _state_at_sync(board_id, upto)
+    rows = _conn.execute(
+        "SELECT stroke_id, before, after FROM stroke_log WHERE board_id = ? AND id >= ? AND id <= ? ORDER BY id",
+        (board_id, from_id, upto),
+    ).fetchall()
+    first: dict[str, str | None] = {}
+    last: dict[str, str | None] = {}
+    for sid, before, after in rows:
+        first.setdefault(sid, before)
+        last[sid] = after
+    added, changed, removed = [], [], []
+    for sid, before in first.items():
+        after = last[sid]
+        if after is None and before is not None:
+            removed.append(json.loads(before))
+        elif after is not None and before is None:
+            added.append(sid)
+        elif after is not None:
+            changed.append(sid)
+    return {"strokes": list(state.values()), "added": added, "changed": changed, "removed": removed}
+
+
+def _authors_sync(board_id: str) -> dict[str, Any]:
+    rows = _conn.execute(
+        """SELECT l.stroke_id, l.person_id, l.at FROM stroke_log l
+           JOIN (SELECT stroke_id, MAX(id) AS mid FROM stroke_log WHERE board_id = ? GROUP BY stroke_id) m
+             ON l.id = m.mid
+           WHERE l.after IS NOT NULL""",
+        (board_id,),
+    ).fetchall()
+    return {sid: {"person": pid, "at": at} for sid, pid, at in rows}
+
+
+def _restore_sync(board_id: str, upto: int, person_id: str) -> dict[str, int]:
+    target = _state_at_sync(board_id, upto)
+    current = {s["id"]: s for s in _load_all_sync(board_id)}
+    gone = [sid for sid in current if sid not in target]
+    if gone:
+        _delete_sync(gone, person_id)
+    changed = 0
+    for sid, stroke in target.items():
+        if current.get(sid) == stroke:
+            continue
+        item = dict(stroke)
+        item["board_id"] = board_id
+        _insert_sync(item, person_id)
+        changed += 1
+    _conn.commit()
+    return {"removed": len(gone), "restored": changed}
+
+
+async def history_groups(board_id: str) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _history_groups_sync, board_id)
+
+
+async def history_view(board_id: str, from_id: int, upto: int) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _history_view_sync, board_id, from_id, upto)
+
+
+async def stroke_authors(board_id: str) -> dict[str, Any]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _authors_sync, board_id)
+
+
+async def restore_version(board_id: str, upto: int, person_id: str) -> dict[str, int]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _restore_sync, board_id, upto, person_id)
 
 
 def _ocr_day() -> str:
@@ -687,6 +856,7 @@ def _delete_board_sync(person_id: str, board_id: str) -> bool:
     if not board or board["ownerId"] != person_id:
         return False
     _conn.execute("DELETE FROM strokes WHERE board_id = ?", (board_id,))
+    _conn.execute("DELETE FROM stroke_log WHERE board_id = ?", (board_id,))
     _conn.execute("DELETE FROM placements WHERE board_id = ?", (board_id,))
     _conn.execute("DELETE FROM shares WHERE board_id = ?", (board_id,))
     _conn.execute("DELETE FROM boards WHERE id = ?", (board_id,))

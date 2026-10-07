@@ -150,6 +150,49 @@
     return { check, push };
   })();
 
+  // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
+  let historyView = null; // {strokes: Map, marks: Map id->color, ghosts: [stroke]}
+  let authorMarks = null; // Map id->color (live: wer hat was geschrieben)
+  function drawHistoryMarks() {
+    const marks = historyView ? historyView.marks : authorMarks;
+    if (!marks || !marks.size) return;
+    const src = historyView ? historyView.strokes : boardStrokes;
+    const pad = 5 / scale;
+    ctx.save();
+    for (const [id, color] of marks) {
+      const s = src.get(id);
+      if (!s || !s.bbox) continue;
+      const b = s.bbox;
+      ctx.fillStyle = hexToRgba(color, 0.16);
+      ctx.strokeStyle = hexToRgba(color, 0.55);
+      ctx.lineWidth = 1.5 / scale;
+      ctx.beginPath();
+      const x = b.minX - pad, y = b.minY - pad, w = b.maxX - b.minX + pad * 2, h = b.maxY - b.minY + pad * 2;
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, 6 / scale);
+      else ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // im Abschnitt geloeschte Striche: blass und rot gestrichelt umrandet
+  function drawHistoryGhosts() {
+    if (!historyView || !historyView.ghosts.length) return;
+    ctx.save();
+    ctx.globalAlpha = 0.3;
+    for (const g of historyView.ghosts) drawStroke(g);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(217,48,37,0.8)";
+    ctx.setLineDash([5 / scale, 4 / scale]);
+    ctx.lineWidth = 1.5 / scale;
+    const pad = 5 / scale;
+    for (const g of historyView.ghosts) {
+      const b = g.bbox;
+      if (b) ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
+    }
+    ctx.restore();
+  }
+
   // Persoenliche Einstellungen vom Server (gelten auf allen Geraeten)
   const mySettings = { solutionMode: "auto", defaultPaper: "graph" };
   function lsGetRaw(k) {
@@ -869,18 +912,21 @@
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
     drawGrid();
+    // im Versionsverlauf: alter Stand statt des aktuellen Blatts
+    const src = historyView ? historyView.strokes : boardStrokes;
+    drawHistoryMarks();
 
-    for (const stroke of boardStrokes.values()) if (stroke.tool === "image") drawStroke(stroke);
+    for (const stroke of src.values()) if (stroke.tool === "image") drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
     // Tabellen liegen wie Papier unter der Tinte, damit man direkt in die Zellen schreiben kann.
-    for (const stroke of boardStrokes.values()) if (stroke.tool === "table") drawStroke(stroke);
+    for (const stroke of src.values()) if (stroke.tool === "table") drawStroke(stroke);
 
     // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
     // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
     syncMarkerLayer();
     markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
-    for (const stroke of boardStrokes.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+    for (const stroke of src.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
     if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
     ctx.save();
@@ -890,7 +936,8 @@
     ctx.restore();
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
 
-    for (const stroke of boardStrokes.values()) if (stroke.tool !== "marker" && stroke.tool !== "image" && stroke.tool !== "table") drawStroke(stroke);
+    for (const stroke of src.values()) if (stroke.tool !== "marker" && stroke.tool !== "image" && stroke.tool !== "table") drawStroke(stroke);
+    drawHistoryGhosts();
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
     if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
 
@@ -2259,6 +2306,7 @@
   }
 
   function wsSend(obj) {
+    if (window.sofiaHistoryChanged && /^(stroke_end|stroke_move|erase)$/.test(obj && obj.type)) window.sofiaHistoryChanged();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
       scheduleSaveBoard();
@@ -2522,6 +2570,7 @@
   }
 
   function handleMessage(msg) {
+    if (window.sofiaHistoryChanged && /^(stroke_end|stroke_move|erase|board_reload)$/.test(msg.type)) window.sofiaHistoryChanged();
     switch (msg.type) {
       case "init": {
         myClientId = msg.clientId;
@@ -2546,6 +2595,9 @@
         scheduleSaveBoard();
         break;
       }
+      case "board_reload":
+        if (currentBoardId) openBoard(currentBoardId, filenameInput ? filenameInput.value : "", { fromHistory: true });
+        break;
       case "board_refs":
         if (currentBoardMeta) currentBoardMeta.refs = msg.refs || [];
         if (hwView && hwView.i >= panelItems().length) closeHwViewer();
@@ -8322,6 +8374,7 @@
   }
 
   function dispatchPrimaryDown(e) {
+    if (historyView) return;
     const world = screenToWorld(e.clientX, e.clientY);
     lastPointerWorld = world;
     if (currentTool === "text") {
@@ -8378,6 +8431,16 @@
 
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
+    // Vorschau einer alten Version: nur ansehen (Finger/Maus verschieben, nicht schreiben)
+    if (historyView && e.pointerType !== "touch") {
+      if (e.pointerType === "mouse") {
+        try {
+          canvas.setPointerCapture(e.pointerId);
+        } catch (err) {}
+        panState = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
+      }
+      return;
+    }
     // Laufende Texteingabe: ein Tap aufs Blatt schliesst sie ab. Im Text-Werkzeug ist das
     // alles, was der Tap tut (wie in GoodNotes) - sonst entstuende sofort das naechste Feld.
     if (textEdit) {
@@ -9320,6 +9383,7 @@
 
   function showLibrary(opts) {
     hideWho();
+    if (window.sofiaHistoryClose) window.sofiaHistoryClose();
     if (typeof hwPanel !== "undefined" && hwPanel) {
       hwPanel.classList.add("hidden");
       hwPill.classList.add("hidden");
@@ -11116,6 +11180,7 @@
   document.getElementById("library-backdrop")?.addEventListener("scroll", closeItemMenu, true);
 
   async function openBoard(id, title, opts) {
+    if (window.sofiaHistoryClose && id !== currentBoardId) window.sofiaHistoryClose();
     // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
     // Boards: eine noch offene WS-Verbindung wuerde sonst keine frische
     // "init"-Nachricht mehr bekommen (connectWS() ist dann ein No-Op), und
@@ -11249,9 +11314,12 @@
   // Bestaetigen (ersetzt window.confirm): Promise<boolean>
   const confirmScrim = document.getElementById("confirm-scrim");
   let confirmResolve = null;
-  function askConfirm({ title, text, ok = "Löschen" }) {
+  function askConfirm({ title, text, ok = "Löschen", icon = "delete", danger = true }) {
     return new Promise((resolve) => {
       confirmResolve = resolve;
+      confirmScrim.querySelector(".dlg-confirm-icon .material-symbols-rounded").textContent = icon;
+      confirmScrim.querySelector(".dlg-confirm").classList.toggle("is-safe", !danger);
+      document.getElementById("confirm-ok").classList.toggle("danger", danger);
       document.getElementById("confirm-title").textContent = title;
       document.getElementById("confirm-text").textContent = text || "";
       document.getElementById("confirm-ok").textContent = ok;
@@ -12022,6 +12090,248 @@
   window.addEventListener("offline", () => {
     setConnState("offline");
   });
+
+  // ---- Versionsverlauf (wie bei Google Docs) ----
+  (() => {
+    const panel = document.getElementById("history-panel");
+    if (!panel) return;
+    const listEl = document.getElementById("history-list");
+    const legendEl = document.getElementById("history-legend");
+    const foot = document.getElementById("history-foot");
+    const footText = document.getElementById("history-foot-text");
+    const marksBtn = document.getElementById("history-marks");
+    const COLORS = ["#1a73e8", "#e8710a", "#188038", "#a142f4", "#d93025", "#12b5cb", "#e52592", "#f9ab00"];
+    let groups = [];
+    let selected = null; // Gruppe in der Vorschau
+    let marksOn = false;
+    let authorsTimer = null;
+    function personColor(pid) {
+      const ids = PEOPLE.map((p) => p.id).sort();
+      const i = ids.indexOf(pid);
+      if (i >= 0) return COLORS[i % COLORS.length];
+      let h = 0;
+      for (const ch of String(pid || "?")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      return COLORS[h % COLORS.length];
+    }
+    function whenLabel(g) {
+      const a = new Date(g.start * 1000);
+      const b = new Date(g.end * 1000);
+      const today = new Date();
+      const y = new Date(today);
+      y.setDate(today.getDate() - 1);
+      const sameDay = (x, z) => x.toDateString() === z.toDateString();
+      const day = sameDay(a, today) ? "Heute" : sameDay(a, y) ? "Gestern" : a.toLocaleDateString("de-DE", { weekday: "short", day: "numeric", month: "short", year: a.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+      const t = (d) => d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+      return day + ", " + t(a) + (t(a) !== t(b) ? "–" + t(b) : "");
+    }
+    function summary(g) {
+      const parts = [];
+      if (g.added) parts.push("+" + g.added + " neu");
+      if (g.changed) parts.push(g.changed + " geändert");
+      if (g.removed) parts.push("−" + g.removed + " gelöscht");
+      return parts.join(" · ") || "Änderungen";
+    }
+    function renderLegend(pids) {
+      legendEl.innerHTML = "";
+      for (const pid of pids) {
+        const chip = document.createElement("span");
+        chip.className = "history-chip";
+        chip.innerHTML = '<i></i><span></span>';
+        chip.firstChild.style.background = personColor(pid);
+        chip.lastChild.textContent = personName(pid) || "Unbekannt";
+        legendEl.appendChild(chip);
+      }
+    }
+    function renderList() {
+      listEl.innerHTML = "";
+      const cur = document.createElement("button");
+      cur.type = "button";
+      cur.className = "history-item" + (selected ? "" : " active");
+      cur.innerHTML = '<span class="history-dot now"></span><span class="history-item-text"><strong>Aktuelle Version</strong><small>So sieht das Blatt jetzt aus</small></span>';
+      cur.addEventListener("click", (e) => {
+        e.stopPropagation();
+        leavePreview();
+      });
+      listEl.appendChild(cur);
+      if (!groups.length) {
+        const empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = "Noch keine Änderungen aufgezeichnet. Ab jetzt wird jede Änderung mit Person und Zeit gespeichert.";
+        listEl.appendChild(empty);
+      }
+      let lastDay = "";
+      for (const g of groups) {
+        const day = new Date(g.start * 1000).toDateString();
+        if (day !== lastDay) {
+          lastDay = day;
+          const h = document.createElement("div");
+          h.className = "history-day";
+          h.textContent = new Date(g.start * 1000).toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" });
+          listEl.appendChild(h);
+        }
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "history-item" + (selected && selected.toId === g.toId ? " active" : "");
+        b.innerHTML = '<span class="history-dot"></span><span class="history-item-text"><strong></strong><small></small><em></em></span>';
+        b.querySelector(".history-dot").style.background = personColor(g.person);
+        b.querySelector("strong").textContent = whenLabel(g);
+        b.querySelector("small").textContent = personName(g.person) || "Unbekannt";
+        b.querySelector("em").textContent = summary(g);
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showVersion(g);
+        });
+        listEl.appendChild(b);
+      }
+    }
+    async function load() {
+      const bid = currentBoardId;
+      if (!bid) return;
+      try {
+        const res = await api("/api/boards/" + encodeURIComponent(bid) + "/history");
+        if (bid !== currentBoardId) return;
+        groups = res.groups || [];
+      } catch (err) {
+        groups = [];
+        showToast("Verlauf konnte nicht geladen werden");
+      }
+      renderList();
+      renderLegend([...new Set(groups.map((g) => g.person))]);
+    }
+    function prep(list) {
+      const m = new Map();
+      for (const s of list) {
+        tagShape(s);
+        s.bbox = strokeWorldBBox(s);
+        if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
+        m.set(s.id, s);
+      }
+      return m;
+    }
+    async function showVersion(g) {
+      const bid = currentBoardId;
+      try {
+        const res = await api("/api/boards/" + encodeURIComponent(bid) + "/history/view?start=" + g.fromId + "&upto=" + g.toId);
+        if (bid !== currentBoardId) return;
+        const strokes = prep(res.strokes || []);
+        const color = personColor(g.person);
+        const marks = new Map();
+        for (const id of (res.added || []).concat(res.changed || [])) marks.set(id, color);
+        const ghosts = [...prep(res.removed || []).values()];
+        if (textEdit) commitTextEditor();
+        clearSelection();
+        selected = g;
+        historyView = { strokes, marks, ghosts };
+        document.body.classList.add("history-preview");
+        foot.classList.remove("hidden");
+        footText.textContent = "Ansicht: " + whenLabel(g) + " · " + (personName(g.person) || "");
+        renderList();
+        requestRedraw();
+      } catch (err) {
+        showToast("Version konnte nicht geladen werden");
+      }
+    }
+    function leavePreview() {
+      selected = null;
+      historyView = null;
+      document.body.classList.remove("history-preview");
+      foot.classList.add("hidden");
+      renderList();
+      requestRedraw();
+    }
+    async function loadAuthors() {
+      clearTimeout(authorsTimer);
+      if (!marksOn || !currentBoardId) return;
+      const bid = currentBoardId;
+      try {
+        const res = await api("/api/boards/" + encodeURIComponent(bid) + "/authors");
+        if (bid !== currentBoardId || !marksOn) return;
+        const m = new Map();
+        const pids = new Set();
+        for (const [id, a] of Object.entries(res.authors || {})) {
+          m.set(id, personColor(a.person));
+          pids.add(a.person);
+        }
+        authorMarks = m;
+        renderLegend([...pids]);
+        requestRedraw();
+      } catch (err) {}
+    }
+    // nach eigenen oder fremden Aenderungen die Markierung kurz verzoegert auffrischen
+    window.sofiaHistoryChanged = () => {
+      if (!marksOn) return;
+      clearTimeout(authorsTimer);
+      authorsTimer = setTimeout(loadAuthors, 1500);
+    };
+    function setMarks(on) {
+      marksOn = on;
+      marksBtn.classList.toggle("active", on);
+      if (on) loadAuthors();
+      else {
+        authorMarks = null;
+        renderLegend([...new Set(groups.map((g) => g.person))]);
+        requestRedraw();
+      }
+    }
+    marksBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMarks(!marksOn);
+    });
+    function open() {
+      panel.classList.remove("hidden");
+      document.body.classList.add("history-open");
+      load();
+    }
+    function close() {
+      leavePreview();
+      setMarks(false);
+      panel.classList.add("hidden");
+      document.body.classList.remove("history-open");
+    }
+    window.sofiaHistoryClose = () => {
+      if (!panel.classList.contains("hidden")) close();
+    };
+    document.getElementById("canvas-menu-history")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeCanvasMenus();
+      if (!currentBoardId) return;
+      open();
+    });
+    document.getElementById("history-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      close();
+    });
+    document.getElementById("history-back").addEventListener("click", (e) => {
+      e.stopPropagation();
+      leavePreview();
+    });
+    document.getElementById("history-restore").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!selected || !currentBoardId) return;
+      const g = selected;
+      const ok = await askConfirm({
+        title: "Diese Version wiederherstellen?",
+        text: "Das Blatt wird auf den Stand von " + whenLabel(g) + " zurückgesetzt. Das ist selbst ein Eintrag im Verlauf und lässt sich so wieder rückgängig machen.",
+        ok: "Wiederherstellen",
+        icon: "history",
+        danger: false,
+      });
+      if (!ok) return;
+      try {
+        await api("/api/boards/" + encodeURIComponent(currentBoardId) + "/history/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ upto: g.toId }),
+        });
+        leavePreview();
+        showToast("Version wiederhergestellt");
+        setTimeout(load, 800);
+      } catch (err) {
+        showToast("Wiederherstellen hat nicht geklappt");
+      }
+    });
+    panel.addEventListener("pointerdown", (e) => e.stopPropagation());
+  })();
 
   // ---- Rechner & Umrechner (schwebendes Fenster) ----
   (() => {

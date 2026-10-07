@@ -159,6 +159,10 @@
         <span class="material-symbols-rounded">download</span>
         Exportieren …
       </button>
+      <button type="button" id="canvas-menu-history" class="lib-add-opt">
+        <span class="material-symbols-rounded">history</span>
+        Versionsverlauf
+      </button>
       <button type="button" id="canvas-menu-settings" class="lib-add-opt">
         <span class="material-symbols-rounded">tune</span>
         Einstellungen
@@ -661,6 +665,27 @@
       <div id="hw-detail" class="hw-detail hidden"></div>
     </div>
   </div>
+
+  <aside id="history-panel" class="history-panel hidden" aria-label="Versionsverlauf">
+    <div class="history-head">
+      <span class="material-symbols-rounded">history</span>
+      <strong>Versionsverlauf</strong>
+      <button type="button" id="history-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <button type="button" id="history-marks" class="history-toggle">
+      <span class="history-toggle-text"><strong>Änderungen farbig markieren</strong><small>Zeigt auf dem Blatt, wer was geschrieben hat</small></span>
+      <span class="set-knob"></span>
+    </button>
+    <div id="history-legend" class="history-legend"></div>
+    <div id="history-list" class="history-list"></div>
+    <div id="history-foot" class="history-foot hidden">
+      <div id="history-foot-text" class="history-foot-text"></div>
+      <div class="history-foot-btns">
+        <button type="button" id="history-back" class="m3-btn-outline">Aktuelle Version</button>
+        <button type="button" id="history-restore" class="m3-btn-primary">Wiederherstellen</button>
+      </div>
+    </div>
+  </aside>
 
   <div id="calc-win" class="calc-win hidden" role="dialog" aria-label="Rechner">
     <div id="calc-head" class="calc-head">
