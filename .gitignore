@@ -11,3 +11,4 @@ data/*.tmp
 data/media/*
 !data/media/.gitkeep
 .env
+data/files/*

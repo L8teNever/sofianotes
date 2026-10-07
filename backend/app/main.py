@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import board_file, cloudflare_ocr, db, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
+from . import board_file, cloudflare_ocr, db, files, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
@@ -427,11 +427,14 @@ async def patch_board(board_id: str, request: Request, me: dict = Depends(get_cu
         raw = body.get("refs")
         if not isinstance(raw, list) or not await db.can_access(me["id"], board_id):
             raise HTTPException(status_code=400, detail="bad refs")
-        refs = [
-            {"mediaId": str(r.get("mediaId"))[:80], "name": str(r.get("name") or "Bild")[:120]}
-            for r in raw[:60]
-            if isinstance(r, dict) and r.get("mediaId")
-        ]
+        refs = []
+        for r in raw[:80]:
+            if not isinstance(r, dict):
+                continue
+            if r.get("mediaId"):
+                refs.append({"mediaId": str(r["mediaId"])[:80], "name": str(r.get("name") or "Bild")[:160]})
+            elif r.get("fileId") and files.valid_id(str(r["fileId"])):
+                refs.append({"fileId": str(r["fileId"]), "name": files.clean_name(str(r.get("name") or "Datei")), "mime": str(r.get("mime") or "")[:120]})
         await db.set_board_refs(board_id, refs)
         await manager.broadcast({"type": "board_refs", "refs": refs}, board_id=board_id)
         if "title" not in body and "paper" not in body:
@@ -579,6 +582,35 @@ async def upload_media(request: Request) -> dict:
             raise HTTPException(status_code=413, detail="image too large") from exc
         raise HTTPException(status_code=400, detail="jpeg data URI required") from exc
     return {"ok": True, "id": saved["id"], "bytes": saved["bytes"]}
+
+
+@app.post("/api/files")
+async def upload_file(request: Request, me: dict = Depends(get_current_person)) -> dict:
+    """Datei fuers Material-Fenster (Body = Dateiinhalt, ?name=...)."""
+    data = await request.body()
+    try:
+        meta = files.save(data, request.query_params.get("name") or "Datei", request.headers.get("content-type") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=413 if str(exc) == "too_large" else 400, detail=str(exc)) from exc
+    return {"ok": True, **meta}
+
+
+@app.get("/api/files/{file_id}")
+async def get_file(file_id: str, me: dict = Depends(get_current_person)) -> Response:
+    hit = files.load(file_id)
+    if hit is None:
+        raise HTTPException(status_code=404, detail="not found")
+    blob, meta = hit
+    from urllib.parse import quote
+
+    return Response(
+        content=blob,
+        media_type=meta.get("mime") or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(meta.get('name') or 'Datei')}",
+            "Cache-Control": "private, max-age=31536000, immutable",
+        },
+    )
 
 
 @app.get("/api/media/{media_id}")

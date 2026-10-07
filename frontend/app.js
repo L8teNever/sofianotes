@@ -2545,7 +2545,7 @@
       }
       case "board_refs":
         if (currentBoardMeta) currentBoardMeta.refs = msg.refs || [];
-        if (hwView && hwView.i >= panelImages().length) closeHwViewer();
+        if (hwView && hwView.i >= panelItems().length) closeHwViewer();
         renderHwPanel();
         break;
       case "board_paper":
@@ -9987,8 +9987,23 @@
   // alle Bilder im Fenster: erst die der Aufgabe, dann die eigenen
   function panelImages() {
     const hw = hwBoard ? hwBoard.attachments.filter((a) => a.type === "image") : [];
-    const own = boardRefs().map((r) => ({ type: "image", url: "/api/media/" + encodeURIComponent(r.mediaId), name: r.name, mediaId: r.mediaId, own: true }));
+    const own = boardRefs().filter((r) => r.mediaId).map((r) => ({ type: "image", url: "/api/media/" + encodeURIComponent(r.mediaId), name: r.name, mediaId: r.mediaId, own: true }));
     return hw.concat(own);
+  }
+  function isPdfItem(a) {
+    return /pdf/i.test(a.mime || "") || /\.pdf$/i.test(a.name || "") || /\.pdf(%|$|\?)/i.test(a.url || "");
+  }
+  function ownFileUrl(r) {
+    return "/api/files/" + encodeURIComponent(r.fileId);
+  }
+  // alles, was im Fenster geoeffnet werden kann: erst Bilder (Reihenfolge wie die
+  // Vorschaubilder), dann PDFs der Aufgabe und eigene PDFs
+  function panelItems() {
+    const hwPdfs = hwBoard ? hwBoard.attachments.filter((a) => a.type !== "image" && isPdfItem(a)).map((a) => ({ ...a, kind: "pdf" })) : [];
+    const ownPdfs = boardRefs()
+      .filter((r) => r.fileId && isPdfItem(r))
+      .map((r) => ({ kind: "pdf", url: ownFileUrl(r), name: r.name, fileId: r.fileId }));
+    return panelImages().map((a) => ({ ...a, kind: "image" })).concat(hwPdfs, ownPdfs);
   }
   function saveBoardRefs(next, failText) {
     const bid = currentBoardId;
@@ -10013,7 +10028,7 @@
   }
   const refFileInput = document.createElement("input");
   refFileInput.type = "file";
-  refFileInput.accept = "image/*,application/pdf";
+  // ohne Filter: Bilder, Kamera, PDFs und andere Dateien
   refFileInput.multiple = true;
   refFileInput.style.display = "none";
   document.body.appendChild(refFileInput);
@@ -10021,24 +10036,21 @@
     const files = Array.from(refFileInput.files || []);
     refFileInput.value = "";
     if (!files.length || !currentBoardId) return;
-    showToast("Bild wird hinzugefügt…");
+    showToast(files.length > 1 ? "Dateien werden hinzugefügt…" : "Wird hinzugefügt…");
     const added = [];
     try {
       for (const file of files) {
-        if (/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name)) {
-          if (!window.pdfjsLib) continue;
-          const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-          for (let i = 1; i <= Math.min(pdf.numPages, 12); i++) {
-            const page = await pdf.getPage(i);
-            const base = page.getViewport({ scale: 1 });
-            const vp = page.getViewport({ scale: Math.min(2, 2000 / Math.max(base.width, base.height)) });
-            const c = document.createElement("canvas");
-            c.width = Math.max(1, Math.round(vp.width));
-            c.height = Math.max(1, Math.round(vp.height));
-            await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-            const jpeg = bitmapToJpeg(c, 2000);
-            added.push({ mediaId: await uploadJpeg(jpeg.dataUrl), name: file.name.replace(/\.pdf$/i, "") + " S. " + i });
-          }
+        const isImage = /^image\//i.test(file.type) && !/svg/i.test(file.type);
+        if (!isImage) {
+          // PDF und alle anderen Dateien bleiben die Originaldatei
+          const r = await fetch("/api/files?name=" + encodeURIComponent(file.name || "Datei"), {
+            method: "POST",
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+            body: file,
+          });
+          if (!r.ok) throw new Error(r.status === 413 ? "big" : "upload");
+          const meta = await r.json();
+          added.push({ fileId: meta.id, name: meta.name, mime: meta.mime });
         } else {
           const bmp = await createImageBitmap(file);
           const jpeg = bitmapToJpeg(bmp, 2000);
@@ -10047,7 +10059,7 @@
         }
       }
     } catch (err) {
-      showToast("Bild hinzufügen hat nicht geklappt");
+      showToast(String(err.message) === "big" ? "Die Datei ist zu groß (max. 60 MB)" : "Hinzufügen hat nicht geklappt");
     }
     if (added.length) saveBoardRefs(boardRefs().concat(added), "Speichern hat nicht geklappt");
   });
@@ -10056,13 +10068,35 @@
     sec.className = "hw-own";
     const head = document.createElement("div");
     head.className = "hw-own-head";
-    head.innerHTML = '<span>Eigene Bilder</span><button type="button" class="hw-own-add"><span class="material-symbols-rounded">add_photo_alternate</span>Foto / Bild</button>';
+    head.innerHTML = '<span>Eigenes Material</span><button type="button" class="hw-own-add"><span class="material-symbols-rounded">add</span>Foto / Datei</button>';
     head.querySelector("button").addEventListener("click", (e) => {
       e.stopPropagation();
       refFileInput.click();
     });
     sec.appendChild(head);
-    const refs = boardRefs();
+    const all = boardRefs();
+    const removeRef = (ref) => saveBoardRefs(boardRefs().filter((x) => x !== ref), "Entfernen hat nicht geklappt");
+    const fileRefs = all.filter((r) => r.fileId);
+    for (const r of fileRefs) {
+      const row = document.createElement("div");
+      row.className = "hw-file hw-own-file";
+      const pdf = isPdfItem(r);
+      row.innerHTML = '<span class="material-symbols-rounded"></span><span class="hw-own-file-name"></span><button type="button" class="hw-ref-del" title="Entfernen"><span class="material-symbols-rounded">close</span></button>';
+      row.children[0].textContent = pdf ? "picture_as_pdf" : "description";
+      row.children[1].textContent = r.name || "Datei";
+      row.title = pdf ? "Antippen: hier im Fenster öffnen" : "Antippen: öffnen";
+      row.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (pdf) openHwViewer(panelItems().findIndex((it) => it.fileId === r.fileId));
+        else window.open(ownFileUrl(r), "_blank", "noopener");
+      });
+      row.querySelector(".hw-ref-del").addEventListener("click", (e) => {
+        e.stopPropagation();
+        removeRef(r);
+      });
+      sec.appendChild(row);
+    }
+    const refs = all.filter((r) => r.mediaId);
     if (refs.length) {
       const grid = document.createElement("div");
       grid.className = "hw-images hw-refs";
@@ -10080,17 +10114,18 @@
         del.innerHTML = '<span class="material-symbols-rounded">close</span>';
         del.addEventListener("click", (e) => {
           e.stopPropagation();
-          saveBoardRefs(boardRefs().filter((_, k) => k !== i), "Entfernen hat nicht geklappt");
+          removeRef(r);
         });
         wrap.appendChild(im);
         wrap.appendChild(del);
         grid.appendChild(wrap);
       });
       sec.appendChild(grid);
-    } else {
+    }
+    if (!all.length) {
       const empty = document.createElement("div");
       empty.className = "hw-hint";
-      empty.textContent = "Hier kannst du z. B. die Buchseite oder ein Foto der Aufgabe ablegen – mit der Kamera oder aus deinen Bildern.";
+      empty.textContent = "Hier kannst du z. B. die Buchseite, ein Foto der Aufgabe oder ein PDF ablegen – mit der Kamera, aus deinen Bildern oder Dateien.";
       sec.appendChild(empty);
     }
     return sec;
@@ -10118,6 +10153,16 @@
       hwAttachmentsHtml(hwPanelBody, hwBoard);
     }
     hwPanelBody.appendChild(renderOwnRefs());
+    // PDF-Anhaenge der Aufgabe im Fenster oeffnen statt in einem neuen Tab
+    hwPanelBody.querySelectorAll("a.hw-file").forEach((l) => {
+      const name = l.lastChild ? l.lastChild.textContent : "";
+      if (!isPdfItem({ name, url: l.getAttribute("href") })) return;
+      l.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openHwViewer(panelItems().findIndex((it) => it.kind === "pdf" && it.url === l.getAttribute("href")));
+      });
+    });
     // Bilder im Fenster: Antippen -> im Fenster zoomen (statt Vollbild)
     const imgs = panelImages();
     hwPanelBody.querySelectorAll(".hw-images img").forEach((im, i) => {
@@ -10397,18 +10442,89 @@
     if (!hwView) return lsSet(hwViewerKey(), { open: false, i: 0 });
     lsSet(hwViewerKey(), { open: true, i: hwView.i, s: hwView.s, tx: hwView.tx, ty: hwView.ty });
   }
+  // PDFs: Seiten untereinander als Bilder in einem Kasten, der wie ein Bild gezoomt wird
+  const hwPdfBox = document.createElement("div");
+  hwPdfBox.className = "hw-pdf-box hidden";
+  hwViewerStage?.appendChild(hwPdfBox);
+  const PDF_VIEW_W = 1000;
+  const pdfViews = new Map(); // url -> {w, h, el, loading}
+  function hwTarget() {
+    return hwView && hwView.kind === "pdf" ? hwPdfBox : hwViewerImg;
+  }
+  function hwTargetSize() {
+    if (hwView && hwView.kind === "pdf") {
+      const v = pdfViews.get(hwView.url);
+      return { w: PDF_VIEW_W, h: (v && v.h) || PDF_VIEW_W * 1.414 };
+    }
+    return { w: hwViewerImg.naturalWidth || 1, h: hwViewerImg.naturalHeight || 1 };
+  }
+  async function buildPdfView(url) {
+    let v = pdfViews.get(url);
+    if (v) return v;
+    if (!window.pdfjsLib) throw new Error("pdfjs");
+    const el = document.createElement("div");
+    v = { w: PDF_VIEW_W, h: 0, el, ready: null };
+    pdfViews.set(url, v);
+    v.ready = (async () => {
+      const buf = await (await fetch(url)).arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      const n = Math.min(pdf.numPages, 80);
+      const pages = [];
+      let y = 0;
+      for (let i = 1; i <= n; i++) {
+        const page = await pdf.getPage(i);
+        const base = page.getViewport({ scale: 1 });
+        const h = (PDF_VIEW_W * base.height) / base.width;
+        const im = document.createElement("img");
+        im.className = "hw-pdf-page";
+        Object.assign(im.style, { top: y + "px", width: PDF_VIEW_W + "px", height: h + "px" });
+        el.appendChild(im);
+        pages.push({ page, im, base });
+        y += h + 16;
+      }
+      v.h = Math.max(1, y - 16);
+      el.style.height = v.h + "px";
+      // Inhalte nacheinander zeichnen (scharf genug fuers Reinzoomen)
+      (async () => {
+        for (const p of pages) {
+          const vp = p.page.getViewport({ scale: (PDF_VIEW_W * 1.6) / p.base.width });
+          const c = document.createElement("canvas");
+          c.width = Math.round(vp.width);
+          c.height = Math.round(vp.height);
+          await p.page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+          p.im.src = c.toDataURL("image/jpeg", 0.85);
+          c.width = c.height = 0;
+        }
+      })();
+      return v;
+    })();
+    try {
+      await v.ready;
+    } catch (err) {
+      pdfViews.delete(url);
+      throw err;
+    }
+    return v;
+  }
   function hwApplyView() {
     if (!hwView) return;
-    hwViewerImg.style.transform = `translate(${hwView.tx}px, ${hwView.ty}px) scale(${hwView.s})`;
+    hwTarget().style.transform = `translate(${hwView.tx}px, ${hwView.ty}px) scale(${hwView.s})`;
   }
   function hwFit() {
     const r = hwViewerStage.getBoundingClientRect();
-    const iw = hwViewerImg.naturalWidth || 1;
-    const ih = hwViewerImg.naturalHeight || 1;
-    const s = Math.min(r.width / iw, r.height / ih);
-    hwView.s = s;
-    hwView.tx = (r.width - iw * s) / 2;
-    hwView.ty = (r.height - ih * s) / 2;
+    const { w: iw, h: ih } = hwTargetSize();
+    if (hwView.kind === "pdf") {
+      // Seitenbreite einpassen, oben anfangen
+      const s = (r.width - 16) / iw;
+      hwView.s = s;
+      hwView.tx = 8;
+      hwView.ty = 8;
+    } else {
+      const s = Math.min(r.width / iw, r.height / ih);
+      hwView.s = s;
+      hwView.tx = (r.width - iw * s) / 2;
+      hwView.ty = (r.height - ih * s) / 2;
+    }
     hwApplyView();
     saveHwViewer();
   }
@@ -10421,14 +10537,40 @@
     hwApplyView();
   }
   function openHwViewer(i, restore) {
-    const imgs = panelImages();
-    if (!imgs.length) return;
+    const imgs = panelItems();
+    if (!imgs.length || i < 0) return;
     i = Math.max(0, Math.min(imgs.length - 1, i || 0));
     const saved = restore ? hwViewerState() : null;
-    hwView = { i, s: 1, tx: 0, ty: 0 };
+    const item = imgs[i];
+    hwView = { i, s: 1, tx: 0, ty: 0, kind: item.kind, url: item.url };
     hwPanelBody.classList.add("hidden");
     hwViewer.classList.remove("hidden");
-    document.getElementById("hw-viewer-name").textContent = imgs[i].name || "Bild";
+    document.getElementById("hw-viewer-name").textContent = item.name || (item.kind === "pdf" ? "PDF" : "Bild");
+    hwViewerImg.classList.toggle("hidden", item.kind === "pdf");
+    hwPdfBox.classList.toggle("hidden", item.kind !== "pdf");
+    if (item.kind === "pdf") {
+      const view = hwView;
+      hwPdfBox.innerHTML = "";
+      hwPdfBox.textContent = "";
+      buildPdfView(item.url)
+        .then((v) => {
+          if (hwView !== view) return;
+          hwPdfBox.innerHTML = "";
+          hwPdfBox.appendChild(v.el);
+          hwPdfBox.style.width = PDF_VIEW_W + "px";
+          hwPdfBox.style.height = v.h + "px";
+          if (saved && saved.s && saved.i === i) {
+            Object.assign(hwView, { s: saved.s, tx: saved.tx, ty: saved.ty });
+            hwApplyView();
+          } else hwFit();
+          saveHwViewer();
+        })
+        .catch(() => {
+          showToast("PDF konnte nicht geöffnet werden");
+          closeHwViewer();
+        });
+      return;
+    }
     const done = () => {
       if (saved && saved.s && saved.i === i) {
         Object.assign(hwView, { s: saved.s, tx: saved.tx, ty: saved.ty });

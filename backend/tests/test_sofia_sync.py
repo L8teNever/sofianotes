@@ -236,3 +236,26 @@ class BoardFileHomeworkTests(unittest.TestCase):
         self.assertEqual(board_file.parse(data)["sofiaHomeworkId"], 7)
         data = board_file.build({"title": "x"}, [])
         self.assertIsNone(board_file.parse(data)["sofiaHomeworkId"])
+
+
+class BoardFileFilesTests(unittest.TestCase):
+    def test_file_refs_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+        from app import board_file, files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = files.FILES_DIR
+            files.FILES_DIR = Path(tmp)
+            try:
+                meta = files.save(b"%PDF-1.4 test", "Buch.pdf", "application/pdf")
+                data = board_file.build({"title": "x", "refs": [{"fileId": meta["id"], "name": "Buch.pdf", "mime": "application/pdf"}]}, [])
+                out = board_file.parse(data)
+                ref = out["refs"][0]
+                self.assertNotEqual(ref["fileId"], meta["id"])
+                self.assertEqual(ref["name"], "Buch.pdf")
+                blob, m2 = files.load(ref["fileId"])
+                self.assertEqual(blob, b"%PDF-1.4 test")
+                self.assertEqual(m2["mime"], "application/pdf")
+            finally:
+                files.FILES_DIR = old

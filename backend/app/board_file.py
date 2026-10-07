@@ -15,7 +15,7 @@ import uuid
 import zipfile
 from typing import Any
 
-from . import media
+from . import files, media
 
 FORMAT = "sofianotes"
 VERSION = 1
@@ -50,6 +50,11 @@ def build(board: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+        for r in refs:
+            fid = r.get("fileId")
+            hit = files.load(fid) if fid else None
+            if hit:
+                zf.writestr(zipfile.ZipInfo(f"files/{fid}.bin"), hit[0], compress_type=zipfile.ZIP_DEFLATED)
         for mid in _media_ids(strokes, refs):
             blob = media.load_bytes(mid)
             if blob:
@@ -119,7 +124,17 @@ def parse(data: bytes) -> dict[str, Any]:
         if isinstance(r, dict) and r.get("mediaId"):
             mid = new_media(str(r["mediaId"]))
             if mid:
-                refs.append({"mediaId": mid, "name": str(r.get("name") or "Bild")[:120]})
+                refs.append({"mediaId": mid, "name": str(r.get("name") or "Bild")[:160]})
+        elif isinstance(r, dict) and r.get("fileId"):
+            name = f"files/{r['fileId']}.bin"
+            if name not in names:
+                continue
+            blob = zf.read(name)
+            try:
+                meta = files.save(blob, str(r.get("name") or "Datei"), str(r.get("mime") or ""))
+            except ValueError:
+                continue
+            refs.append({"fileId": meta["id"], "name": meta["name"], "mime": meta["mime"]})
 
     paper = manifest.get("paper")
     hw = manifest.get("sofiaHomeworkId")
@@ -127,6 +142,6 @@ def parse(data: bytes) -> dict[str, Any]:
         "sofiaHomeworkId": hw if isinstance(hw, int) and not isinstance(hw, bool) else None,
         "title": str(manifest.get("title") or "Importiertes Blatt")[:200],
         "paper": paper if paper in ("graph", "dots", "lines", "blank") else "graph",
-        "refs": refs[:60],
+        "refs": refs[:80],
         "strokes": strokes,
     }
