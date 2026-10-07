@@ -57,3 +57,15 @@ def load_bytes(media_id: str) -> bytes | None:
     if not path.is_file():
         return None
     return path.read_bytes()
+
+
+def save_bytes(blob: bytes, media_id: str) -> dict:
+    """Rohes JPEG speichern (schneller als der Weg ueber Base64)."""
+    if not valid_id(media_id):
+        raise ValueError("jpeg_data_uri")
+    if not blob or len(blob) > MAX_BYTES:
+        raise ValueError("too_large" if blob else "jpeg_data_uri")
+    if blob[:2] != b"\xff\xd8":
+        raise ValueError("jpeg_data_uri")
+    path_for(media_id).write_bytes(blob)
+    return {"id": media_id, "bytes": len(blob)}

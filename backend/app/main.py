@@ -632,6 +632,18 @@ async def get_file(file_id: str, me: dict = Depends(get_current_person)) -> Resp
     )
 
 
+@app.put("/api/media/{media_id}")
+async def upload_media_raw(media_id: str, request: Request) -> dict:
+    """Bild als rohes JPEG (Body) - spart Base64 und JSON."""
+    data = await request.body()
+    try:
+        saved = media.save_bytes(data, media_id)
+    except ValueError as exc:
+        code = 413 if str(exc) == "too_large" else 400
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    return {"ok": True, "id": saved["id"], "bytes": saved["bytes"]}
+
+
 @app.get("/api/media/{media_id}")
 async def get_media(media_id: str) -> Response:
     blob = media.load_bytes(media_id)

@@ -732,12 +732,17 @@
     img.decoding = "async";
     img.onload = () => requestRedraw();
     img.src = "/api/media/" + encodeURIComponent(mediaId);
+    let tries = 0;
     img.onerror = () => {
-      if (!window.SofiaOffline) return;
+      const retry = () => {
+        // evtl. laedt jemand das Bild gerade erst hoch: ein paar Mal spaeter erneut versuchen
+        if (tries++ < 6) setTimeout(() => (img.src = "/api/media/" + encodeURIComponent(mediaId) + "?r=" + tries), 1500 * tries);
+      };
+      if (!window.SofiaOffline) return retry();
       SofiaOffline.getMedia(mediaId).then((blob) => {
-        if (!blob) return;
+        if (!blob) return retry();
         img.src = URL.createObjectURL(blob);
-      });
+      }, retry);
     };
     mediaImages.set(mediaId, img);
     return img;
@@ -8011,10 +8016,49 @@
     c.fillStyle = "#ffffff";
     c.fillRect(0, 0, cw, ch);
     c.drawImage(source, 0, 0, cw, ch);
-    return { dataUrl: canvas.toDataURL("image/jpeg", 0.82), w: cw, h: ch };
+    // dataUrl erst bei Bedarf (toDataURL ist langsam und blockiert)
+    return {
+      canvas,
+      w: cw,
+      h: ch,
+      get dataUrl() {
+        return canvas.toDataURL("image/jpeg", 0.82);
+      },
+    };
+  }
+  const blobToDataUrl = (blob) =>
+    new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+  // Schneller Weg: JPEG asynchron erzeugen, sofort lokal anzeigen, binaer hochladen.
+  // Die ID ist sofort da; der Upload laeuft im Hintergrund (bei Fehler in die Warteschlange).
+  async function uploadJpeg(jpeg) {
+    if (typeof jpeg === "string") return uploadJpegDataUrl(jpeg);
+    const blob = await new Promise((res) => jpeg.canvas.toBlob(res, "image/jpeg", 0.82));
+    if (!blob) return uploadJpegDataUrl(jpeg.dataUrl);
+    const id = uuid();
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => requestRedraw();
+    img.src = URL.createObjectURL(blob);
+    mediaImages.set(id, img);
+    if (window.SofiaOffline) SofiaOffline.putMedia(id, blob).catch(() => {});
+    fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": "image/jpeg" }, body: blob })
+      .then((r) => {
+        if (!r.ok) throw new Error("upload");
+      })
+      .catch(async () => {
+        try {
+          await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
+        } catch (err) {}
+      });
+    return id;
   }
 
-  async function uploadJpeg(dataUrl) {
+  async function uploadJpegDataUrl(dataUrl) {
     const id = uuid();
     try {
       const blob = await (await fetch(dataUrl)).blob();
@@ -8071,11 +8115,23 @@
     return stroke;
   }
 
-  async function importImageFile(file, origin) {
+  // Bild -> Scan-Dialog (Blatt erkennen, zuschneiden) -> JPEG. null = abgebrochen.
+  async function scanImageToJpeg(file, maxEdge) {
+    if (window.sofiaScan) {
+      const res = await window.sofiaScan(file);
+      if (!res) return null;
+      return bitmapToJpeg(res.canvas, maxEdge);
+    }
     const bmp = await createImageBitmap(file);
-    const jpeg = bitmapToJpeg(bmp, 1600);
+    const jpeg = bitmapToJpeg(bmp, maxEdge);
     if (bmp.close) bmp.close();
-    const mediaId = await uploadJpeg(jpeg.dataUrl);
+    return jpeg;
+  }
+
+  async function importImageFile(file, origin) {
+    const jpeg = await scanImageToJpeg(file, 2000);
+    if (!jpeg) return null;
+    const mediaId = await uploadJpeg(jpeg);
     return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
   }
 
@@ -8097,7 +8153,7 @@
       canvas.height = Math.max(1, Math.round(vp.height));
       await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
       const jpeg = bitmapToJpeg(canvas, 1600);
-      const mediaId = await uploadJpeg(jpeg.dataUrl);
+      const mediaId = await uploadJpeg(jpeg);
       const stroke = placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name + " S." + i, { x: origin.x, y });
       placed.push(stroke);
       y = stroke.points[1].y + 28;
@@ -8129,6 +8185,7 @@
           }
         } else if (/^image\//.test(file.type) || /\.(png|jpe?g|gif|webp|heic)$/i.test(file.name)) {
           const s = await importImageFile(file, origin);
+          if (!s) continue;
           ids.push(s.id);
           y = s.points[1].y + 40;
         }
@@ -10454,10 +10511,9 @@
           const meta = await r.json();
           added.push({ fileId: meta.id, name: meta.name, mime: meta.mime });
         } else {
-          const bmp = await createImageBitmap(file);
-          const jpeg = bitmapToJpeg(bmp, 2000);
-          if (bmp.close) bmp.close();
-          added.push({ mediaId: await uploadJpeg(jpeg.dataUrl), name: (file.name || "Foto").replace(/\.[a-z0-9]+$/i, "") });
+          const jpeg = await scanImageToJpeg(file, 2000);
+          if (!jpeg) continue;
+          added.push({ mediaId: await uploadJpeg(jpeg), name: (file.name || "Foto").replace(/\.[a-z0-9]+$/i, "") });
         }
       }
     } catch (err) {
@@ -10650,7 +10706,7 @@
       const bmp = await createImageBitmap(blob);
       const jpeg = bitmapToJpeg(bmp, 1600);
       if (bmp.close) bmp.close();
-      const mediaId = await uploadJpeg(jpeg.dataUrl);
+      const mediaId = await uploadJpeg(jpeg);
       placeImageStroke(mediaId, jpeg.w, jpeg.h, att.name || "Aufgabe", { x: at.x, y: at.y, center: true });
       requestRedraw();
     } catch (err) {
@@ -12834,14 +12890,12 @@
           await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
           const jpeg = bitmapToJpeg(c, 2000);
           c.width = c.height = 0;
-          out.push({ mediaId: await uploadJpeg(jpeg.dataUrl), ratio: base.height / base.width });
+          out.push({ mediaId: await uploadJpeg(jpeg), ratio: base.height / base.width });
         }
       } else {
-        const bmp = await createImageBitmap(file);
-        const jpeg = bitmapToJpeg(bmp, 2000);
-        const ratio = bmp.height / bmp.width;
-        if (bmp.close) bmp.close();
-        out.push({ mediaId: await uploadJpeg(jpeg.dataUrl), ratio });
+        const jpeg = await scanImageToJpeg(file, 2000);
+        if (!jpeg) return out;
+        out.push({ mediaId: await uploadJpeg(jpeg), ratio: jpeg.h / jpeg.w });
       }
       return out;
     }
@@ -12850,6 +12904,7 @@
       if (!notebook) return false;
       try {
         const imgs = await fileToPageImages(file, 200);
+        if (!imgs.length) return true;
         const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
         addPages(currentPage(), pages);
         showToast(pages.length + (pages.length === 1 ? " Seite" : " Seiten") + " eingefügt");
@@ -13111,6 +13166,7 @@
       try {
         showToast("Vorlage wird gespeichert…");
         const imgs = await fileToPageImages(file, 10);
+        if (!imgs.length) return;
         const base = (file.name || "Vorlage").replace(/\.[a-z0-9]+$/i, "");
         const added = imgs.map((im, k) => ({ id: newId(), name: base + (imgs.length > 1 ? " S. " + (k + 1) : ""), mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
         saveUserTemplates(userTemplates().concat(added));
@@ -13223,6 +13279,7 @@
       try {
         showToast("Wird hinzugefügt…");
         const imgs = await fileToPageImages(file, 200);
+        if (!imgs.length) return;
         const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
         addPages(currentPage(), pages);
       } catch (err) {
@@ -13359,6 +13416,366 @@
         addBig.style.left = p.x + "px";
         addBig.style.top = p.y + "px";
       }
+    };
+  })();
+
+  // ---- Scannen: Blatt im Foto erkennen, gerade ziehen, Papier aufhellen ----
+  // window.sofiaScan(file) -> Promise<{canvas, w, h} | null>  (null = abgebrochen)
+  (() => {
+    const scrim = document.getElementById("scan-scrim");
+    const stage = document.getElementById("scan-stage");
+    const cv = document.getElementById("scan-canvas");
+    const hint = document.getElementById("scan-hint");
+    const MAX_SRC = 2600; // Arbeitsbild (spart Speicher und Zeit)
+    let src = null; // Canvas mit dem (gedrehten) Foto
+    let quad = null; // 4 Punkte in src-Koordinaten: TL, TR, BR, BL
+    let enhance = true;
+    let resolveFn = null;
+    let view = { k: 1, ox: 0, oy: 0 };
+
+    function toCanvas(bmp, rot) {
+      const fit = Math.min(1, MAX_SRC / Math.max(bmp.width, bmp.height));
+      const w = Math.round(bmp.width * fit);
+      const h = Math.round(bmp.height * fit);
+      const c = document.createElement("canvas");
+      const sw = rot % 2 ? h : w;
+      const sh = rot % 2 ? w : h;
+      c.width = sw;
+      c.height = sh;
+      const g = c.getContext("2d");
+      g.translate(sw / 2, sh / 2);
+      g.rotate((rot * Math.PI) / 2);
+      g.drawImage(bmp, -w / 2, -h / 2, w, h);
+      return c;
+    }
+    const fullQuad = () => [
+      { x: 0, y: 0 },
+      { x: src.width, y: 0 },
+      { x: src.width, y: src.height },
+      { x: 0, y: src.height },
+    ];
+    // Blatt finden: helles Papier vor dunklerem Hintergrund (Otsu-Schwelle, groesste helle
+    // Flaeche, Ecken ueber Extrempunkte von x+y und x-y)
+    function detect() {
+      const S = 360;
+      const f = S / Math.max(src.width, src.height);
+      const w = Math.max(8, Math.round(src.width * f));
+      const h = Math.max(8, Math.round(src.height * f));
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const g = c.getContext("2d");
+      g.drawImage(src, 0, 0, w, h);
+      const d = g.getImageData(0, 0, w, h).data;
+      const L = new Uint8Array(w * h);
+      const hist = new Array(256).fill(0);
+      for (let i = 0; i < w * h; i++) {
+        const v = (d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114) | 0;
+        L[i] = v;
+        hist[v]++;
+      }
+      // Otsu
+      let sum = 0;
+      for (let t = 0; t < 256; t++) sum += t * hist[t];
+      let sumB = 0, wB = 0, best = 0, thr = 128;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t];
+        if (!wB) continue;
+        const wF = w * h - wB;
+        if (!wF) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB;
+        const mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > best) {
+          best = between;
+          thr = t;
+        }
+      }
+      // groesste zusammenhaengende helle Flaeche
+      const lab = new Int32Array(w * h).fill(-1);
+      let bestArea = 0, bestLab = -1, n = 0;
+      const stack = new Int32Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        if (L[i] <= thr || lab[i] !== -1) continue;
+        let sp = 0, area = 0;
+        stack[sp++] = i;
+        lab[i] = n;
+        while (sp) {
+          const j = stack[--sp];
+          area++;
+          const x = j % w, y = (j / w) | 0;
+          const nb = [x > 0 ? j - 1 : -1, x < w - 1 ? j + 1 : -1, y > 0 ? j - w : -1, y < h - 1 ? j + w : -1];
+          for (const k of nb) if (k >= 0 && lab[k] === -1 && L[k] > thr) {
+            lab[k] = n;
+            stack[sp++] = k;
+          }
+        }
+        if (area > bestArea) {
+          bestArea = area;
+          bestLab = n;
+        }
+        n++;
+      }
+      const frac = bestArea / (w * h);
+      if (bestLab < 0 || frac < 0.12 || frac > 0.97) return null;
+      let tl = null, tr = null, br = null, bl = null;
+      let mTl = Infinity, mTr = -Infinity, mBr = -Infinity, mBl = Infinity;
+      for (let i = 0; i < w * h; i++) {
+        if (lab[i] !== bestLab) continue;
+        const x = i % w, y = (i / w) | 0;
+        if (x + y < mTl) (mTl = x + y), (tl = { x, y });
+        if (x + y > mBr) (mBr = x + y), (br = { x, y });
+        if (x - y > mTr) (mTr = x - y), (tr = { x, y });
+        if (x - y < mBl) (mBl = x - y), (bl = { x, y });
+      }
+      const up = (p) => ({ x: Math.min(src.width, Math.max(0, (p.x + 0.5) / f)), y: Math.min(src.height, Math.max(0, (p.y + 0.5) / f)) });
+      const q = [up(tl), up(tr), up(br), up(bl)];
+      // zu schmal/entartet -> lieber ganzes Bild
+      const area = Math.abs(((q[0].x * q[1].y - q[1].x * q[0].y) + (q[1].x * q[2].y - q[2].x * q[1].y) + (q[2].x * q[3].y - q[3].x * q[2].y) + (q[3].x * q[0].y - q[0].x * q[3].y)) / 2);
+      if (area < src.width * src.height * 0.1) return null;
+      return q;
+    }
+
+    // Homographie: Einheitsquadrat -> Viereck (fuer das Rueckwaerts-Abtasten)
+    function squareToQuad(q) {
+      const [p0, p1, p2, p3] = q;
+      const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dx3 = p0.x - p1.x + p2.x - p3.x;
+      const dy1 = p1.y - p2.y, dy2 = p3.y - p2.y, dy3 = p0.y - p1.y + p2.y - p3.y;
+      let g = 0, h = 0;
+      if (dx3 || dy3) {
+        const den = dx1 * dy2 - dx2 * dy1;
+        g = (dx3 * dy2 - dx2 * dy3) / den;
+        h = (dx1 * dy3 - dx3 * dy1) / den;
+      }
+      return {
+        a: p1.x - p0.x + g * p1.x, b: p3.x - p0.x + h * p3.x, c: p0.x,
+        d: p1.y - p0.y + g * p1.y, e: p3.y - p0.y + h * p3.y, f: p0.y,
+        g, h,
+      };
+    }
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    function warp() {
+      const q = quad;
+      let W = Math.max(dist(q[0], q[1]), dist(q[3], q[2]));
+      let H = Math.max(dist(q[0], q[3]), dist(q[1], q[2]));
+      const fit = Math.min(1, 2200 / Math.max(W, H));
+      W = Math.max(8, Math.round(W * fit));
+      H = Math.max(8, Math.round(H * fit));
+      const sd = src.getContext("2d").getImageData(0, 0, src.width, src.height).data;
+      const sw = src.width, sh = src.height;
+      const out = document.createElement("canvas");
+      out.width = W;
+      out.height = H;
+      const og = out.getContext("2d");
+      const img = og.createImageData(W, H);
+      const od = img.data;
+      const m = squareToQuad(q);
+      for (let y = 0; y < H; y++) {
+        const v = (y + 0.5) / H;
+        for (let x = 0; x < W; x++) {
+          const u = (x + 0.5) / W;
+          const z = m.g * u + m.h * v + 1;
+          const sx = (m.a * u + m.b * v + m.c) / z - 0.5;
+          const sy = (m.d * u + m.e * v + m.f) / z - 0.5;
+          const x0 = Math.max(0, Math.min(sw - 2, sx | 0));
+          const y0 = Math.max(0, Math.min(sh - 2, sy | 0));
+          const fx = Math.max(0, Math.min(1, sx - x0));
+          const fy = Math.max(0, Math.min(1, sy - y0));
+          const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4;
+          const o = (y * W + x) * 4;
+          for (let ch = 0; ch < 3; ch++) {
+            const top = sd[i00 + ch] + (sd[i10 + ch] - sd[i00 + ch]) * fx;
+            const bot = sd[i01 + ch] + (sd[i11 + ch] - sd[i01 + ch]) * fx;
+            od[o + ch] = top + (bot - top) * fy;
+          }
+          od[o + 3] = 255;
+        }
+      }
+      if (enhance) whiten(od, W, H);
+      og.putImageData(img, 0, 0);
+      return { canvas: out, w: W, h: H };
+    }
+    // Papier weiss, Schrift kraeftig: durch eine geglaettete Hintergrund-Helligkeit teilen
+    function whiten(od, W, H) {
+      const bw = Math.max(4, Math.round(W / 24));
+      const bh = Math.max(4, Math.round(H / 24));
+      const bg = new Float32Array(bw * bh * 3);
+      const cnt = new Float32Array(bw * bh);
+      for (let y = 0; y < H; y += 2)
+        for (let x = 0; x < W; x += 2) {
+          const bi = (Math.min(bh - 1, ((y / H) * bh) | 0) * bw + Math.min(bw - 1, ((x / W) * bw) | 0));
+          const o = (y * W + x) * 4;
+          const l = od[o] + od[o + 1] + od[o + 2];
+          // dunkle Pixel (Schrift) zaehlen kaum: Hintergrund = helle Mehrheit
+          const wgt = l > 300 ? 1 : 0.05;
+          bg[bi * 3] += od[o] * wgt;
+          bg[bi * 3 + 1] += od[o + 1] * wgt;
+          bg[bi * 3 + 2] += od[o + 2] * wgt;
+          cnt[bi] += wgt;
+        }
+      for (let i = 0; i < bw * bh; i++) for (let ch = 0; ch < 3; ch++) bg[i * 3 + ch] = cnt[i] ? bg[i * 3 + ch] / cnt[i] : 255;
+      for (let y = 0; y < H; y++) {
+        const gy = Math.min(bh - 1.001, Math.max(0, (y / H) * bh - 0.5));
+        const y0 = gy | 0, fy = gy - y0;
+        for (let x = 0; x < W; x++) {
+          const gx = Math.min(bw - 1.001, Math.max(0, (x / W) * bw - 0.5));
+          const x0 = gx | 0, fx = gx - x0;
+          const o = (y * W + x) * 4;
+          for (let ch = 0; ch < 3; ch++) {
+            const b00 = bg[(y0 * bw + x0) * 3 + ch], b10 = bg[(y0 * bw + x0 + 1) * 3 + ch];
+            const b01 = bg[((y0 + 1) * bw + x0) * 3 + ch], b11 = bg[((y0 + 1) * bw + x0 + 1) * 3 + ch];
+            const b = (b00 + (b10 - b00) * fx) * (1 - fy) + (b01 + (b11 - b01) * fx) * fy;
+            let v = (od[o + ch] / Math.max(40, b)) * 255;
+            v = (v - 255) * 1.35 + 255; // Kontrast (Papier bleibt weiss)
+            od[o + ch] = v < 0 ? 0 : v > 255 ? 255 : v;
+          }
+        }
+      }
+    }
+
+    // ---- Anzeige + Ecken ziehen ----
+    function render() {
+      const r = stage.getBoundingClientRect();
+      const d = Math.max(1, window.devicePixelRatio || 1);
+      cv.width = Math.round(r.width * d);
+      cv.height = Math.round(r.height * d);
+      cv.style.width = r.width + "px";
+      cv.style.height = r.height + "px";
+      const k = Math.min((r.width - 48) / src.width, (r.height - 48) / src.height);
+      view = { k, ox: (r.width - src.width * k) / 2, oy: (r.height - src.height * k) / 2 };
+      const g = cv.getContext("2d");
+      g.setTransform(d, 0, 0, d, 0, 0);
+      g.clearRect(0, 0, r.width, r.height);
+      g.drawImage(src, view.ox, view.oy, src.width * k, src.height * k);
+      const P = quad.map((p) => ({ x: view.ox + p.x * k, y: view.oy + p.y * k }));
+      // ausserhalb abdunkeln
+      g.save();
+      g.fillStyle = "rgba(0,0,0,0.45)";
+      g.beginPath();
+      g.rect(0, 0, r.width, r.height);
+      g.moveTo(P[0].x, P[0].y);
+      for (let i = 3; i >= 0; i--) g.lineTo(P[i].x, P[i].y);
+      g.closePath();
+      g.fill("evenodd");
+      g.restore();
+      g.strokeStyle = "#4c8dff";
+      g.lineWidth = 2.5;
+      g.beginPath();
+      P.forEach((p, i) => (i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
+      g.closePath();
+      g.stroke();
+      for (const p of P) {
+        g.beginPath();
+        g.arc(p.x, p.y, 13, 0, Math.PI * 2);
+        g.fillStyle = "rgba(255,255,255,0.92)";
+        g.fill();
+        g.lineWidth = 3;
+        g.stroke();
+      }
+    }
+    let dragIdx = -1;
+    cv.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      const r = cv.getBoundingClientRect();
+      const x = e.clientX - r.left, y = e.clientY - r.top;
+      let bestI = -1, bestD = 44;
+      quad.forEach((p, i) => {
+        const dd = Math.hypot(view.ox + p.x * view.k - x, view.oy + p.y * view.k - y);
+        if (dd < bestD) (bestD = dd), (bestI = i);
+      });
+      dragIdx = bestI;
+      if (dragIdx >= 0) {
+        try {
+          cv.setPointerCapture(e.pointerId);
+        } catch (err) {}
+      }
+    });
+    cv.addEventListener("pointermove", (e) => {
+      if (dragIdx < 0) return;
+      const r = cv.getBoundingClientRect();
+      quad[dragIdx] = {
+        x: Math.max(0, Math.min(src.width, (e.clientX - r.left - view.ox) / view.k)),
+        y: Math.max(0, Math.min(src.height, (e.clientY - r.top - view.oy) / view.k)),
+      };
+      render();
+    });
+    const up = () => (dragIdx = -1);
+    cv.addEventListener("pointerup", up);
+    cv.addEventListener("pointercancel", up);
+    scrim.addEventListener("pointerdown", (e) => e.stopPropagation());
+
+    let bmpRef = null;
+    let rot = 0;
+    function finish(res) {
+      scrim.classList.add("hidden");
+      const fn = resolveFn;
+      resolveFn = null;
+      if (bmpRef && bmpRef.close) bmpRef.close();
+      bmpRef = null;
+      src = null;
+      if (fn) fn(res);
+    }
+    function autoDetect() {
+      const q = detect();
+      quad = q || fullQuad();
+      hint.textContent = q ? "Blatt erkannt – Ecken ziehen, um anzupassen." : "Kein Blatt erkannt – Ecken ziehen oder ganzes Bild nehmen.";
+      render();
+    }
+    document.getElementById("scan-cancel").addEventListener("click", () => finish(null));
+    document.getElementById("scan-ok").addEventListener("click", () => {
+      const b = document.getElementById("scan-ok");
+      b.disabled = true;
+      b.textContent = "…";
+      setTimeout(() => {
+        let res = null;
+        try {
+          res = warp();
+        } catch (err) {
+          res = null;
+        }
+        b.disabled = false;
+        b.textContent = "Übernehmen";
+        finish(res);
+      }, 30);
+    });
+    document.getElementById("scan-full").addEventListener("click", () => {
+      quad = fullQuad();
+      hint.textContent = "Ganzes Bild – Ecken ziehen, um anzupassen.";
+      render();
+    });
+    document.getElementById("scan-auto").addEventListener("click", autoDetect);
+    document.getElementById("scan-enhance").addEventListener("click", (e) => {
+      enhance = !enhance;
+      e.currentTarget.classList.toggle("active", enhance);
+      try {
+        localStorage.setItem("sofianotes-scan-enhance", enhance ? "1" : "0");
+      } catch (err) {}
+    });
+    document.getElementById("scan-rotate").addEventListener("click", () => {
+      rot = (rot + 1) % 4;
+      src = toCanvas(bmpRef, rot);
+      autoDetect();
+    });
+    window.addEventListener("resize", () => !scrim.classList.contains("hidden") && src && render());
+
+    window.sofiaScan = async (file) => {
+      let bmp;
+      try {
+        bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch (err) {
+        bmp = await createImageBitmap(file);
+      }
+      bmpRef = bmp;
+      rot = 0;
+      src = toCanvas(bmp, 0);
+      enhance = lsGetRaw("sofianotes-scan-enhance") !== "0";
+      document.getElementById("scan-enhance").classList.toggle("active", enhance);
+      scrim.classList.remove("hidden");
+      return new Promise((resolve) => {
+        resolveFn = resolve;
+        requestAnimationFrame(autoDetect);
+      });
     };
   })();
 
