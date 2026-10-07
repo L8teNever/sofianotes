@@ -12063,7 +12063,7 @@
     function setHist(on) {
       showHist = on;
       histEl.classList.toggle("hidden", !on);
-      document.getElementById("calc-keys").classList.toggle("hidden", on);
+      keysEl.classList.toggle("hidden", on);
       histBtn.classList.toggle("active", on);
       if (on) {
         renderHist();
@@ -12254,27 +12254,53 @@
       renderCalc();
       save();
     }
-    const KEYS = [
-      ["sin", "cos", "tan", "√", "xʸ"],
-      ["(", ")", "%", "AC", "⌫"],
-      ["7", "8", "9", "÷", "π"],
-      ["4", "5", "6", "×", "x²"],
-      ["1", "2", "3", "−", "log"],
-      ["0", ",", "Ans", "+", "="],
-    ];
+    // Zwei Ansichten: Normal (gross, nur Grundrechenarten) und Wissenschaftlich
+    const LAYOUTS = {
+      basic: [
+        ["AC", "⌫", "%", "÷"],
+        ["7", "8", "9", "×"],
+        ["4", "5", "6", "−"],
+        ["1", "2", "3", "+"],
+        ["0", ",", "="],
+      ],
+      sci: [
+        ["sin", "cos", "tan", "√", "xʸ"],
+        ["(", ")", "%", "AC", "⌫"],
+        ["7", "8", "9", "÷", "π"],
+        ["4", "5", "6", "×", "x²"],
+        ["1", "2", "3", "−", "log"],
+        ["0", ",", "Ans", "+", "="],
+      ],
+    };
     const keysEl = document.getElementById("calc-keys");
-    for (const row of KEYS)
-      for (const k of row) {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.textContent = k;
-        b.className = "calc-key" + (/^[0-9,]$/.test(k) ? " num" : k === "=" ? " eq" : ["AC", "⌫"].includes(k) ? " clr" : " op");
-        b.addEventListener("click", (e) => {
-          e.stopPropagation();
-          press(k);
-        });
-        keysEl.appendChild(b);
-      }
+    function renderKeys() {
+      const mode = st.mode === "sci" ? "sci" : "basic";
+      keysEl.innerHTML = "";
+      keysEl.className = "calc-keys calc-keys-" + mode + (showHist ? " hidden" : "");
+      for (const row of LAYOUTS[mode])
+        for (const k of row) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = k;
+          b.className = "calc-key" + (/^[0-9,]$/.test(k) ? " num" : k === "=" ? " eq" : ["AC", "⌫"].includes(k) ? " clr" : " op") + (mode === "basic" && k === "0" ? " wide" : "");
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            press(k);
+          });
+          keysEl.appendChild(b);
+        }
+      document.querySelectorAll("#calc-mode [data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+    }
+    document.querySelectorAll("#calc-mode [data-mode]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        st.mode = b.dataset.mode;
+        save();
+        if (showHist) setHist(false);
+        renderKeys();
+      })
+    );
+    renderKeys();
     // Tastatur (wenn das Fenster offen ist und nichts anderes Eingaben hat)
     window.addEventListener("keydown", (e) => {
       if (win.classList.contains("hidden") || !calcFocused || st.tab !== "calc" || e.metaKey || e.ctrlKey) return;
@@ -12304,13 +12330,88 @@
       angle: { name: "Winkel", units: { Grad: 1, rad: 180 / Math.PI, gon: 0.9, Umdrehung: 360 } },
       data: { name: "Datenmenge", units: { Bit: 0.125, Byte: 1, KB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12, KiB: 1024, MiB: 1048576, GiB: 1073741824 } },
     };
-    const catSel = document.getElementById("conv-cat");
-    const fromSel = document.getElementById("conv-from");
-    const toSel = document.getElementById("conv-to");
+    // Eigene Auswahllisten statt der System-Dropdowns
+    let ddOpen = null;
+    function closeDd() {
+      if (ddOpen) ddOpen.menu.remove();
+      if (ddOpen) ddOpen.dd.btn.classList.remove("open");
+      ddOpen = null;
+    }
+    function makeDd(id, onPick) {
+      const btn = document.getElementById(id);
+      const dd = { btn, options: [], val: null };
+      dd.setOptions = (opts) => {
+        dd.options = opts;
+      };
+      Object.defineProperty(dd, "value", {
+        get: () => dd.val,
+        set: (v) => {
+          dd.val = v;
+          const o = dd.options.find((x) => x.value === v);
+          btn.querySelector(".conv-dd-label").textContent = o ? o.label : "";
+        },
+      });
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (ddOpen && ddOpen.dd === dd) return closeDd();
+        closeDd();
+        const menu = document.createElement("div");
+        menu.className = "conv-menu";
+        for (const o of dd.options) {
+          const it = document.createElement("button");
+          it.type = "button";
+          it.className = "conv-menu-item" + (o.value === dd.val ? " active" : "");
+          it.innerHTML = '<span></span><span class="material-symbols-rounded">check</span>';
+          it.firstChild.textContent = o.label;
+          it.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            closeDd();
+            dd.value = o.value;
+            onPick(o.value);
+          });
+          menu.appendChild(it);
+        }
+        menu.addEventListener("pointerdown", (ev) => {
+          calcFocused = true;
+          ev.stopPropagation();
+        });
+        document.body.appendChild(menu);
+        const r = btn.getBoundingClientRect();
+        const w = Math.max(r.width, 170);
+        const h = Math.min(menu.scrollHeight, 300);
+        let top = r.bottom + 6;
+        if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+        Object.assign(menu.style, { left: Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + "px", top: top + "px", width: w + "px" });
+        btn.classList.add("open");
+        ddOpen = { dd, menu };
+        menu.querySelector(".active")?.scrollIntoView({ block: "center" });
+      });
+      return dd;
+    }
+    window.addEventListener("pointerdown", (e) => {
+      if (ddOpen && !e.target.closest(".conv-menu") && !ddOpen.dd.btn.contains(e.target)) closeDd();
+    }, true);
+    const catSel = makeDd("conv-cat", (v) => {
+      st.cat = v;
+      st.from = st.to = null;
+      fillUnits();
+      save();
+      renderConv();
+    });
+    const fromSel = makeDd("conv-from", (v) => {
+      st.from = v;
+      save();
+      renderConv();
+    });
+    const toSel = makeDd("conv-to", (v) => {
+      st.to = v;
+      save();
+      renderConv();
+    });
     const inEl = document.getElementById("conv-in");
     const outEl = document.getElementById("conv-out");
     const allEl = document.getElementById("conv-all");
-    for (const [k, c] of Object.entries(CATS)) catSel.add(new Option(c.name, k));
+    catSel.setOptions(Object.entries(CATS).map(([k, c]) => ({ value: k, label: c.name })));
     const toBase = (cat, u, v) => {
       const f = CATS[cat].units[u];
       return typeof f === "number" ? v * f : f.toBase(v);
@@ -12323,10 +12424,7 @@
       const units = Object.keys(CATS[st.cat].units);
       if (!units.includes(st.from)) st.from = units[0];
       if (!units.includes(st.to)) st.to = units[1] || units[0];
-      for (const sel of [fromSel, toSel]) {
-        sel.innerHTML = "";
-        for (const u of units) sel.add(new Option(u, u));
-      }
+      for (const sel of [fromSel, toSel]) sel.setOptions(units.map((u) => ({ value: u, label: u })));
       catSel.value = st.cat;
       fromSel.value = st.from;
       toSel.value = st.to;
@@ -12363,23 +12461,7 @@
         allEl.appendChild(row);
       }
     }
-    catSel.addEventListener("change", () => {
-      st.cat = catSel.value;
-      st.from = st.to = null;
-      fillUnits();
-      save();
-      renderConv();
-    });
-    fromSel.addEventListener("change", () => {
-      st.from = fromSel.value;
-      save();
-      renderConv();
-    });
-    toSel.addEventListener("change", () => {
-      st.to = toSel.value;
-      save();
-      renderConv();
-    });
+
     inEl.addEventListener("input", renderConv);
     document.getElementById("conv-swap").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -12415,6 +12497,7 @@
       win.style.top = Math.max(6, Math.min(window.innerHeight - Math.min(h, 120), y)) + "px";
     }
     function setOpen(open) {
+      closeDd();
       st.open = open;
       win.classList.toggle("hidden", !open);
       btn.classList.toggle("active", open);
