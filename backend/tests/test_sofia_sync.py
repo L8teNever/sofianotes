@@ -346,3 +346,39 @@ class SendTests(unittest.TestCase):
                 asyncio.run(run())
             finally:
                 files.FILES_DIR, media.MEDIA_DIR = old_f, old_m
+
+
+class NotebookTests(unittest.TestCase):
+    def test_notebook_store_and_file(self):
+        import asyncio
+        import tempfile
+        from pathlib import Path
+        from app import board_file, db, goodnotes_export, media
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db.use_database(tmp + "/n.db")
+            old = media.MEDIA_DIR
+            media.MEDIA_DIR = Path(tmp) / "m"
+            try:
+                mid = "11111111-2222-3333-4444-555555555555"
+                media.path_for(mid).write_bytes(b"\xff\xd8fake")
+
+                async def run():
+                    b = await db.create_board("simon", "Heft", None)
+                    nb = db.clean_notebook({"layout": "horizontal", "template": {"paper": "lines"}, "pages": [{"id": "p1"}, {"id": "p2", "paper": "dots", "mediaId": mid, "w": 900, "h": 600}, {"bad": 1}]})
+                    self.assertEqual(len(nb["pages"]), 2)
+                    await db.set_board_notebook(b["id"], nb)
+                    board = await db.get_board(b["id"])
+                    self.assertEqual(board["notebook"]["layout"], "horizontal")
+                    rects = goodnotes_export.page_rects(board["notebook"])
+                    self.assertEqual(rects[1][1], 794 + 48)
+                    data = board_file.build(board, [])
+                    out = board_file.parse(data)
+                    self.assertEqual(out["notebook"]["pages"][0]["paper"], "graph")
+                    new_mid = out["notebook"]["pages"][1]["mediaId"]
+                    self.assertNotEqual(new_mid, mid)
+                    self.assertEqual(media.load_bytes(new_mid), b"\xff\xd8fake")
+
+                asyncio.run(run())
+            finally:
+                media.MEDIA_DIR = old

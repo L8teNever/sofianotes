@@ -23,8 +23,13 @@ MAX_FILE_BYTES = 150_000_000
 MAX_STROKES = 200_000
 
 
-def _media_ids(strokes: list[dict[str, Any]], refs: list[dict[str, Any]]) -> list[str]:
+def _media_ids(strokes: list[dict[str, Any]], refs: list[dict[str, Any]], notebook: dict[str, Any] | None = None) -> list[str]:
     ids: list[str] = []
+    if notebook:
+        for pg in (notebook.get("pages") or []) + [notebook.get("template") or {}]:
+            mid = pg.get("mediaId")
+            if mid and mid not in ids:
+                ids.append(mid)
     for s in strokes:
         mid = (s.get("extra") or {}).get("mediaId")
         if mid and mid not in ids:
@@ -45,6 +50,7 @@ def build(board: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
         "paper": board.get("paper") or "graph",
         "refs": refs,
         "sofiaHomeworkId": board.get("sofiaHomeworkId"),
+        "notebook": board.get("notebook"),
         "strokes": strokes,
     }
     buf = io.BytesIO()
@@ -55,7 +61,7 @@ def build(board: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
             hit = files.load(fid) if fid else None
             if hit:
                 zf.writestr(zipfile.ZipInfo(f"files/{fid}.bin"), hit[0], compress_type=zipfile.ZIP_DEFLATED)
-        for mid in _media_ids(strokes, refs):
+        for mid in _media_ids(strokes, refs, board.get("notebook")):
             blob = media.load_bytes(mid)
             if blob:
                 # JPEGs sind schon komprimiert
@@ -138,7 +144,29 @@ def parse(data: bytes) -> dict[str, Any]:
 
     paper = manifest.get("paper")
     hw = manifest.get("sofiaHomeworkId")
+    notebook = manifest.get("notebook") if isinstance(manifest.get("notebook"), dict) else None
+    if notebook:
+        notebook = dict(notebook)
+        for key in ("pages",):
+            fixed = []
+            for pg in notebook.get(key) or []:
+                if isinstance(pg, dict):
+                    pg = dict(pg)
+                    if pg.get("mediaId"):
+                        pg["mediaId"] = new_media(str(pg["mediaId"]))
+                        if not pg["mediaId"]:
+                            pg.pop("mediaId")
+                    fixed.append(pg)
+            notebook[key] = fixed
+        tpl = notebook.get("template")
+        if isinstance(tpl, dict) and tpl.get("mediaId"):
+            tpl = dict(tpl)
+            tpl["mediaId"] = new_media(str(tpl["mediaId"]))
+            if not tpl["mediaId"]:
+                tpl.pop("mediaId")
+            notebook["template"] = tpl
     return {
+        "notebook": notebook,
         "sofiaHomeworkId": hw if isinstance(hw, int) and not isinstance(hw, bool) else None,
         "title": str(manifest.get("title") or "Importiertes Blatt")[:200],
         "paper": paper if paper in ("graph", "dots", "lines", "blank") else "graph",

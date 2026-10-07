@@ -184,8 +184,12 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE boards ADD COLUMN solution_error TEXT")
     if "paper" not in board_cols:
         _conn.execute("ALTER TABLE boards ADD COLUMN paper TEXT")
-    if "refs" not in {row[1] for row in _conn.execute("PRAGMA table_info(boards)").fetchall()}:
+    board_cols3 = {row[1] for row in _conn.execute("PRAGMA table_info(boards)").fetchall()}
+    if "refs" not in board_cols3:
         _conn.execute("ALTER TABLE boards ADD COLUMN refs TEXT")
+    if "notebook" not in board_cols3:
+        # Notizbuch mit A4-Seiten statt unendlichem Blatt (JSON: layout, template, pages)
+        _conn.execute("ALTER TABLE boards ADD COLUMN notebook TEXT")
     if "paper" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN paper TEXT")
     people_cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
@@ -600,7 +604,7 @@ def valid_person(person_id: str | None) -> bool:
 
 def _board_row(board_id: str) -> dict[str, Any] | None:
     row = _conn.execute(
-        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error, paper, refs FROM boards WHERE id = ?",
+        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error, paper, refs, notebook FROM boards WHERE id = ?",
         (board_id,),
     ).fetchone()
     if not row:
@@ -623,7 +627,61 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
         "solutionError": row[9],
         "paper": row[10] or "graph",
         "refs": _load_refs(row[11]),
+        "notebook": _load_notebook(row[12]),
     }
+
+
+def _load_notebook(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        nb = json.loads(raw)
+    except ValueError:
+        return None
+    return nb if isinstance(nb, dict) else None
+
+
+def clean_notebook(nb: Any) -> dict[str, Any] | None:
+    """Notizbuch-Daten pruefen: Anordnung, Vorlage fuer neue Seiten, Seitenliste."""
+    if not isinstance(nb, dict):
+        return None
+
+    def page_bg(d: Any) -> dict[str, Any]:
+        d = d if isinstance(d, dict) else {}
+        out: dict[str, Any] = {"paper": d.get("paper") if d.get("paper") in PAPERS else "graph"}
+        if d.get("mediaId"):
+            out["mediaId"] = str(d["mediaId"])[:80]
+        return out
+
+    pages = []
+    for pg in (nb.get("pages") or [])[:2000]:
+        if not isinstance(pg, dict) or not pg.get("id"):
+            continue
+        item = {"id": str(pg["id"])[:60], **page_bg(pg)}
+        try:
+            w = float(pg.get("w") or 794)
+            h = float(pg.get("h") or 1123)
+        except (TypeError, ValueError):
+            w, h = 794.0, 1123.0
+        item["w"] = max(200.0, min(4000.0, w))
+        item["h"] = max(200.0, min(4000.0, h))
+        pages.append(item)
+    return {
+        "layout": "horizontal" if nb.get("layout") == "horizontal" else "vertical",
+        "template": page_bg(nb.get("template")),
+        "pages": pages,
+    }
+
+
+def _set_board_notebook_sync(board_id: str, nb: dict[str, Any] | None) -> bool:
+    cur = _conn.execute("UPDATE boards SET notebook = ?, updated_at = ? WHERE id = ?", (json.dumps(nb) if nb else None, time.time(), board_id))
+    _conn.commit()
+    return cur.rowcount > 0
+
+
+async def set_board_notebook(board_id: str, nb: dict[str, Any] | None) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _set_board_notebook_sync, board_id, nb)
 
 
 def _load_refs(raw: str | None) -> list[dict[str, Any]]:
@@ -673,7 +731,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
     boards = []
     cur = _conn.execute(
         """
-        SELECT b.id, b.owner_id, b.title, b.created_at, b.updated_at, p.folder_id, p.sort_order, p.starred
+        SELECT b.id, b.owner_id, b.title, b.created_at, b.updated_at, p.folder_id, p.sort_order, p.starred, b.notebook IS NOT NULL
         FROM placements p
         JOIN boards b ON b.id = p.board_id
         WHERE p.person_id = ? AND ((p.folder_id IS NULL AND ? IS NULL) OR p.folder_id = ?)
@@ -698,6 +756,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
                 "starred": bool(row[7]),
                 "shared": row[1] != person_id,
                 "sharedWith": shared_with,
+                "notebook": bool(row[8]),
             }
         )
     crumbs = []

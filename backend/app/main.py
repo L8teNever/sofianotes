@@ -422,12 +422,25 @@ async def create_board(request: Request, me: dict = Depends(get_current_person))
     board = await db.create_board(me["id"], title, folder, body.get("id") or None)
     if board is None:
         raise HTTPException(status_code=400, detail="unknown person")
+    nb = db.clean_notebook(body.get("notebook")) if body.get("notebook") else None
+    if nb and not board.get("notebook"):
+        await db.set_board_notebook(board["id"], nb)
+        board = await db.get_board(board["id"])
     return {"ok": True, "board": board}
 
 
 @app.patch("/api/boards/{board_id}")
 async def patch_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
+    if "notebook" in body:
+        # Seiten des Notizbuchs (Anordnung, Vorlage, Hintergrund pro Seite)
+        nb = db.clean_notebook(body.get("notebook"))
+        if not nb or not await db.can_access(me["id"], board_id):
+            raise HTTPException(status_code=400, detail="bad notebook")
+        await db.set_board_notebook(board_id, nb)
+        await manager.broadcast({"type": "board_notebook", "notebook": nb}, board_id=board_id)
+        if "title" not in body and "paper" not in body and "refs" not in body:
+            return {"ok": True, "notebook": nb}
     if "refs" in body:
         # eigene Bilder im Material-Fenster (Buchseite, Foto der Aufgabe ...)
         raw = body.get("refs")
@@ -743,6 +756,9 @@ async def _create_from_parsed(person_id: str, parsed: dict, folder: str | None) 
     me = {"id": person_id}
     bid = board["id"]
     await db.set_board_paper(bid, parsed["paper"])
+    nb = db.clean_notebook(parsed.get("notebook")) if parsed.get("notebook") else None
+    if nb:
+        await db.set_board_notebook(bid, nb)
     if parsed["refs"]:
         await db.set_board_refs(bid, parsed["refs"])
     if parsed["strokes"]:
@@ -782,7 +798,7 @@ async def send_board(board_id: str, request: Request, me: dict = Depends(get_cur
     strokes = await db.load_all(board_id)
     title = board.get("title") or "Blatt"
     if fmt == "pdf":
-        pdf = goodnotes_export.build_pdf(strokes)
+        pdf = goodnotes_export.build_board_pdf(board, strokes)
         for pid in to:
             meta = files.save(pdf, _safe_filename(title) + ".pdf", "application/pdf")
             await db.inbox_add(pid, me["id"], "pdf", title, file_id=meta["id"])
@@ -830,7 +846,7 @@ async def download_pdf(board: str, me: dict = Depends(get_current_person)) -> Re
     if not await db.can_access(me["id"], board):
         raise HTTPException(status_code=404, detail="not found")
     b = await db.get_board(board)
-    pdf = goodnotes_export.build_pdf(await db.load_all(board))
+    pdf = goodnotes_export.build_board_pdf(b, await db.load_all(board))
     from urllib.parse import quote
 
     return Response(

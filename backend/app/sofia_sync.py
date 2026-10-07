@@ -375,7 +375,7 @@ async def upload_solution(board_id: str, manual: bool = False) -> dict[str, Any]
     hw = board["sofiaHomeworkId"]
     loop = asyncio.get_event_loop()
     try:
-        pdf = await loop.run_in_executor(None, goodnotes_export.build_pdf, strokes)
+        pdf = await loop.run_in_executor(None, goodnotes_export.build_board_pdf, board, strokes)
         title = (board.get("title") or "Loesung").strip()
         att = await loop.run_in_executor(None, _upload_pdf, email, title + ".pdf", pdf)
         payload = {"text": "Mit sofianotes geschrieben – " + title, "attachments": [att]}

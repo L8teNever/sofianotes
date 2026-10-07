@@ -150,6 +150,92 @@
     return { check, push };
   })();
 
+  // ---- Notizbuch: A4-Seiten statt unendlichem Blatt ----
+  const A4_W = 794;
+  const A4_H = 1123;
+  const PAGE_GAP = 48;
+  let notebookBoardId = null;
+  let notebook = null; // {layout, template: {paper, mediaId?}, pages: [{id, paper, mediaId?, w, h}]}
+  // Lage der Seiten in Weltkoordinaten (gleich wie auf dem Server fuer den PDF-Export)
+  function pageRects(nb) {
+    const out = [];
+    if (!nb) return out;
+    const horiz = nb.layout === "horizontal";
+    let pos = 0;
+    for (const pg of nb.pages || []) {
+      const w = pg.w || A4_W;
+      const h = pg.h || A4_H;
+      out.push(horiz ? { page: pg, id: pg.id, x: pos, y: 0, w, h } : { page: pg, id: pg.id, x: 0, y: pos, w, h });
+      pos += (horiz ? w : h) + PAGE_GAP;
+    }
+    return out;
+  }
+  function drawPagePattern(paper, r) {
+    if (paper === "blank") return;
+    const g = GRID_SIZE;
+    if (paper === "dots") {
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      const rad = 1.15 / scale;
+      for (let x = r.x + g; x < r.x + r.w - 2; x += g)
+        for (let y = r.y + g; y < r.y + r.h - 2; y += g) {
+          ctx.beginPath();
+          ctx.arc(x, y, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      return;
+    }
+    ctx.lineWidth = 1 / scale;
+    if (paper === "graph") {
+      let i = 1;
+      for (let x = r.x + g; x < r.x + r.w - 2; x += g, i++) {
+        ctx.strokeStyle = i % 4 === 0 ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
+        ctx.beginPath();
+        ctx.moveTo(x, r.y);
+        ctx.lineTo(x, r.y + r.h);
+        ctx.stroke();
+      }
+    }
+    let j = 1;
+    const top = paper === "lines" ? r.y + g * 3 : r.y + g;
+    for (let y = top; y < r.y + r.h - 2; y += g, j++) {
+      ctx.strokeStyle = paper === "lines" ? "rgba(70,90,150,0.20)" : j % 4 === 0 ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
+      ctx.beginPath();
+      ctx.moveTo(r.x, y);
+      ctx.lineTo(r.x + r.w, y);
+      ctx.stroke();
+    }
+    if (paper === "lines") {
+      // Randlinie links wie im Schulheft
+      ctx.strokeStyle = "rgba(217,48,37,0.35)";
+      ctx.beginPath();
+      ctx.moveTo(r.x + g * 2.5, r.y);
+      ctx.lineTo(r.x + g * 2.5, r.y + r.h);
+      ctx.stroke();
+    }
+  }
+  function drawPages() {
+    const a = screenToWorld(viewLeft, 0);
+    const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
+    for (const r of pageRects(notebook)) {
+      if (r.x > b.x || r.x + r.w < a.x || r.y > b.y || r.y + r.h < a.y) continue;
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.16)";
+      ctx.shadowBlur = 14 * scale * dpr;
+      ctx.shadowOffsetY = 3 * scale * dpr;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.clip();
+      const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
+      if (img && img.complete && img.naturalWidth) ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r);
+      ctx.restore();
+    }
+  }
+
   // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
   let historyView = null; // {strokes: Map, marks: Map id->color, ghosts: [stroke]}
   let authorMarks = null; // Map id->color (live: wer hat was geschrieben)
@@ -907,11 +993,13 @@
 
   function draw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = "#f8f9fa";
+    ctx.fillStyle = notebook ? "#e8e6ed" : "#f8f9fa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
-    drawGrid();
+    if (notebook) drawPages();
+    else drawGrid();
+    if (window.sofiaPagesUi) window.sofiaPagesUi();
     // im Versionsverlauf: alter Stand statt des aktuellen Blatts
     const src = historyView ? historyView.strokes : boardStrokes;
     drawHistoryMarks();
@@ -1628,6 +1716,7 @@
   document.querySelectorAll(".btn-grid-style").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (window.sofiaSetPagePaper && window.sofiaSetPagePaper(btn.dataset.grid)) return;
       const was = gridStyle;
       const next = btn.dataset.grid;
       const bid = currentBoardId;
@@ -2583,6 +2672,10 @@
           document.title = (msg.board.title || "sofianotes") + " – sofianotes";
           syncHomeworkPanel(msg.board);
           applyPaper(msg.board.paper);
+          const firstOpen = !notebook || notebookBoardId !== msg.board.id;
+          notebook = msg.board.notebook || null;
+          notebookBoardId = msg.board.id;
+          if (notebook && firstOpen && window.sofiaFitPage) window.sofiaFitPage(0);
         }
         boardStrokes.clear();
         for (const s of msg.strokes) {
@@ -2597,6 +2690,11 @@
       }
       case "board_reload":
         if (currentBoardId) openBoard(currentBoardId, filenameInput ? filenameInput.value : "", { fromHistory: true });
+        break;
+      case "board_notebook":
+        notebook = msg.notebook || null;
+        if (currentBoardMeta) currentBoardMeta.notebook = notebook;
+        requestRedraw();
         break;
       case "board_refs":
         if (currentBoardMeta) currentBoardMeta.refs = msg.refs || [];
@@ -7814,7 +7912,9 @@
       for (const file of files) {
         const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
         const origin = { x, y };
-        if (isPdf) {
+        if (isPdf && notebook && window.sofiaInsertPdfPages) {
+          await window.sofiaInsertPdfPages(file);
+        } else if (isPdf) {
           const placed = await importPdfFile(file, origin);
           placed.forEach((s) => ids.push(s.id));
           if (placed.length) {
@@ -10997,7 +11097,7 @@
   function boardCard(board) {
     const owner = personName(board.ownerId);
     const when = relTime(board.updatedAt);
-    const meta = (board.shared ? "Geteilt von " + owner : "Blatt") + (when ? " · " + when : "");
+    const meta = (board.shared ? "Geteilt von " + owner : board.notebook ? "Notizbuch" : "Blatt") + (when ? " · " + when : "");
     const menu = [
       { icon: "square-pen", label: "Öffnen", run: () => openBoard(board.id, board.title) },
       { icon: "folder-input", label: "In Ordner legen", run: () => openMove("board", board.id) },
@@ -11010,7 +11110,7 @@
     }
     return libCard("board", {
       id: board.id,
-      icon: board.shared ? "users" : "file-pen-line",
+      icon: board.shared ? "users" : board.notebook ? "notebook-pen" : "file-pen-line",
       title: board.title,
       meta,
       starred: board.starred,
@@ -11200,6 +11300,10 @@
       redoStack.length = 0;
       updateUndoRedoButtons();
       disconnectWS();
+    }
+    if (id !== notebookBoardId) {
+      notebook = null;
+      notebookBoardId = null;
     }
     currentBoardId = id;
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
@@ -11396,6 +11500,25 @@
     });
   }
 
+
+  // Notizbuch mit A4-Seiten (Papier der ersten Seite = Standard fuer neue Blaetter)
+  async function createNotebook() {
+    const res = await openNameSheet({ title: "Neues Notizbuch", label: "Titel", placeholder: "z. B. Deutsch Heft" });
+    if (res === null) return;
+    const title = res.value.trim() || "Notizbuch";
+    const paper = mySettings.defaultPaper || "graph";
+    const notebookData = { layout: "vertical", template: { paper }, pages: [{ id: "p" + uuid().slice(0, 12), paper, w: 794, h: 1123 }] };
+    try {
+      const created = await api("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ personId: currentPersonId, title, folderId: currentFolderId, notebook: notebookData }),
+      });
+      await openBoard(created.board.id, created.board.title);
+    } catch (err) {
+      showToast("Notizbuch anlegen geht nur mit Verbindung");
+    }
+  }
 
   async function createBoard() {
     const res = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
@@ -11896,6 +12019,10 @@
     libAddMenu.classList.add("hidden");
     createBoard();
   });
+  document.getElementById("lib-add-notebook")?.addEventListener("click", () => {
+    libAddMenu.classList.add("hidden");
+    createNotebook();
+  });
   document.getElementById("lib-add-folder")?.addEventListener("click", () => {
     libAddMenu.classList.add("hidden");
     createFolder();
@@ -12234,6 +12361,332 @@
   window.addEventListener("offline", () => {
     setConnState("offline");
   });
+
+  // ---- Notizbuch: Seiten-Leiste, Seiten anlegen/loeschen, Hintergruende, PDF-Seiten ----
+  (() => {
+    const bar = document.getElementById("page-bar");
+    const label = document.getElementById("page-label");
+    const menu = document.getElementById("page-menu");
+    const addBig = document.getElementById("page-add-big");
+    const PAPER_LABELS = { graph: "Kariert", lines: "Liniert", dots: "Punkte", blank: "Blanko" };
+    const newId = () => "p" + uuid().slice(0, 12);
+
+    function currentPage() {
+      const rects = pageRects(notebook);
+      if (!rects.length) return 0;
+      const c = screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
+      let best = 0;
+      let bestD = Infinity;
+      rects.forEach((r, i) => {
+        const dx = Math.max(r.x - c.x, 0, c.x - (r.x + r.w));
+        const dy = Math.max(r.y - c.y, 0, c.y - (r.y + r.h));
+        const d = dx * dx + dy * dy;
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      });
+      return best;
+    }
+    // Seite i in die Mitte holen, Breite eingepasst
+    function fitPage(i) {
+      const rects = pageRects(notebook);
+      const r = rects[Math.max(0, Math.min(rects.length - 1, i))];
+      if (!r) return;
+      const avail = window.innerWidth - viewLeft - viewRight;
+      scale = clampZoom(Math.min(1.25, (avail - 48) / r.w));
+      offsetX = viewLeft + (avail - r.w * scale) / 2 - r.x * scale;
+      offsetY = 84 - r.y * scale;
+      requestRedraw();
+    }
+    window.sofiaFitPage = fitPage;
+
+    // Striche wandern mit ihrer Seite mit (bzw. verschwinden mit einer geloeschten Seite)
+    function moveStrokesWithPages(oldRects, newRects) {
+      const byId = new Map(newRects.map((r) => [r.id, r]));
+      const erase = [];
+      for (const st of boardStrokes.values()) {
+        const b = st.bbox || strokeWorldBBox(st);
+        const cx = (b.minX + b.maxX) / 2;
+        const cy = (b.minY + b.maxY) / 2;
+        const old = oldRects.find((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h);
+        if (!old) continue;
+        const nw = byId.get(old.id);
+        if (!nw) {
+          erase.push(st.id);
+          continue;
+        }
+        const dx = nw.x - old.x;
+        const dy = nw.y - old.y;
+        if (!dx && !dy) continue;
+        for (const p of st.points) {
+          p.x += dx;
+          p.y += dy;
+        }
+        st.bbox = strokeWorldBBox(st);
+        tagShape(st);
+        wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
+      }
+      if (erase.length) {
+        for (const id of erase) boardStrokes.delete(id);
+        wsSend({ type: "erase", strokeIds: erase });
+      }
+    }
+    async function saveNotebook(next, opts) {
+      const bid = currentBoardId;
+      const before = notebook;
+      if (opts && opts.moveStrokes) moveStrokesWithPages(pageRects(before), pageRects(next));
+      notebook = next;
+      if (currentBoardMeta) currentBoardMeta.notebook = next;
+      requestRedraw();
+      try {
+        await api("/api/boards/" + encodeURIComponent(bid), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notebook: next }),
+        });
+      } catch (err) {
+        showToast("Seiten speichern hat nicht geklappt");
+      }
+    }
+    const clone = () => JSON.parse(JSON.stringify(notebook));
+    function templatePage() {
+      const t = (notebook && notebook.template) || { paper: "graph" };
+      const pg = { id: newId(), paper: t.paper || "graph", w: A4_W, h: A4_H };
+      if (t.mediaId) {
+        pg.mediaId = t.mediaId;
+        if (t.w && t.h) {
+          pg.w = t.w;
+          pg.h = t.h;
+        }
+      }
+      return pg;
+    }
+    function addPages(afterIndex, pages) {
+      const nb = clone();
+      nb.pages.splice(afterIndex + 1, 0, ...pages);
+      saveNotebook(nb, { moveStrokes: true });
+      fitPage(afterIndex + 1);
+    }
+    async function deletePage(i) {
+      if (notebook.pages.length <= 1) return showToast("Die letzte Seite kann nicht gelöscht werden");
+      const ok = await askConfirm({ title: "Seite " + (i + 1) + " löschen?", text: "Alles, was auf dieser Seite steht, wird mitgelöscht.", ok: "Löschen" });
+      if (!ok) return;
+      const nb = clone();
+      nb.pages.splice(i, 1);
+      saveNotebook(nb, { moveStrokes: true });
+      fitPage(Math.min(i, nb.pages.length - 1));
+    }
+    function setPageBg(i, bg) {
+      const nb = clone();
+      const pg = nb.pages[i];
+      pg.paper = bg.paper || pg.paper || "graph";
+      if (bg.mediaId) pg.mediaId = bg.mediaId;
+      else delete pg.mediaId;
+      saveNotebook(nb);
+    }
+    function setLayout(layout) {
+      if (notebook.layout === layout) return;
+      const i = currentPage();
+      const nb = clone();
+      nb.layout = layout;
+      saveNotebook(nb, { moveStrokes: true });
+      fitPage(i);
+    }
+    function setTemplate(t) {
+      const nb = clone();
+      nb.template = t;
+      saveNotebook(nb);
+    }
+    window.sofiaSetPagePaper = (paper) => {
+      if (!notebook) return false;
+      setPageBg(currentPage(), { paper });
+      return true;
+    };
+
+    // PDF oder Bild in Seitenbilder umwandeln
+    async function fileToPageImages(file, maxPages) {
+      const out = [];
+      const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name || "");
+      if (isPdf) {
+        if (window.ensurePdf) await window.ensurePdf().catch(() => null);
+        if (!window.pdfjsLib) throw new Error("pdfjs");
+        const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+        const n = Math.min(pdf.numPages, maxPages || 200);
+        for (let i = 1; i <= n; i++) {
+          showToast("PDF-Seite " + i + " von " + n + " …");
+          const page = await pdf.getPage(i);
+          const base = page.getViewport({ scale: 1 });
+          const vp = page.getViewport({ scale: Math.min(2.5, 2000 / Math.max(base.width, base.height)) });
+          const c = document.createElement("canvas");
+          c.width = Math.round(vp.width);
+          c.height = Math.round(vp.height);
+          await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+          const jpeg = bitmapToJpeg(c, 2000);
+          c.width = c.height = 0;
+          out.push({ mediaId: await uploadJpeg(jpeg.dataUrl), ratio: base.height / base.width });
+        }
+      } else {
+        const bmp = await createImageBitmap(file);
+        const jpeg = bitmapToJpeg(bmp, 2000);
+        const ratio = bmp.height / bmp.width;
+        if (bmp.close) bmp.close();
+        out.push({ mediaId: await uploadJpeg(jpeg.dataUrl), ratio });
+      }
+      return out;
+    }
+    // PDF ins Notizbuch: jede PDF-Seite wird eine eigene Seite (in voller Seitengroesse)
+    window.sofiaInsertPdfPages = async (file) => {
+      if (!notebook) return false;
+      try {
+        const imgs = await fileToPageImages(file, 200);
+        const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        addPages(currentPage(), pages);
+        showToast(pages.length + (pages.length === 1 ? " Seite" : " Seiten") + " eingefügt");
+      } catch (err) {
+        showToast("PDF einfügen hat nicht geklappt");
+      }
+      return true;
+    };
+    const bgInput = document.createElement("input");
+    bgInput.type = "file";
+    bgInput.accept = "image/*,application/pdf,.pdf";
+    bgInput.style.display = "none";
+    document.body.appendChild(bgInput);
+    let bgTarget = null; // {kind: "page", index} | {kind: "template"}
+    bgInput.addEventListener("change", async () => {
+      const file = bgInput.files && bgInput.files[0];
+      bgInput.value = "";
+      if (!file || !bgTarget) return;
+      try {
+        showToast("Hintergrund wird geladen…");
+        const [im] = await fileToPageImages(file, 1);
+        if (!im) return;
+        if (bgTarget.kind === "template") {
+          setTemplate({ paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) });
+          showToast("Neue Seiten bekommen diesen Hintergrund");
+        } else setPageBg(bgTarget.index, { paper: "blank", mediaId: im.mediaId });
+      } catch (err) {
+        showToast("Hintergrund laden hat nicht geklappt");
+      }
+    });
+
+    // ---- Menue ----
+    function closeMenu() {
+      menu.classList.add("hidden");
+    }
+    function openMenu(items) {
+      menu.innerHTML = "";
+      for (const it of items) {
+        if (it.head) {
+          const h = document.createElement("div");
+          h.className = "page-menu-head";
+          h.textContent = it.head;
+          menu.appendChild(h);
+          continue;
+        }
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "lib-add-opt" + (it.active ? " shared" : "") + (it.danger ? " danger" : "");
+        b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+        b.children[0].textContent = it.icon;
+        b.children[1].textContent = it.label;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          closeMenu();
+          it.run();
+        });
+        menu.appendChild(b);
+      }
+      menu.classList.remove("hidden");
+      const r = document.getElementById("page-more").getBoundingClientRect();
+      const mh = menu.offsetHeight;
+      const mw = menu.offsetWidth;
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left)) + "px";
+      menu.style.top = Math.max(8, r.top - mh - 8) + "px";
+    }
+    function pageMenu() {
+      const i = currentPage();
+      const pg = notebook.pages[i];
+      const t = notebook.template || {};
+      const items = [{ head: "Seite " + (i + 1) + " – Hintergrund" }];
+      for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBg(i, { paper: k }) });
+      items.push({ icon: "description", label: "Bild oder PDF als Hintergrund …", active: !!pg.mediaId, run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
+      items.push({ head: "Seiten" });
+      items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
+      items.push({ icon: "content_copy", label: "Seite davor einfügen", run: () => addPages(i - 1, [templatePage()]) });
+      items.push({ icon: "delete", label: "Seite löschen", danger: true, run: () => deletePage(i) });
+      items.push({ head: "Notizbuch" });
+      items.push({ icon: "view_column", label: notebook.layout === "horizontal" ? "Seiten untereinander anordnen" : "Seiten nebeneinander anordnen", run: () => setLayout(notebook.layout === "horizontal" ? "vertical" : "horizontal") });
+      items.push({ head: "Neue Seiten bekommen" });
+      for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: "note_add", label: PAPER_LABELS[k], active: !t.mediaId && (t.paper || "graph") === k, run: () => setTemplate({ paper: k }) });
+      items.push({ icon: "upload_file", label: "Eigene Vorlage (Bild/PDF) …", active: !!t.mediaId, run: () => ((bgTarget = { kind: "template" }), bgInput.click()) });
+      openMenu(items);
+    }
+    document.getElementById("page-more").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!menu.classList.contains("hidden")) return closeMenu();
+      pageMenu();
+    });
+    document.getElementById("page-label").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!menu.classList.contains("hidden")) return closeMenu();
+      const items = [{ head: "Zu Seite springen" }];
+      notebook.pages.forEach((pg, i) => items.push({ icon: pg.mediaId ? "description" : "crop_portrait", label: "Seite " + (i + 1), active: i === currentPage(), run: () => fitPage(i) }));
+      openMenu(items);
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!menu.classList.contains("hidden") && !e.target.closest("#page-menu") && !e.target.closest("#page-bar")) closeMenu();
+    }, true);
+    menu.addEventListener("pointerdown", (e) => e.stopPropagation());
+    bar.addEventListener("pointerdown", (e) => e.stopPropagation());
+    document.getElementById("page-prev").addEventListener("click", (e) => {
+      e.stopPropagation();
+      fitPage(currentPage() - 1);
+    });
+    document.getElementById("page-next").addEventListener("click", (e) => {
+      e.stopPropagation();
+      fitPage(currentPage() + 1);
+    });
+    document.getElementById("page-add").addEventListener("click", (e) => {
+      e.stopPropagation();
+      addPages(currentPage(), [templatePage()]);
+    });
+    addBig.addEventListener("pointerdown", (e) => e.stopPropagation());
+    addBig.addEventListener("click", (e) => {
+      e.stopPropagation();
+      addPages(notebook.pages.length - 1, [templatePage()]);
+    });
+
+    // bei jedem Zeichnen: Leiste und "Neue Seite"-Knopf hinter der letzten Seite
+    let lastLabel = "";
+    window.sofiaPagesUi = () => {
+      const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
+      bar.classList.toggle("hidden", !show);
+      if (!show) {
+        addBig.classList.add("hidden");
+        closeMenu();
+        return;
+      }
+      const t = currentPage() + 1 + " / " + notebook.pages.length;
+      if (t !== lastLabel) label.textContent = lastLabel = t;
+      const rects = pageRects(notebook);
+      const last = rects[rects.length - 1];
+      if (!last || historyView) {
+        addBig.classList.add("hidden");
+        return;
+      }
+      const horiz = notebook.layout === "horizontal";
+      const p = horiz ? worldToScreen(last.x + last.w + PAGE_GAP / 2, last.y + last.h / 2) : worldToScreen(last.x + last.w / 2, last.y + last.h + PAGE_GAP / 2);
+      const onScreen = p.x > viewLeft - 100 && p.x < window.innerWidth - viewRight + 100 && p.y > -60 && p.y < window.innerHeight + 60;
+      addBig.classList.toggle("hidden", !onScreen);
+      addBig.classList.toggle("vertical", horiz);
+      if (onScreen) {
+        addBig.style.left = p.x + "px";
+        addBig.style.top = p.y + "px";
+      }
+    };
+  })();
 
   // ---- Versionsverlauf (wie bei Google Docs) ----
   (() => {
