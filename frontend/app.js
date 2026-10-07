@@ -7775,6 +7775,7 @@
   }
 
   async function importPdfFile(file, origin) {
+    if (window.ensurePdf) await window.ensurePdf().catch(() => null);
     if (!window.pdfjsLib) throw new Error("pdfjs");
     const buf = await file.arrayBuffer();
     const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
@@ -8944,7 +8945,10 @@
 
   function ensureEmnistLoaded() {
     if (typeof SofiaInk === "undefined") return;
-    SofiaInk.loadEmnistModel("/models/emnist/model.json");
+    // TensorFlow erst nach dem Start im Hintergrund laden
+    const go = () => SofiaInk.loadEmnistModel("/models/emnist/model.json");
+    if (window.tf || !window.ensureTf) go();
+    else window.ensureTf().then(go, () => {});
     SofiaInk.loadMemory();
   }
 
@@ -10528,6 +10532,7 @@
   async function buildPdfView(url) {
     let v = pdfViews.get(url);
     if (v) return v;
+    if (window.ensurePdf) await window.ensurePdf().catch(() => null);
     if (!window.pdfjsLib) throw new Error("pdfjs");
     const el = document.createElement("div");
     v = { w: PDF_VIEW_W, h: 0, el, ready: null };
@@ -12888,6 +12893,11 @@
     if (st.hist.length) prevEl.textContent = st.hist[st.hist.length - 1].e + " =";
     if (st.open) setOpen(true);
   })();
+
+  // Texterkennung im Hintergrund vorladen, wenn die App schon laeuft
+  setTimeout(() => {
+    if (window.ensureTf) window.ensureTf().catch(() => {});
+  }, 6000);
 
   resizeCanvas();
   offsetX = window.innerWidth / 2;

@@ -88,6 +88,28 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Versionierte eigene Dateien (?v=BUILD), feste CDN-Versionen und Modelle aendern sich nie:
+  // direkt aus dem Cache, ohne erst beim Server nachzufragen (schneller Start)
+  const immutable =
+    (url.origin === self.location.origin && (url.searchParams.has("v") || url.pathname.startsWith("/models/") || url.pathname.startsWith("/icons/"))) ||
+    (isCdn(url) && /@\d|\/\d+\.\d+\.\d+\//.test(url.pathname));
+  if (immutable) {
+    event.respondWith(
+      caches.match(event.request).then(
+        (hit) =>
+          hit ||
+          fetch(event.request).then((response) => {
+            if (response.ok) {
+              const copy = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+            }
+            return response;
+          })
+      )
+    );
+    return;
+  }
+
   if (url.origin === self.location.origin || isCdn(url)) {
     event.respondWith(
       fetch(event.request)

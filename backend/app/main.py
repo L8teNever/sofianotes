@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import board_file, cloudflare_ocr, db, files, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
@@ -31,12 +32,17 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         if request.url.path == "/service-worker.js":
             response.headers["Cache-Control"] = "no-store"
+        elif request.query_params.get("v") and not request.url.path.startswith("/api/") and request.url.path not in ("/", "/index.html"):
+            # versionierte Dateien (style.css?v=BUILD ...) aendern sich nie -> darf lange im Cache bleiben
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         elif request.url.path == "/" or not request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
         return response
 
 
 app.add_middleware(NoCacheStaticMiddleware)
+# Text komprimiert ausliefern (app.js ~500 KB -> ~120 KB)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @app.on_event("startup")
