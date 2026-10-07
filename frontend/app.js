@@ -37,6 +37,7 @@
     "sofianotes-hwpanel-layout",
     "sofianotes-hwpanel",
     "sofianotes-hwpill-pos",
+    "sofianotes-calc",
   ];
   const PREF_META = "sofianotes-prefs-sync"; // {at, dirty}
   const prefSync = (() => {
@@ -2033,6 +2034,7 @@
     { key: "modes", label: "Modus-Knöpfe", icon: "ink_pen", sel: "#mode-switch" },
     { key: "ruler", label: "Lineal", icon: "straighten", sel: "#btn-ruler" },
     { key: "zoom", label: "Zoom-Fenster", icon: "zoom_in_map", sel: "#btn-zoom-window" },
+    { key: "calc", label: "Rechner", icon: "calculate", sel: "#btn-calc" },
     { key: "hw", label: "Aufgabe", icon: "assignment", sel: "#btn-hw-panel" },
     { key: "insert", label: "Einfügen", icon: "add_box", sel: ".insert-menu-wrap" },
   ];
@@ -2121,6 +2123,7 @@
         add("lasso_select", "Lasso", click('.mode-btn[data-mode="lasso"]'));
       } else if (key === "ruler") add("straighten", "Lineal an/aus", click("#btn-ruler"));
       else if (key === "zoom") add("zoom_in_map", "Zoom-Fenster", click("#btn-zoom-window"));
+      else if (key === "calc") add("calculate", "Rechner", click("#btn-calc"));
       else if (key === "hw" && !document.getElementById("btn-hw-panel").classList.contains("hidden")) add("assignment", "Aufgabe", click("#btn-hw-panel"));
       else if (key === "insert") {
         add("table", "Tabelle einfügen", click("#insert-table"));
@@ -11997,6 +12000,407 @@
   window.addEventListener("offline", () => {
     setConnState("offline");
   });
+
+  // ---- Rechner & Umrechner (schwebendes Fenster) ----
+  (() => {
+    const win = document.getElementById("calc-win");
+    const btn = document.getElementById("btn-calc");
+    if (!win || !btn) return;
+    const exprEl = document.getElementById("calc-expr");
+    const liveEl = document.getElementById("calc-live");
+    const prevEl = document.getElementById("calc-prev");
+    let st = Object.assign({ open: false, tab: "calc", x: null, y: null, cat: "speed", from: "km/h", to: "m/s" }, lsGet("sofianotes-calc", {}));
+    const save = () => lsSet("sofianotes-calc", st);
+    let expr = "";
+    let ans = 0;
+    let calcFocused = false;
+
+    // Zahlen deutsch: Komma, bis 10 gueltige Stellen, sehr gross/klein mit Exponent
+    function fmt(v) {
+      if (!Number.isFinite(v)) return "Fehler";
+      if (v === 0) return "0";
+      const a = Math.abs(v);
+      if (a >= 1e15 || a < 1e-9) return v.toExponential(6).replace(".", ",").replace("e+", " · 10^").replace("e-", " · 10^-");
+      const r = Number(v.toPrecision(12));
+      return r.toLocaleString("de-DE", { maximumFractionDigits: 10, useGrouping: true });
+    }
+    // Kleiner Rechen-Parser (kein eval): + - × ÷ ^ % ( ) √ sin cos tan log ln π e Ans, Winkel in Grad
+    function evaluate(src) {
+      const s = src.replace(/×/g, "*").replace(/÷/g, "/").replace(/−/g, "-").replace(/,/g, ".");
+      let i = 0;
+      const peek = () => s[i];
+      const ws = () => {
+        while (s[i] === " ") i++;
+      };
+      const rad = (d) => (d * Math.PI) / 180;
+      const FN = {
+        sin: (x) => Math.sin(rad(x)),
+        cos: (x) => Math.cos(rad(x)),
+        tan: (x) => Math.tan(rad(x)),
+        log: Math.log10,
+        ln: Math.log,
+        "√": Math.sqrt,
+      };
+      function primary() {
+        ws();
+        const c = peek();
+        if (c === "(") {
+          i++;
+          const v = expr0();
+          ws();
+          if (peek() === ")") i++;
+          return v;
+        }
+        if (c === "-") {
+          i++;
+          return -power();
+        }
+        if (c === "+") {
+          i++;
+          return power();
+        }
+        if (c === "π") {
+          i++;
+          return Math.PI;
+        }
+        if (s.startsWith("Ans", i)) {
+          i += 3;
+          return ans;
+        }
+        for (const name of Object.keys(FN)) {
+          if (s.startsWith(name, i)) {
+            i += name.length;
+            return FN[name](power());
+          }
+        }
+        if (c === "e" && !/[0-9]/.test(s[i + 1] || "")) {
+          i++;
+          return Math.E;
+        }
+        const m = /^[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?|^[0-9]+\./.exec(s.slice(i));
+        if (!m) throw new Error("syntax");
+        i += m[0].length;
+        return parseFloat(m[0]);
+      }
+      function postfix() {
+        let v = primary();
+        for (;;) {
+          ws();
+          if (peek() === "%") {
+            i++;
+            v /= 100;
+          } else if (peek() === "²") {
+            i++;
+            v *= v;
+          } else if (peek() === "(" || peek() === "π" || peek() === "√" || /[a-zA-Z]/.test(peek() || "")) {
+            v *= primary(); // 2π, 3(4+1), 2√9
+          } else return v;
+        }
+      }
+      function power() {
+        const b = postfix();
+        ws();
+        if (peek() === "^") {
+          i++;
+          return Math.pow(b, power());
+        }
+        return b;
+      }
+      function term() {
+        let v = power();
+        for (;;) {
+          ws();
+          const c = peek();
+          if (c === "*") {
+            i++;
+            v *= power();
+          } else if (c === "/") {
+            i++;
+            v /= power();
+          } else return v;
+        }
+      }
+      function expr0() {
+        let v = term();
+        for (;;) {
+          ws();
+          const c = peek();
+          if (c === "+") {
+            i++;
+            v += term();
+          } else if (c === "-") {
+            i++;
+            v -= term();
+          } else return v;
+        }
+      }
+      const v = expr0();
+      ws();
+      if (i < s.length) throw new Error("syntax");
+      return v;
+    }
+    function balance(e) {
+      let open = 0;
+      for (const ch of e) {
+        if (ch === "(") open++;
+        else if (ch === ")") open--;
+      }
+      return e + ")".repeat(Math.max(0, open));
+    }
+    function renderCalc() {
+      exprEl.textContent = expr || "0";
+      let live = "";
+      if (expr && /[^0-9,]/.test(expr)) {
+        try {
+          live = "= " + fmt(evaluate(balance(expr)));
+        } catch (err) {
+          live = "";
+        }
+      }
+      liveEl.textContent = live;
+    }
+    function press(k) {
+      if (k === "AC") expr = "";
+      else if (k === "⌫") {
+        const fn = /(sin\(|cos\(|tan\(|log\(|ln\(|Ans)$/.exec(expr);
+        expr = fn ? expr.slice(0, -fn[0].length) : expr.slice(0, -1);
+      } else if (k === "=") {
+        if (!expr) return;
+        try {
+          const v = evaluate(balance(expr));
+          prevEl.textContent = balance(expr) + " =";
+          ans = v;
+          const big = Math.abs(v) >= 1e15 || (v !== 0 && Math.abs(v) < 1e-9);
+          expr = !Number.isFinite(v) ? "" : big ? String(v).replace(".", ",") : fmt(v).replace(/\./g, "");
+          if (!Number.isFinite(v)) liveEl.textContent = "Fehler";
+        } catch (err) {
+          liveEl.textContent = "Fehler";
+          return;
+        }
+      } else if (k === "x²") expr += "²";
+      else if (k === "xʸ") expr += "^";
+      else if (["sin", "cos", "tan", "log", "ln"].includes(k)) expr += k + "(";
+      else if (k === "√") expr += "√(";
+      else expr += k;
+      renderCalc();
+    }
+    const KEYS = [
+      ["sin", "cos", "tan", "√", "xʸ"],
+      ["(", ")", "%", "AC", "⌫"],
+      ["7", "8", "9", "÷", "π"],
+      ["4", "5", "6", "×", "x²"],
+      ["1", "2", "3", "−", "log"],
+      ["0", ",", "Ans", "+", "="],
+    ];
+    const keysEl = document.getElementById("calc-keys");
+    for (const row of KEYS)
+      for (const k of row) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = k;
+        b.className = "calc-key" + (/^[0-9,]$/.test(k) ? " num" : k === "=" ? " eq" : ["AC", "⌫"].includes(k) ? " clr" : " op");
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          press(k);
+        });
+        keysEl.appendChild(b);
+      }
+    // Tastatur (wenn das Fenster offen ist und nichts anderes Eingaben hat)
+    window.addEventListener("keydown", (e) => {
+      if (win.classList.contains("hidden") || !calcFocused || st.tab !== "calc" || e.metaKey || e.ctrlKey) return;
+      const a = document.activeElement;
+      if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable)) return;
+      const map = { "*": "×", "/": "÷", "-": "−", Enter: "=", "=": "=", Backspace: "⌫", Escape: "AC", ".": "," };
+      const k = map[e.key] || (/^[0-9+()%^,]$/.test(e.key) ? e.key : null);
+      if (!k) return;
+      e.preventDefault();
+      e.stopPropagation();
+      press(k === "^" ? "xʸ" : k);
+    }, true);
+
+    // ---- Umrechner ----
+    const T = (c, f) => ({ toBase: c, fromBase: f });
+    const CATS = {
+      speed: { name: "Geschwindigkeit", units: { "km/h": 1 / 3.6, "m/s": 1, mph: 0.44704, Knoten: 1852 / 3600, "ft/s": 0.3048, "Mach": 343 } },
+      length: { name: "Länge", units: { mm: 0.001, cm: 0.01, dm: 0.1, m: 1, km: 1000, Zoll: 0.0254, Fuß: 0.3048, Yard: 0.9144, Meile: 1609.344, Seemeile: 1852, Lichtjahr: 9.4607304725808e15 } },
+      area: { name: "Fläche", units: { "mm²": 1e-6, "cm²": 1e-4, "dm²": 0.01, "m²": 1, a: 100, ha: 1e4, "km²": 1e6, Acre: 4046.8564224 } },
+      volume: { name: "Volumen", units: { ml: 1e-6, cl: 1e-5, dl: 1e-4, l: 1e-3, "cm³": 1e-6, "dm³": 1e-3, "m³": 1, Gallone: 0.003785411784 } },
+      mass: { name: "Masse", units: { mg: 1e-6, g: 1e-3, kg: 1, t: 1000, Pfund: 0.45359237, Unze: 0.028349523125 } },
+      time: { name: "Zeit", units: { ms: 0.001, s: 1, min: 60, h: 3600, Tag: 86400, Woche: 604800, Jahr: 31557600 } },
+      temp: { name: "Temperatur", units: { "°C": T((v) => v + 273.15, (k) => k - 273.15), "°F": T((v) => ((v - 32) * 5) / 9 + 273.15, (k) => ((k - 273.15) * 9) / 5 + 32), K: T((v) => v, (k) => k) } },
+      pressure: { name: "Druck", units: { Pa: 1, hPa: 100, kPa: 1000, bar: 1e5, mbar: 100, atm: 101325, psi: 6894.757293168, mmHg: 133.322387415 } },
+      energy: { name: "Energie", units: { J: 1, kJ: 1000, cal: 4.184, kcal: 4184, Wh: 3600, kWh: 3.6e6, eV: 1.602176634e-19 } },
+      power: { name: "Leistung", units: { W: 1, kW: 1000, MW: 1e6, PS: 735.49875 } },
+      angle: { name: "Winkel", units: { Grad: 1, rad: 180 / Math.PI, gon: 0.9, Umdrehung: 360 } },
+      data: { name: "Datenmenge", units: { Bit: 0.125, Byte: 1, KB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12, KiB: 1024, MiB: 1048576, GiB: 1073741824 } },
+    };
+    const catSel = document.getElementById("conv-cat");
+    const fromSel = document.getElementById("conv-from");
+    const toSel = document.getElementById("conv-to");
+    const inEl = document.getElementById("conv-in");
+    const outEl = document.getElementById("conv-out");
+    const allEl = document.getElementById("conv-all");
+    for (const [k, c] of Object.entries(CATS)) catSel.add(new Option(c.name, k));
+    const toBase = (cat, u, v) => {
+      const f = CATS[cat].units[u];
+      return typeof f === "number" ? v * f : f.toBase(v);
+    };
+    const fromBase = (cat, u, b) => {
+      const f = CATS[cat].units[u];
+      return typeof f === "number" ? b / f : f.fromBase(b);
+    };
+    function fillUnits() {
+      const units = Object.keys(CATS[st.cat].units);
+      if (!units.includes(st.from)) st.from = units[0];
+      if (!units.includes(st.to)) st.to = units[1] || units[0];
+      for (const sel of [fromSel, toSel]) {
+        sel.innerHTML = "";
+        for (const u of units) sel.add(new Option(u, u));
+      }
+      catSel.value = st.cat;
+      fromSel.value = st.from;
+      toSel.value = st.to;
+    }
+    function renderConv() {
+      let v;
+      try {
+        v = inEl.value.trim() ? evaluate(inEl.value) : NaN;
+      } catch (err) {
+        v = NaN;
+      }
+      allEl.innerHTML = "";
+      if (!Number.isFinite(v)) {
+        outEl.textContent = "–";
+        return;
+      }
+      const base = toBase(st.cat, st.from, v);
+      outEl.textContent = fmt(fromBase(st.cat, st.to, base));
+      for (const u of Object.keys(CATS[st.cat].units)) {
+        if (u === st.from) continue;
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "conv-line" + (u === st.to ? " active" : "");
+        row.innerHTML = "<span></span><strong></strong>";
+        row.children[0].textContent = u;
+        row.children[1].textContent = fmt(fromBase(st.cat, u, base));
+        row.addEventListener("click", (e) => {
+          e.stopPropagation();
+          st.to = u;
+          toSel.value = u;
+          save();
+          renderConv();
+        });
+        allEl.appendChild(row);
+      }
+    }
+    catSel.addEventListener("change", () => {
+      st.cat = catSel.value;
+      st.from = st.to = null;
+      fillUnits();
+      save();
+      renderConv();
+    });
+    fromSel.addEventListener("change", () => {
+      st.from = fromSel.value;
+      save();
+      renderConv();
+    });
+    toSel.addEventListener("change", () => {
+      st.to = toSel.value;
+      save();
+      renderConv();
+    });
+    inEl.addEventListener("input", renderConv);
+    document.getElementById("conv-swap").addEventListener("click", (e) => {
+      e.stopPropagation();
+      [st.from, st.to] = [st.to, st.from];
+      const out = outEl.textContent;
+      if (out && out !== "–" && !out.includes("10^")) inEl.value = out.replace(/\./g, "");
+      fillUnits();
+      save();
+      renderConv();
+    });
+
+    // ---- Fenster: Reiter, Oeffnen, Verschieben ----
+    function showTab(tab) {
+      st.tab = tab;
+      win.querySelectorAll(".calc-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+      win.querySelectorAll(".calc-body").forEach((b) => b.classList.toggle("hidden", b.dataset.tab !== tab));
+      save();
+      place();
+    }
+    win.querySelectorAll(".calc-tab").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showTab(b.dataset.tab);
+      })
+    );
+    function place() {
+      const w = win.offsetWidth || 300;
+      const h = win.offsetHeight || 420;
+      const x = st.x == null ? window.innerWidth - w - 24 : st.x;
+      const y = st.y == null ? 90 : st.y;
+      win.style.left = Math.max(6, Math.min(window.innerWidth - w - 6, x)) + "px";
+      win.style.top = Math.max(6, Math.min(window.innerHeight - Math.min(h, 120), y)) + "px";
+    }
+    function setOpen(open) {
+      st.open = open;
+      win.classList.toggle("hidden", !open);
+      btn.classList.toggle("active", open);
+      save();
+      if (open) {
+        showTab(st.tab);
+        renderCalc();
+      }
+    }
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setOpen(win.classList.contains("hidden"));
+    });
+    document.getElementById("calc-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      setOpen(false);
+    });
+    // nichts im Fenster darf aufs Blatt malen; Tastatur gehoert dem Rechner nur nach Klick hinein
+    win.addEventListener("pointerdown", (e) => {
+      calcFocused = true;
+      e.stopPropagation();
+    });
+    window.addEventListener("pointerdown", () => (calcFocused = false), true);
+    const head = document.getElementById("calc-head");
+    let drag = null;
+    head.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) return;
+      e.preventDefault();
+      const r = win.getBoundingClientRect();
+      drag = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top };
+      try {
+        head.setPointerCapture(e.pointerId);
+      } catch (err) {}
+    });
+    head.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      st.x = e.clientX - drag.dx;
+      st.y = e.clientY - drag.dy;
+      place();
+    });
+    const endDrag = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      drag = null;
+      const r = win.getBoundingClientRect();
+      st.x = r.left;
+      st.y = r.top;
+      save();
+    };
+    head.addEventListener("pointerup", endDrag);
+    head.addEventListener("pointercancel", endDrag);
+    window.addEventListener("resize", () => {
+      if (!win.classList.contains("hidden")) place();
+    });
+    fillUnits();
+    renderConv();
+    if (st.open) setOpen(true);
+  })();
 
   resizeCanvas();
   offsetX = window.innerWidth / 2;
