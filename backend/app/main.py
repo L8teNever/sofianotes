@@ -609,9 +609,10 @@ async def upload_file(request: Request, me: dict = Depends(get_current_person)) 
     """Datei fuers Material-Fenster (Body = Dateiinhalt, ?name=...)."""
     data = await request.body()
     try:
-        meta = files.save(data, request.query_params.get("name") or "Datei", request.headers.get("content-type") or "")
+        meta = files.save(data, request.query_params.get("name") or "Datei", request.headers.get("content-type") or "", request.query_params.get("id") or None)
     except ValueError as exc:
-        raise HTTPException(status_code=413 if str(exc) == "too_large" else 400, detail=str(exc)) from exc
+        code = {"too_large": 413, "exists": 409}.get(str(exc), 400)
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
     return {"ok": True, **meta}
 
 

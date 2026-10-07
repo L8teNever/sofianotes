@@ -27,12 +27,20 @@ def clean_name(name: str) -> str:
     return name[:160] or "Datei"
 
 
-def save(data: bytes, name: str, mime: str) -> dict[str, Any]:
+def save(data: bytes, name: str, mime: str, file_id: str | None = None) -> dict[str, Any]:
+    """file_id: vom Browser vorab vergeben (Datei ist dort schon sichtbar), sonst neu."""
     if not data:
         raise ValueError("empty")
     if len(data) > MAX_BYTES:
         raise ValueError("too_large")
-    file_id = str(uuid.uuid4())
+    if file_id:
+        file_id = file_id.lower()
+        if not valid_id(file_id):
+            raise ValueError("bad_id")
+        if _paths(file_id)[0].exists():
+            raise ValueError("exists")
+    else:
+        file_id = str(uuid.uuid4())
     meta = {"id": file_id, "name": clean_name(name), "mime": (mime or "application/octet-stream")[:120], "bytes": len(data)}
     blob_path, meta_path = _paths(file_id)
     blob_path.write_bytes(data)

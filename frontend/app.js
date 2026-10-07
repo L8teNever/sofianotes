@@ -10576,8 +10576,37 @@
   function isPdfItem(a) {
     return /pdf/i.test(a.mime || "") || /\.pdf$/i.test(a.name || "") || /\.pdf(%|$|\?)/i.test(a.url || "");
   }
+  // Dateien, die noch hochgeladen werden: bis dahin direkt aus dem Speicher des Geraets
+  const pendingFiles = new Map(); // fileId -> objectURL
   function ownFileUrl(r) {
-    return "/api/files/" + encodeURIComponent(r.fileId);
+    return pendingFiles.get(r.fileId) || "/api/files/" + encodeURIComponent(r.fileId);
+  }
+  async function uploadFileBg(id, file, bid) {
+    const waits = [0, 2000, 5000, 12000, 30000];
+    let lastStatus = 0;
+    for (const w of waits) {
+      if (w) await new Promise((res) => setTimeout(res, w));
+      try {
+        const r = await fetch("/api/files?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(file.name || "Datei"), {
+          method: "POST",
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        if (r.ok || r.status === 409) {
+          const url = pendingFiles.get(id);
+          pendingFiles.delete(id);
+          if (url) setTimeout(() => URL.revokeObjectURL(url), 120000);
+          return true;
+        }
+        lastStatus = r.status;
+        if (r.status >= 400 && r.status < 500) break; // zu gross / abgelehnt: Wiederholen hilft nicht
+      } catch (err) {
+        /* kein Netz: gleich nochmal versuchen */
+      }
+    }
+    showToast("„" + (file.name || "Datei") + "“ " + (lastStatus === 413 ? "ist zu groß (max. 60 MB)" : "konnte nicht hochgeladen werden") + " – wieder entfernt");
+    if (bid === currentBoardId) saveBoardRefs(boardRefs().filter((x) => x.fileId !== id));
+    return false;
   }
   // alles, was im Fenster geoeffnet werden kann: erst Bilder (Reihenfolge wie die
   // Vorschaubilder), dann PDFs der Aufgabe und eigene PDFs
@@ -10619,21 +10648,23 @@
     const files = Array.from(refFileInput.files || []);
     refFileInput.value = "";
     if (!files.length || !currentBoardId) return;
-    showToast(files.length > 1 ? "Dateien werden hinzugefügt…" : "Wird hinzugefügt…");
+    const bid = currentBoardId;
     const added = [];
+    const uploads = [];
     try {
       for (const file of files) {
         const isImage = /^image\//i.test(file.type) && !/svg/i.test(file.type);
         if (!isImage) {
-          // PDF und alle anderen Dateien bleiben die Originaldatei
-          const r = await fetch("/api/files?name=" + encodeURIComponent(file.name || "Datei"), {
-            method: "POST",
-            headers: { "Content-Type": file.type || "application/octet-stream" },
-            body: file,
-          });
-          if (!r.ok) throw new Error(r.status === 413 ? "big" : "upload");
-          const meta = await r.json();
-          added.push({ fileId: meta.id, name: meta.name, mime: meta.mime });
+          // PDF und alle anderen Dateien bleiben die Originaldatei - sofort sichtbar,
+          // hochgeladen wird im Hintergrund
+          if (file.size > 60 * 1024 * 1024) {
+            showToast("„" + (file.name || "Datei") + "“ ist zu groß (max. 60 MB)");
+            continue;
+          }
+          const id = uuid();
+          pendingFiles.set(id, URL.createObjectURL(file));
+          added.push({ fileId: id, name: (file.name || "Datei").slice(0, 120), mime: file.type || "application/octet-stream" });
+          uploads.push([id, file]);
         } else {
           const jpeg = await scanImageToJpeg(file, 2000);
           if (!jpeg) continue;
@@ -10644,6 +10675,7 @@
       showToast(String(err.message) === "big" ? "Die Datei ist zu groß (max. 60 MB)" : "Hinzufügen hat nicht geklappt");
     }
     if (added.length) saveBoardRefs(boardRefs().concat(added), "Speichern hat nicht geklappt");
+    for (const [id, file] of uploads) uploadFileBg(id, file, bid);
   });
   function renderOwnRefs() {
     const sec = document.createElement("div");
