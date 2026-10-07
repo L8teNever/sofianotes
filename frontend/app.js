@@ -2543,6 +2543,11 @@
         scheduleSaveBoard();
         break;
       }
+      case "board_refs":
+        if (currentBoardMeta) currentBoardMeta.refs = msg.refs || [];
+        if (hwView && hwView.i >= panelImages().length) closeHwViewer();
+        renderHwPanel();
+        break;
       case "board_paper":
         if (currentBoardMeta) currentBoardMeta.paper = msg.paper;
         applyPaper(msg.paper);
@@ -9325,7 +9330,7 @@
 
   function hideLibrary(opts) {
     libraryBackdrop.classList.add("hidden");
-    if (typeof hwBoard !== "undefined" && hwBoard && currentBoardId) applyHwPanelState(hwPanelState(currentBoardId));
+    if (typeof hwBoard !== "undefined" && currentBoardId) applyHwPanelState(hwPanelState(currentBoardId));
     if (!(opts && opts.fromHistory) && currentBoardId) syncUrl(true);
   }
 
@@ -9908,9 +9913,9 @@
   let hwLayout = lsGet("sofianotes-hwpanel-layout", { mode: "float", side: "right", width: 380 });
   function hwPanelState(boardId) {
     try {
-      return localStorage.getItem("sofianotes-hwpanel-state:" + boardId) || "open";
+      return localStorage.getItem("sofianotes-hwpanel-state:" + boardId) || (hwBoard ? "open" : "closed");
     } catch (err) {
-      return "open";
+      return hwBoard ? "open" : "closed";
     }
   }
   function setHwPanelState(state) {
@@ -9924,13 +9929,13 @@
     return Math.round(Math.max(260, Math.min(window.innerWidth * 0.7, hwLayout.width || 380)));
   }
   function applyHwPanelState(state) {
-    const has = !!hwBoard && libraryBackdrop.classList.contains("hidden");
+    const has = !!currentBoardId && libraryBackdrop.classList.contains("hidden");
     hwPanelCurrent = state;
     const open = has && state === "open";
     const docked = open && hwLayout.mode === "dock";
     hwPanel.classList.toggle("hidden", !open);
     hwPill.classList.toggle("hidden", !has || state !== "min");
-    hwPanelBtn.classList.toggle("hidden", !hwBoard);
+    hwPanelBtn.classList.toggle("hidden", !currentBoardId);
     hwPanelBtn.classList.toggle("active", open);
     hwPanel.classList.toggle("docked", docked);
     hwPanel.classList.toggle("dock-left", docked && hwLayout.side === "left");
@@ -9973,24 +9978,146 @@
     lsSet("sofianotes-hwpanel-layout", hwLayout);
     applyHwPanelState(hwPanelCurrent);
   }
+  // Eigene Bilder am Blatt (Buchseite, Foto der Aufgabe ...) - auch ohne Hausaufgabe
+  function boardRefs() {
+    return (currentBoardMeta && currentBoardMeta.id === currentBoardId && currentBoardMeta.refs) || [];
+  }
+  // alle Bilder im Fenster: erst die der Aufgabe, dann die eigenen
+  function panelImages() {
+    const hw = hwBoard ? hwBoard.attachments.filter((a) => a.type === "image") : [];
+    const own = boardRefs().map((r) => ({ type: "image", url: "/api/media/" + encodeURIComponent(r.mediaId), name: r.name, mediaId: r.mediaId, own: true }));
+    return hw.concat(own);
+  }
+  function saveBoardRefs(next, failText) {
+    const bid = currentBoardId;
+    const before = boardRefs().slice();
+    optimistic({
+      apply: () => {
+        if (currentBoardMeta) currentBoardMeta.refs = next;
+        renderHwPanel();
+      },
+      revert: () => {
+        if (currentBoardMeta && bid === currentBoardId) currentBoardMeta.refs = before;
+        renderHwPanel();
+      },
+      request: () =>
+        api("/api/boards/" + encodeURIComponent(bid), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refs: next }),
+        }),
+      failText,
+    });
+  }
+  const refFileInput = document.createElement("input");
+  refFileInput.type = "file";
+  refFileInput.accept = "image/*,application/pdf";
+  refFileInput.multiple = true;
+  refFileInput.style.display = "none";
+  document.body.appendChild(refFileInput);
+  refFileInput.addEventListener("change", async () => {
+    const files = Array.from(refFileInput.files || []);
+    refFileInput.value = "";
+    if (!files.length || !currentBoardId) return;
+    showToast("Bild wird hinzugefügt…");
+    const added = [];
+    try {
+      for (const file of files) {
+        if (/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name)) {
+          if (!window.pdfjsLib) continue;
+          const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+          for (let i = 1; i <= Math.min(pdf.numPages, 12); i++) {
+            const page = await pdf.getPage(i);
+            const base = page.getViewport({ scale: 1 });
+            const vp = page.getViewport({ scale: Math.min(2, 2000 / Math.max(base.width, base.height)) });
+            const c = document.createElement("canvas");
+            c.width = Math.max(1, Math.round(vp.width));
+            c.height = Math.max(1, Math.round(vp.height));
+            await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+            const jpeg = bitmapToJpeg(c, 2000);
+            added.push({ mediaId: await uploadJpeg(jpeg.dataUrl), name: file.name.replace(/\.pdf$/i, "") + " S. " + i });
+          }
+        } else {
+          const bmp = await createImageBitmap(file);
+          const jpeg = bitmapToJpeg(bmp, 2000);
+          if (bmp.close) bmp.close();
+          added.push({ mediaId: await uploadJpeg(jpeg.dataUrl), name: (file.name || "Foto").replace(/\.[a-z0-9]+$/i, "") });
+        }
+      }
+    } catch (err) {
+      showToast("Bild hinzufügen hat nicht geklappt");
+    }
+    if (added.length) saveBoardRefs(boardRefs().concat(added), "Speichern hat nicht geklappt");
+  });
+  function renderOwnRefs() {
+    const sec = document.createElement("div");
+    sec.className = "hw-own";
+    const head = document.createElement("div");
+    head.className = "hw-own-head";
+    head.innerHTML = '<span>Eigene Bilder</span><button type="button" class="hw-own-add"><span class="material-symbols-rounded">add_photo_alternate</span>Foto / Bild</button>';
+    head.querySelector("button").addEventListener("click", (e) => {
+      e.stopPropagation();
+      refFileInput.click();
+    });
+    sec.appendChild(head);
+    const refs = boardRefs();
+    if (refs.length) {
+      const grid = document.createElement("div");
+      grid.className = "hw-images hw-refs";
+      refs.forEach((r, i) => {
+        const wrap = document.createElement("div");
+        wrap.className = "hw-ref";
+        const im = document.createElement("img");
+        im.src = "/api/media/" + encodeURIComponent(r.mediaId);
+        im.alt = r.name || "Bild";
+        im.loading = "lazy";
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "hw-ref-del";
+        del.title = "Entfernen";
+        del.innerHTML = '<span class="material-symbols-rounded">close</span>';
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          saveBoardRefs(boardRefs().filter((_, k) => k !== i), "Entfernen hat nicht geklappt");
+        });
+        wrap.appendChild(im);
+        wrap.appendChild(del);
+        grid.appendChild(wrap);
+      });
+      sec.appendChild(grid);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "hw-hint";
+      empty.textContent = "Hier kannst du z. B. die Buchseite oder ein Foto der Aufgabe ablegen – mit der Kamera oder aus deinen Bildern.";
+      sec.appendChild(empty);
+    }
+    return sec;
+  }
   function renderHwPanel() {
-    if (!hwBoard) return;
-    hwPanel.style.setProperty("--subj", hwBoard.color || "#6750a4");
-    hwPill.style.setProperty("--subj", hwBoard.color || "#6750a4");
-    document.getElementById("hw-panel-subject").textContent = hwBoard.subject || "Aufgabe";
-    document.getElementById("hw-pill-text").textContent = hwBoard.subject ? hwBoard.subject + " – Aufgabe" : "Aufgabe";
+    if (!currentBoardId) return;
+    const color = (hwBoard && hwBoard.color) || "#6750a4";
+    hwPanel.style.setProperty("--subj", color);
+    hwPill.style.setProperty("--subj", color);
+    const chip = document.getElementById("hw-panel-subject");
+    chip.textContent = hwBoard ? hwBoard.subject || "Aufgabe" : "";
+    chip.classList.toggle("hidden", !hwBoard);
+    hwPanel.querySelector(".hw-panel-title").textContent = hwBoard ? "Aufgabe" : "Material";
+    document.getElementById("hw-pill-text").textContent = hwBoard ? (hwBoard.subject ? hwBoard.subject + " – Aufgabe" : "Aufgabe") : "Material";
     hwPanelBody.innerHTML = "";
-    const due = document.createElement("div");
-    due.className = "hw-due";
-    due.textContent = "Fällig: " + hwDueLabel(hwBoard.due);
-    hwPanelBody.appendChild(due);
-    const desc = document.createElement("div");
-    desc.className = "hw-desc";
-    desc.textContent = hwBoard.description || "(ohne Text)";
-    hwPanelBody.appendChild(desc);
-    hwAttachmentsHtml(hwPanelBody, hwBoard);
+    if (hwBoard) {
+      const due = document.createElement("div");
+      due.className = "hw-due";
+      due.textContent = "Fällig: " + hwDueLabel(hwBoard.due);
+      hwPanelBody.appendChild(due);
+      const desc = document.createElement("div");
+      desc.className = "hw-desc";
+      desc.textContent = hwBoard.description || "(ohne Text)";
+      hwPanelBody.appendChild(desc);
+      hwAttachmentsHtml(hwPanelBody, hwBoard);
+    }
+    hwPanelBody.appendChild(renderOwnRefs());
     // Bilder im Fenster: Antippen -> im Fenster zoomen (statt Vollbild)
-    const imgs = hwBoard.attachments.filter((a) => a.type === "image");
+    const imgs = panelImages();
     hwPanelBody.querySelectorAll(".hw-images img").forEach((im, i) => {
       im.replaceWith(im.cloneNode(true));
     });
@@ -10088,7 +10215,10 @@
     closeHwViewer(true);
     if (!hid) {
       hwBoard = null;
-      applyHwPanelState("closed");
+      if (board && board.id === currentBoardId) {
+        renderHwPanel();
+        applyHwPanelState(hwPanelState(board.id));
+      } else applyHwPanelState("closed");
       return;
     }
     if (known && known.id === hid) {
@@ -10103,7 +10233,10 @@
       renderHwPanel();
       applyHwPanelState(hwPanelState(board.id));
     } catch (err) {
-      if (!hwBoard) applyHwPanelState("closed");
+      if (!hwBoard && currentBoardId === board.id) {
+        renderHwPanel();
+        applyHwPanelState(hwPanelState(board.id));
+      }
     }
   }
   document.getElementById("hw-panel-min")?.addEventListener("click", (e) => {
@@ -10286,8 +10419,7 @@
     hwApplyView();
   }
   function openHwViewer(i, restore) {
-    if (!hwBoard) return;
-    const imgs = hwBoard.attachments.filter((a) => a.type === "image");
+    const imgs = panelImages();
     if (!imgs.length) return;
     i = Math.max(0, Math.min(imgs.length - 1, i || 0));
     const saved = restore ? hwViewerState() : null;
@@ -10456,7 +10588,7 @@
   // Im Fenster scrollen/tippen darf nichts aufs Blatt malen
   hwPanel?.addEventListener("pointerdown", (e) => e.stopPropagation());
   window.addEventListener("resize", () => {
-    if (!hwBoard) return;
+    if (!currentBoardId) return;
     if (!hwPanel.classList.contains("hidden")) applyHwPanelState(hwPanelCurrent);
     if (!hwPill.classList.contains("hidden")) placeHwPill();
   });

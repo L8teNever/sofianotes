@@ -153,6 +153,8 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE boards ADD COLUMN solution_error TEXT")
     if "paper" not in board_cols:
         _conn.execute("ALTER TABLE boards ADD COLUMN paper TEXT")
+    if "refs" not in {row[1] for row in _conn.execute("PRAGMA table_info(boards)").fetchall()}:
+        _conn.execute("ALTER TABLE boards ADD COLUMN refs TEXT")
     if "paper" not in folder_cols:
         _conn.execute("ALTER TABLE folders ADD COLUMN paper TEXT")
     people_cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(people)").fetchall()}
@@ -391,7 +393,7 @@ def valid_person(person_id: str | None) -> bool:
 
 def _board_row(board_id: str) -> dict[str, Any] | None:
     row = _conn.execute(
-        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error, paper FROM boards WHERE id = ?",
+        "SELECT id, owner_id, title, created_at, updated_at, sofia_homework_id, solution_share, sofia_solution_id, solution_synced_at, solution_error, paper, refs FROM boards WHERE id = ?",
         (board_id,),
     ).fetchone()
     if not row:
@@ -413,7 +415,16 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
         "solutionSyncedAt": row[8],
         "solutionError": row[9],
         "paper": row[10] or "graph",
+        "refs": _load_refs(row[11]),
     }
+
+
+def _load_refs(raw: str | None) -> list[dict[str, Any]]:
+    try:
+        refs = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    return refs if isinstance(refs, list) else []
 
 
 def _can_access_sync(person_id: str, board_id: str) -> bool:
@@ -556,6 +567,17 @@ def _set_board_paper_sync(board_id: str, paper: str) -> bool:
     cur = _conn.execute("UPDATE boards SET paper = ? WHERE id = ?", (paper, board_id))
     _conn.commit()
     return cur.rowcount > 0
+
+
+def _set_board_refs_sync(board_id: str, refs: list[dict[str, Any]]) -> bool:
+    cur = _conn.execute("UPDATE boards SET refs = ? WHERE id = ?", (json.dumps(refs), board_id))
+    _conn.commit()
+    return cur.rowcount > 0
+
+
+async def set_board_refs(board_id: str, refs: list[dict[str, Any]]) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _set_board_refs_sync, board_id, refs)
 
 
 def _person_prefs_sync(person_id: str) -> dict[str, Any]:

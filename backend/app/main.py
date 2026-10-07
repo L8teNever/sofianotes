@@ -422,6 +422,20 @@ async def create_board(request: Request, me: dict = Depends(get_current_person))
 @app.patch("/api/boards/{board_id}")
 async def patch_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
+    if "refs" in body:
+        # eigene Bilder im Material-Fenster (Buchseite, Foto der Aufgabe ...)
+        raw = body.get("refs")
+        if not isinstance(raw, list) or not await db.can_access(me["id"], board_id):
+            raise HTTPException(status_code=400, detail="bad refs")
+        refs = [
+            {"mediaId": str(r.get("mediaId"))[:80], "name": str(r.get("name") or "Bild")[:120]}
+            for r in raw[:60]
+            if isinstance(r, dict) and r.get("mediaId")
+        ]
+        await db.set_board_refs(board_id, refs)
+        await manager.broadcast({"type": "board_refs", "refs": refs}, board_id=board_id)
+        if "title" not in body and "paper" not in body:
+            return {"ok": True, "refs": refs}
     if "paper" in body:
         # Papier gilt fuers ganze Blatt, darf jede Person mit Zugriff aendern
         if not await db.can_access(me["id"], board_id) or not await db.set_board_paper(board_id, str(body.get("paper") or "")):
