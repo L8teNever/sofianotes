@@ -12009,10 +12009,71 @@
     const exprEl = document.getElementById("calc-expr");
     const liveEl = document.getElementById("calc-live");
     const prevEl = document.getElementById("calc-prev");
-    let st = Object.assign({ open: false, tab: "calc", x: null, y: null, cat: "speed", from: "km/h", to: "m/s" }, lsGet("sofianotes-calc", {}));
-    const save = () => lsSet("sofianotes-calc", st);
-    let expr = "";
-    let ans = 0;
+    let st = Object.assign({ open: false, tab: "calc", x: null, y: null, cat: "speed", from: "km/h", to: "m/s", hist: [], expr: "", ans: 0 }, lsGet("sofianotes-calc", {}));
+    if (!Array.isArray(st.hist)) st.hist = [];
+    // Eingabe, letztes Ergebnis und Verlauf bleiben auch nach dem Schliessen (und Neuladen) erhalten
+    const save = () => {
+      st.expr = expr;
+      st.ans = ans;
+      lsSet("sofianotes-calc", st);
+    };
+    let expr = typeof st.expr === "string" ? st.expr : "";
+    let ans = Number.isFinite(st.ans) ? st.ans : 0;
+    const histEl = document.getElementById("calc-hist");
+    const histBtn = document.getElementById("calc-hist-btn");
+    let showHist = false;
+    function renderHist() {
+      histEl.innerHTML = "";
+      if (!st.hist.length) {
+        const empty = document.createElement("div");
+        empty.className = "calc-hist-empty";
+        empty.textContent = "Noch nichts gerechnet.";
+        histEl.appendChild(empty);
+        return;
+      }
+      for (const h of st.hist.slice().reverse()) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "calc-hist-item";
+        b.title = "Ergebnis übernehmen";
+        b.innerHTML = "<small></small><strong></strong>";
+        b.children[0].textContent = h.e + " =";
+        b.children[1].textContent = h.r;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          expr += h.r.replace(/\./g, "");
+          setHist(false);
+          renderCalc();
+          save();
+        });
+        histEl.appendChild(b);
+      }
+      const clr = document.createElement("button");
+      clr.type = "button";
+      clr.className = "calc-hist-clear";
+      clr.textContent = "Verlauf löschen";
+      clr.addEventListener("click", (e) => {
+        e.stopPropagation();
+        st.hist = [];
+        save();
+        renderHist();
+      });
+      histEl.appendChild(clr);
+    }
+    function setHist(on) {
+      showHist = on;
+      histEl.classList.toggle("hidden", !on);
+      document.getElementById("calc-keys").classList.toggle("hidden", on);
+      histBtn.classList.toggle("active", on);
+      if (on) {
+        renderHist();
+        if (st.tab !== "calc") showTab("calc");
+      }
+    }
+    histBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setHist(!showHist);
+    });
     let calcFocused = false;
 
     // Zahlen deutsch: Komma, bis 10 gueltige Stellen, sehr gross/klein mit Exponent
@@ -12159,7 +12220,11 @@
       }
       liveEl.textContent = live;
     }
+    let justEvaluated = false;
     function press(k) {
+      // nach "=" beginnt eine Zahl eine neue Rechnung, ein Rechenzeichen rechnet mit dem Ergebnis weiter
+      if (justEvaluated && !["=", "⌫", "AC", "+", "−", "×", "÷", "xʸ", "x²", "%"].includes(k)) expr = "";
+      justEvaluated = k === "=";
       if (k === "AC") expr = "";
       else if (k === "⌫") {
         const fn = /(sin\(|cos\(|tan\(|log\(|ln\(|Ans)$/.exec(expr);
@@ -12169,6 +12234,10 @@
         try {
           const v = evaluate(balance(expr));
           prevEl.textContent = balance(expr) + " =";
+          if (Number.isFinite(v)) {
+            st.hist.push({ e: balance(expr), r: fmt(v) });
+            if (st.hist.length > 60) st.hist.splice(0, st.hist.length - 60);
+          }
           ans = v;
           const big = Math.abs(v) >= 1e15 || (v !== 0 && Math.abs(v) < 1e-9);
           expr = !Number.isFinite(v) ? "" : big ? String(v).replace(".", ",") : fmt(v).replace(/\./g, "");
@@ -12183,6 +12252,7 @@
       else if (k === "√") expr += "√(";
       else expr += k;
       renderCalc();
+      save();
     }
     const KEYS = [
       ["sin", "cos", "tan", "√", "xʸ"],
@@ -12326,6 +12396,7 @@
       st.tab = tab;
       win.querySelectorAll(".calc-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
       win.querySelectorAll(".calc-body").forEach((b) => b.classList.toggle("hidden", b.dataset.tab !== tab));
+      histBtn.classList.toggle("hidden", tab !== "calc");
       save();
       place();
     }
@@ -12399,6 +12470,7 @@
     });
     fillUnits();
     renderConv();
+    if (st.hist.length) prevEl.textContent = st.hist[st.hist.length - 1].e + " =";
     if (st.open) setOpen(true);
   })();
 
