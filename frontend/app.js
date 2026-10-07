@@ -394,24 +394,42 @@
   function viewWidth() {
     return Math.max(120, window.innerWidth - viewLeft - viewRight);
   }
+  // Zeichenflaeche: normalerweise genau der Sichtbereich; in der geteilten Ansicht
+  // ueberspannt sie beide Haelften (canvasLeft/-Right = aeussere Raender)
+  let canvasLeft = 0;
+  let canvasRight = 0;
   function resizeCanvas() {
     dpr = Math.max(1, window.devicePixelRatio || 1);
-    const w = viewWidth();
+    if (!splitOn()) {
+      canvasLeft = viewLeft;
+      canvasRight = viewRight;
+    }
+    const w = Math.max(120, window.innerWidth - canvasLeft - canvasRight);
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(window.innerHeight * dpr);
     canvas.style.width = w + "px";
     canvas.style.height = window.innerHeight + "px";
-    canvas.style.left = viewLeft + "px";
+    canvas.style.left = canvasLeft + "px";
     requestRedraw();
+  }
+  let splitState = null; // geteilte Ansicht (siehe unten)
+  function splitOn() {
+    return !!splitState;
   }
   function currentScale() {
     return scale;
   }
+  window.__sofiaViewL = () => viewLeft;
+  window.__sofiaViewR = () => viewRight;
   window.sofiaView = () => ({ scale, offsetX, offsetY });
   let pagesInsetLeft = 0; // Seiten-Leiste im Notizbuch (links)
   let requestedInsets = [0, 0];
   function setViewInsets(left, right) {
     requestedInsets = [left || 0, right || 0];
+    if (splitOn() && window.sofiaSplitLayout) {
+      window.sofiaSplitLayout();
+      return;
+    }
     left = Math.max(pagesInsetLeft, Math.round(left || 0));
     right = Math.max(0, Math.round(right || 0));
     if (left === viewLeft && right === viewRight) return;
@@ -435,6 +453,9 @@
     const bar = document.getElementById("top-filename-bar");
     const undo = document.getElementById("undo-redo-dock");
     if (!bar) return;
+    // geteilte Ansicht: eine gemeinsame Leiste ueber beiden Haelften
+    const viewLeft = splitOn() ? canvasLeft : window.__sofiaViewL();
+    const viewRight = splitOn() ? canvasRight : window.__sofiaViewR();
     document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
     const vertical = bar.classList.contains("tb-vertical") || bar.classList.contains("free-drag");
     if (!viewLeft && !viewRight || vertical) {
@@ -463,8 +484,10 @@
   });
 
   // ---- board state ------------------------------------------------------
-  const boardStrokes = new Map(); // id -> stroke
-  const remoteInProgress = new Map(); // strokeId -> stroke (owned by other client)
+  // let statt const: in der geteilten Ansicht mit zwei Blaettern wird zwischen den
+  // Blatt-Zustaenden umgeschaltet
+  let boardStrokes = new Map(); // id -> stroke
+  let remoteInProgress = new Map(); // strokeId -> stroke (owned by other client)
   let currentStroke = null; // own in-progress stroke
   let dirty = true;
   let cropState = null;
@@ -1052,24 +1075,36 @@
   }
 
   function draw() {
+    if (splitState && window.sofiaDrawSplit) return window.sofiaDrawSplit();
+    drawScene(true, null);
+  }
+  // full: auch Bedienelemente (Auswahl, Lineal, Zoom-Rahmen ...) - nur fuer die aktive Ansicht.
+  // clip: {x0, x1} in Fensterkoordinaten - nur dort zeichnen (geteilte Ansicht)
+  function drawScene(full, clip, live = true) {
+    ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (clip) {
+      ctx.beginPath();
+      ctx.rect((clip.x0 - canvasLeft) * dpr, 0, (clip.x1 - clip.x0) * dpr, canvas.height);
+      ctx.clip();
+    }
     ctx.fillStyle = notebook ? "#e8e6ed" : "#f8f9fa";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
     let pageClip = false;
     if (notebook) {
       clampNotebookView();
-      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
       drawPages();
-      // alles Geschriebene endet am Seitenrand
+      // alles Geschriebene endet am Seitenrand (Clip innerhalb des Ansicht-Clips)
       ctx.save();
       ctx.beginPath();
       for (const r of pageRects(notebook)) ctx.rect(r.x, r.y, r.w, r.h);
       ctx.clip();
       pageClip = true;
     } else drawGrid();
-    if (window.sofiaPagesUi) window.sofiaPagesUi();
+    if (full && window.sofiaPagesUi) window.sofiaPagesUi();
     // im Versionsverlauf: alter Stand statt des aktuellen Blatts
     const src = historyView ? historyView.strokes : boardStrokes;
     drawHistoryMarks();
@@ -1083,24 +1118,28 @@
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
     // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
     syncMarkerLayer();
-    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
     for (const stroke of src.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
-    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
+    if (live && currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 0.38;
     ctx.drawImage(markerLayer, 0, 0, canvas.width, canvas.height);
     ctx.restore();
-    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
 
     for (const stroke of src.values()) if (stroke.tool !== "marker" && stroke.tool !== "image" && stroke.tool !== "table") drawStroke(stroke);
     drawHistoryGhosts();
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
-    if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
+    if (live && currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
     if (pageClip) {
       ctx.restore();
-      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - viewLeft) * dpr, offsetY * dpr);
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
+    }
+    if (!full) {
+      ctx.restore();
+      return;
     }
 
     drawTextDragPreview();
@@ -1112,6 +1151,7 @@
     positionInkChips();
     positionScanBoxes();
 
+    ctx.restore();
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
     drawZoomPane();
@@ -2717,8 +2757,14 @@
       }, reconnectDelay);
       reconnectDelay = Math.min(10000, reconnectDelay * 1.7);
     };
-    ws.onerror = () => ws.close();
-    ws.onmessage = (ev) => handleMessage(JSON.parse(ev.data));
+    const sock = ws;
+    ws.onerror = () => sock.close();
+    // geteilte Ansicht: Nachrichten fuer das andere Blatt in dessen Zustand verarbeiten
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (window.sofiaSplitRoute && window.sofiaSplitRoute(sock, () => handleMessage(msg))) return;
+      handleMessage(msg);
+    };
   }
 
   function finalizeIncomingStroke(id) {
@@ -2743,15 +2789,17 @@
         if (msg.board) {
           currentBoardId = msg.board.id;
           currentBoardMeta = msg.board;
-          if (filenameInput) filenameInput.value = msg.board.title || "Unbenannte Skizze";
-          fitFilename();
-          document.title = (msg.board.title || "sofianotes") + " – sofianotes";
-          syncHomeworkPanel(msg.board);
+          if (!window.sofiaSplitBg) {
+            if (filenameInput) filenameInput.value = msg.board.title || "Unbenannte Skizze";
+            fitFilename();
+            document.title = (msg.board.title || "sofianotes") + " – sofianotes";
+            syncHomeworkPanel(msg.board);
+          }
           applyPaper(msg.board.paper);
           const firstOpen = !notebook || notebookBoardId !== msg.board.id;
           notebook = msg.board.notebook || null;
           notebookBoardId = msg.board.id;
-          if (notebook && firstOpen && window.sofiaFitPage) window.sofiaFitPage(0);
+          if (notebook && firstOpen && window.sofiaFitPage && !window.sofiaSplitBg) window.sofiaFitPage(0);
         }
         boardStrokes.clear();
         for (const s of msg.strokes) {
@@ -2970,8 +3018,8 @@
   }
 
   // ---- Undo/Redo (persoenlicher Verlauf der eigenen Aktionen) -----------
-  const undoStack = [];
-  const redoStack = [];
+  let undoStack = [];
+  let redoStack = [];
   const MAX_UNDO = 100;
 
   function cloneStroke(s) {
@@ -6559,7 +6607,7 @@
   function drawRuler() {
     if (!ruler.visible) return;
     ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, -viewLeft * dpr, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, -canvasLeft * dpr, 0);
     ctx.translate(ruler.cx, ruler.cy);
     ctx.rotate(ruler.angle);
     ctx.fillStyle = "rgba(255,255,255,0.78)";
@@ -9668,6 +9716,7 @@
 
   function showLibrary(opts) {
     hideWho();
+    if (window.sofiaSplitClose) window.sofiaSplitClose();
     if (window.sofiaHistoryClose) window.sofiaHistoryClose();
     if (typeof hwPanel !== "undefined" && hwPanel) {
       hwPanel.classList.add("hidden");
@@ -11467,6 +11516,7 @@
   document.getElementById("library-backdrop")?.addEventListener("scroll", closeItemMenu, true);
 
   async function openBoard(id, title, opts) {
+    if (window.sofiaSplitClose) window.sofiaSplitClose();
     if (window.sofiaHistoryClose && id !== currentBoardId) window.sofiaHistoryClose();
     // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
     // Boards: eine noch offene WS-Verbindung wuerde sonst keine frische
@@ -13310,6 +13360,370 @@
         addBig.style.top = p.y + "px";
       }
     };
+  })();
+
+  // ---- Geteilte Ansicht: zwei Haelften, eine gemeinsame Bedienung ----
+  // Jede Haelfte hat ihre eigene Ansicht (Ausschnitt/Zoom). Gleiches Blatt: beide teilen
+  // sich den Blatt-Zustand. Anderes Blatt: eigener Zustand mit eigener Verbindung; beim
+  // Antippen einer Haelfte wird sie aktiv und alle Leisten wirken auf sie.
+  (() => {
+    const divider = document.getElementById("split-divider");
+    const activeBar = document.getElementById("split-active");
+    const menu = document.getElementById("split-menu");
+    const btn = document.getElementById("btn-split");
+    const pickScrim = document.getElementById("split-pick-scrim");
+    const GAP = 3;
+    function captureCtx() {
+      return { boardStrokes, remoteInProgress, currentBoardId, currentBoardMeta, notebook, notebookBoardId, ws, wantWs, myClientId, undoStack, redoStack, gridStyle };
+    }
+    function applyCtx(c) {
+      boardStrokes = c.boardStrokes;
+      remoteInProgress = c.remoteInProgress;
+      currentBoardId = c.currentBoardId;
+      currentBoardMeta = c.currentBoardMeta;
+      notebook = c.notebook;
+      notebookBoardId = c.notebookBoardId;
+      ws = c.ws;
+      wantWs = c.wantWs;
+      myClientId = c.myClientId;
+      undoStack = c.undoStack;
+      redoStack = c.redoStack;
+      gridStyle = c.gridStyle;
+    }
+    function geometry() {
+      const st = splitState;
+      const L = Math.max(pagesInsetLeft, Math.round(requestedInsets[0] || 0));
+      const R = Math.round(requestedInsets[1] || 0);
+      const W = window.innerWidth;
+      const x = Math.round(L + (W - L - R) * st.pos);
+      return { L, R, W, x, panes: [{ x0: L, x1: x - GAP }, { x0: x + GAP, x1: W - R }] };
+    }
+    function paneInsets(i) {
+      const g = geometry();
+      const p = g.panes[i];
+      return { left: p.x0, right: g.W - p.x1 };
+    }
+    function layout() {
+      if (!splitState) return;
+      const g = geometry();
+      canvasLeft = g.L;
+      canvasRight = g.R;
+      const ins = paneInsets(splitState.active);
+      viewLeft = ins.left;
+      viewRight = ins.right;
+      document.documentElement.style.setProperty("--view-left", g.L + "px");
+      document.documentElement.style.setProperty("--view-right", g.R + "px");
+      resizeCanvas();
+      layoutTopBar();
+      divider.style.left = g.x - 7 + "px";
+      const ap = g.panes[splitState.active];
+      Object.assign(activeBar.style, { left: ap.x0 + "px", width: ap.x1 - ap.x0 + "px" });
+      requestRedraw();
+    }
+    window.sofiaSplitLayout = layout;
+    function saveActive() {
+      const p = splitState.panes[splitState.active];
+      p.view = { scale, offsetX, offsetY };
+      Object.assign(p.ctx, captureCtx());
+    }
+    // fn im Zustand einer anderen Haelfte ausfuehren (Zeichnen / Nachrichten)
+    function withPane(i, fn, ctxOnly) {
+      const st = splitState;
+      const p = st.panes[i];
+      const act = st.panes[st.active];
+      const other = p.ctx !== act.ctx;
+      const save = { scale, offsetX, offsetY, viewLeft, viewRight };
+      Object.assign(act.ctx, captureCtx());
+      if (other) applyCtx(p.ctx);
+      if (!ctxOnly) {
+        const ins = paneInsets(i);
+        scale = p.view.scale;
+        offsetX = p.view.offsetX;
+        offsetY = p.view.offsetY;
+        viewLeft = ins.left;
+        viewRight = ins.right;
+      }
+      window.sofiaSplitBg = true;
+      try {
+        fn(other);
+      } finally {
+        window.sofiaSplitBg = false;
+        if (!ctxOnly) p.view = { scale, offsetX, offsetY };
+        if (other) {
+          Object.assign(p.ctx, captureCtx());
+          applyCtx(act.ctx);
+        }
+        scale = save.scale;
+        offsetX = save.offsetX;
+        offsetY = save.offsetY;
+        viewLeft = save.viewLeft;
+        viewRight = save.viewRight;
+      }
+    }
+    window.sofiaDrawSplit = () => {
+      const st = splitState;
+      const g = geometry();
+      const other = 1 - st.active;
+      withPane(other, (diff) => drawScene(false, g.panes[other], !diff));
+      drawScene(true, g.panes[st.active]);
+    };
+    window.sofiaSplitRoute = (sock, fn) => {
+      if (!splitState) return false;
+      const other = 1 - splitState.active;
+      const p = splitState.panes[other];
+      if (p.ctx === splitState.panes[splitState.active].ctx || p.ctx.ws !== sock) return false;
+      withPane(other, () => fn(), true);
+      requestRedraw();
+      return true;
+    };
+    function paneAt(x) {
+      const g = geometry();
+      return x < g.x ? 0 : 1;
+    }
+    function activate(i) {
+      const st = splitState;
+      if (!st || i === st.active) return;
+      if (textEdit) commitTextEditor();
+      const differ = st.panes[i].ctx !== st.panes[st.active].ctx;
+      if (differ) {
+        clearSelection();
+        if (zoomWin) closeZoomWindow();
+      }
+      saveActive();
+      st.active = i;
+      const p = st.panes[i];
+      if (differ) applyCtx(p.ctx);
+      scale = p.view.scale;
+      offsetX = p.view.offsetX;
+      offsetY = p.view.offsetY;
+      layout();
+      if (differ) {
+        if (filenameInput) filenameInput.value = (currentBoardMeta && currentBoardMeta.title) || "Unbenannte Skizze";
+        fitFilename();
+        document.title = ((currentBoardMeta && currentBoardMeta.title) || "sofianotes") + " – sofianotes";
+        if (currentBoardMeta) syncHomeworkPanel(currentBoardMeta);
+        applyPaper(gridStyle);
+        updateUndoRedoButtons();
+        if (window.sofiaPagesChanged) window.sofiaPagesChanged();
+      }
+    }
+    // Antippen/Ansetzen in einer Haelfte macht sie aktiv (bevor irgendetwas anderes passiert)
+    canvas.addEventListener(
+      "pointerdown",
+      (e) => {
+        // nicht mitten in einer Geste umschalten (zweiter Finger, Handballen ...)
+        if (!splitState || currentStroke || pinchState || touchPointers.size || dragState || lassoPointerId != null || panState) return;
+        activate(paneAt(e.clientX));
+      },
+      true
+    );
+    canvas.addEventListener("wheel", (e) => splitState && activate(paneAt(e.clientX)), { capture: true, passive: true });
+
+    function centerOf() {
+      return screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
+    }
+    function start(mode, board) {
+      if (!currentBoardId) return;
+      if (splitState) close();
+      const c = centerOf();
+      const ctx0 = captureCtx();
+      splitState = { pos: 0.5, active: 0, panes: [{ view: { scale, offsetX, offsetY }, ctx: ctx0 }, null] };
+      document.body.classList.add("split-on");
+      divider.classList.remove("hidden");
+      activeBar.classList.remove("hidden");
+      btn.classList.add("active");
+      layout();
+      // linke Haelfte: gleicher Mittelpunkt wie vorher
+      const ins0 = paneInsets(0);
+      offsetX = ins0.left + (window.innerWidth - ins0.left - ins0.right) / 2 - c.x * scale;
+      splitState.panes[0].view = { scale, offsetX, offsetY };
+      if (mode === "same") {
+        const ins1 = paneInsets(1);
+        const v = { scale, offsetX: ins1.left + (window.innerWidth - ins1.left - ins1.right) / 2 - c.x * scale, offsetY };
+        splitState.panes[1] = { view: v, ctx: ctx0 };
+        activate(1);
+        if (notebook && window.sofiaFitPage && window.sofiaCurrentPage) window.sofiaFitPage(window.sofiaCurrentPage());
+      } else {
+        // anderes Blatt: frischer Zustand mit eigener Verbindung
+        saveActive();
+        const fresh = {
+          boardStrokes: new Map(),
+          remoteInProgress: new Map(),
+          currentBoardId: board.id,
+          currentBoardMeta: { id: board.id, title: board.title, ownerId: currentPersonId, sharedWith: [] },
+          notebook: null,
+          notebookBoardId: null,
+          ws: null,
+          wantWs: false,
+          myClientId: null,
+          undoStack: [],
+          redoStack: [],
+          gridStyle: "graph",
+        };
+        splitState.panes[1] = { view: { scale: 1, offsetX: 0, offsetY: 0 }, ctx: fresh };
+        splitState.active = 1;
+        applyCtx(fresh);
+        layout();
+        const ins1 = paneInsets(1);
+        scale = 1;
+        offsetX = ins1.left + (window.innerWidth - ins1.left - ins1.right) / 2;
+        offsetY = window.innerHeight / 2;
+        layout();
+        if (filenameInput) filenameInput.value = board.title || "Blatt";
+        fitFilename();
+        updateUndoRedoButtons();
+        syncHomeworkPanel(null);
+        connectWS();
+      }
+      requestRedraw();
+    }
+    function close(keep) {
+      if (!splitState) return;
+      const st = splitState;
+      const keepIdx = keep == null ? st.active : keep;
+      if (keepIdx !== st.active) activate(keepIdx);
+      const other = st.panes[1 - st.active];
+      if (other && other.ctx !== st.panes[st.active].ctx && other.ctx.ws) {
+        other.ctx.wantWs = false;
+        other.ctx.ws.onclose = null;
+        other.ctx.ws.close();
+      }
+      const c = centerOf();
+      splitState = null;
+      document.body.classList.remove("split-on");
+      divider.classList.add("hidden");
+      activeBar.classList.add("hidden");
+      btn.classList.remove("active");
+      viewLeft = -1; // erzwingt Neuberechnung
+      setViewInsets(requestedInsets[0], requestedInsets[1]);
+      offsetX = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2 - c.x * scale;
+      requestRedraw();
+    }
+    window.sofiaSplitClose = () => close();
+
+    // ---- Trennlinie ziehen ----
+    let drag = null;
+    divider.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      drag = { id: e.pointerId };
+      try {
+        divider.setPointerCapture(e.pointerId);
+      } catch (err) {}
+    });
+    divider.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id || !splitState) return;
+      const g = geometry();
+      splitState.pos = Math.max(0.2, Math.min(0.8, (e.clientX - g.L) / (g.W - g.L - g.R)));
+      layout();
+    });
+    const endDrag = (e) => {
+      if (drag && e.pointerId === drag.id) drag = null;
+    };
+    divider.addEventListener("pointerup", endDrag);
+    divider.addEventListener("pointercancel", endDrag);
+    window.addEventListener("resize", () => splitState && layout());
+
+    // ---- Menue + Blatt-Auswahl ----
+    function closeMenu() {
+      menu.classList.add("hidden");
+    }
+    function openMenu() {
+      menu.innerHTML = "";
+      const add = (icon, label, run) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "lib-add-opt";
+        b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+        b.children[0].textContent = icon;
+        b.children[1].textContent = label;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          closeMenu();
+          run();
+        });
+        menu.appendChild(b);
+      };
+      add("splitscreen", "Gleiches Blatt daneben", () => start("same"));
+      add("description", "Anderes Blatt daneben …", openPicker);
+      if (splitState) {
+        add("swap_horiz", "Hälften tauschen", () => {
+          saveActive();
+          const W = window.innerWidth;
+          const mid = (i) => {
+            const ins = paneInsets(i);
+            return ins.left + (W - ins.left - ins.right) / 2;
+          };
+          // jede Haelfte behaelt ihren Ausschnitt (Weltmitte), nur die Seite wechselt
+          const centers = splitState.panes.map((p, i) => (mid(i) - p.view.offsetX) / p.view.scale);
+          splitState.panes.reverse();
+          centers.reverse();
+          splitState.active = 1 - splitState.active;
+          splitState.panes.forEach((p, i) => (p.view = { ...p.view, offsetX: mid(i) - centers[i] * p.view.scale }));
+          const p = splitState.panes[splitState.active];
+          scale = p.view.scale;
+          offsetX = p.view.offsetX;
+          offsetY = p.view.offsetY;
+          layout();
+        });
+        add("close_fullscreen", "Geteilte Ansicht beenden", () => close());
+      }
+      menu.classList.remove("hidden");
+      const r = btn.getBoundingClientRect();
+      const mw = menu.offsetWidth;
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left)) + "px";
+      menu.style.top = r.bottom + 8 + "px";
+    }
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!menu.classList.contains("hidden")) return closeMenu();
+      openMenu();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!menu.classList.contains("hidden") && !e.target.closest("#split-menu") && !e.target.closest("#btn-split")) closeMenu();
+    }, true);
+    menu.addEventListener("pointerdown", (e) => e.stopPropagation());
+
+    let pickBoards = [];
+    function renderPicker() {
+      const list = document.getElementById("split-pick-list");
+      const q = document.getElementById("split-pick-search").value.trim().toLowerCase();
+      list.innerHTML = "";
+      const cur = currentBoardId;
+      const items = pickBoards.filter((b) => b.id !== cur && (!q || (b.title || "").toLowerCase().includes(q)));
+      if (!items.length) {
+        list.innerHTML = '<div class="inbox-empty"><p>Keine passenden Blätter.</p></div>';
+        return;
+      }
+      for (const b of items) {
+        const row = document.createElement("div");
+        row.className = "inbox-item";
+        row.innerHTML = '<span class="set-ico"><span class="material-symbols-rounded">description</span></span><span class="set-nav-text"><strong></strong><small></small></span>';
+        row.querySelector("strong").textContent = b.title || "Unbenannt";
+        row.querySelector("small").textContent = (b.folder ? b.folder + " · " : "") + relTime(b.updatedAt);
+        row.addEventListener("click", () => {
+          pickScrim.classList.add("hidden");
+          start("other", b);
+        });
+        list.appendChild(row);
+      }
+    }
+    async function openPicker() {
+      pickScrim.classList.remove("hidden");
+      document.getElementById("split-pick-search").value = "";
+      document.getElementById("split-pick-list").innerHTML = '<div class="inbox-empty"><p>Lädt…</p></div>';
+      try {
+        pickBoards = (await api("/api/boards/recent")).boards || [];
+      } catch (err) {
+        pickBoards = [];
+      }
+      renderPicker();
+    }
+    document.getElementById("split-pick-search").addEventListener("input", renderPicker);
+    document.getElementById("split-pick-close").addEventListener("click", () => pickScrim.classList.add("hidden"));
+    pickScrim.addEventListener("click", (e) => {
+      if (e.target === pickScrim) pickScrim.classList.add("hidden");
+    });
   })();
 
   // ---- Versionsverlauf (wie bei Google Docs) ----

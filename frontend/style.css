@@ -3412,3 +3412,25 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .pap-label { text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 92px; }
 .pap-templates { gap: 8px; }
 .pap-card { width: 92px; padding: 4px 2px; }
+
+/* ---- Geteilte Ansicht ---- */
+.split-divider {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.split-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: 6px; width: 2px; background: rgba(60, 64, 67, 0.28); }
+.split-divider.hidden { display: none; }
+.split-grip { position: relative; width: 8px; height: 56px; border-radius: 6px; background: #fff; border: 1px solid rgba(0, 0, 0, 0.18); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
+.split-active { position: fixed; top: 0; height: 3px; z-index: 6; background: #1a73e8; border-radius: 0 0 3px 3px; pointer-events: none; transition: left 0.15s, width 0.15s; }
+.split-active.hidden { display: none; }
+.split-menu { position: fixed; top: auto; right: auto; z-index: 120; min-width: 240px; }
+.split-pick-search { border: none; border-radius: 14px; background: #f3edf7; padding: 11px 14px; font: 500 15px 'Google Sans', 'Inter', sans-serif; outline: none; }
+#btn-split.active { background: #d3e3fd; color: #0b57d0; }

@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_stories,backspace,brush,calculate,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,cloud_done,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,download,drag_indicator,drive_file_move,edit,expand_more,fit_screen,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,save,send,shapes,share,square_foot,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,upload_file,view_agenda,view_column,view_sidebar,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_stories,backspace,brush,calculate,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,close_fullscreen,cloud_done,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,download,drag_indicator,drive_file_move,edit,expand_more,fit_screen,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,save,send,shapes,share,splitscreen,square_foot,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,upload_file,vertical_split,view_agenda,view_column,view_sidebar,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js" defer></script>
 <link rel="stylesheet" href="style.css?v=__BUILD__" />
@@ -143,6 +143,9 @@
   </button>
   <button type="button" id="btn-pages" class="icon-btn hidden" title="Seiten">
     <span class="material-symbols-rounded">view_sidebar</span>
+  </button>
+  <button type="button" id="btn-split" class="icon-btn" title="Geteilte Ansicht: zwei Blätter oder zwei Stellen nebeneinander">
+    <span class="material-symbols-rounded">vertical_split</span>
   </button>
   <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" autocomplete="off" autocorrect="off" spellcheck="false" name="board-title-input" />
   <div class="bar-divider"></div>
@@ -731,6 +734,21 @@
       </div>
       <div id="hw-list" class="hw-list"></div>
       <div id="hw-detail" class="hw-detail hidden"></div>
+    </div>
+  </div>
+
+  <div id="split-divider" class="split-divider hidden" title="Ziehen: Breite ändern"><span class="split-grip"></span></div>
+  <div id="split-active" class="split-active hidden"></div>
+  <div id="split-menu" class="lib-add-menu split-menu hidden"></div>
+  <div id="split-pick-scrim" class="dlg-scrim hidden">
+    <div class="bottom-sheet dlg dlg-inbox" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div class="inbox-head">
+        <div class="sheet-title">Welches Blatt daneben?</div>
+        <button type="button" id="split-pick-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      </div>
+      <input type="search" id="split-pick-search" class="split-pick-search" placeholder="Suchen…" autocomplete="off" />
+      <div id="split-pick-list" class="inbox-list"></div>
     </div>
   </div>
 
