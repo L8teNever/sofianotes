@@ -7056,7 +7056,7 @@
   // Groesse allein ist auf dem iPad unzuverlaessig (Finger melden teils grosse Flaechen):
   // nur kurz nach Stift-Benutzung zaehlt eine breite Beruehrung als Handballen.
   function penRecentlyUsed() {
-    return performance.now() - lastPenActivity < 4000;
+    return performance.now() - lastPenActivity < 1200;
   }
   function looksLikePalm(e) {
     if (penRecentlyUsed() && ((e.width || 0) >= PALM_CONTACT_PX || (e.height || 0) >= PALM_CONTACT_PX)) return true;
@@ -8924,9 +8924,12 @@
       penTookOverTouchOnly(e.pointerId);
       return;
     }
-    if (e.pointerType === "pen") notePenActivity();
+    // Schwebender Stift (Apple Pencil Hover, buttons=0) zaehlt nicht als aufgelegt -
+    // sonst gilt jeder Finger als Handballen und Zoomen/Verschieben geht nicht.
+    const penHover = e.pointerType === "pen" && !e.buttons && !activePointers.has(e.pointerId);
+    if (e.pointerType === "pen" && !penHover) notePenActivity();
     notePasteHoldMove(e);
-    activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+    if (!penHover) activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
     if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
       if (e.pointerType === "touch") touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       moveZoomBoxDrag(e);
@@ -9253,6 +9256,7 @@
   window.addEventListener("touchend", (e) => setTimeout(() => resetTouches(e), 0), { capture: true, passive: true });
   window.addEventListener("touchcancel", (e) => setTimeout(() => resetTouches(e), 0), { capture: true, passive: true });
   canvas.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "pen" && !e.buttons && !currentStroke) activePointers.delete(e.pointerId);
     if (currentTool === "eraser" && !activePointers.has(e.pointerId)) {
       eraserCursorEl.style.display = "none";
     }
