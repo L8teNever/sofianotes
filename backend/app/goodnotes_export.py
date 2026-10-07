@@ -435,7 +435,17 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
         blob = media.load_bytes(str(pg.get("mediaId") or "")) if pg.get("mediaId") else None
         if blob:
             try:
-                c.drawImage(ImageReader(io.BytesIO(blob)), 0, 0, width=pw, height=ph)
+                rot = int(pg.get("rot") or 0) % 4
+                if rot:
+                    # Seite wurde gedreht (im Uhrzeigersinn): Bild um die Seitenmitte drehen
+                    iw, ih = (ph, pw) if rot % 2 else (pw, ph)
+                    c.saveState()
+                    c.translate(pw / 2, ph / 2)
+                    c.rotate(-90 * rot)
+                    c.drawImage(ImageReader(io.BytesIO(blob)), -iw / 2, -ih / 2, width=iw, height=ih)
+                    c.restoreState()
+                else:
+                    c.drawImage(ImageReader(io.BytesIO(blob)), 0, 0, width=pw, height=ph)
             except Exception:  # noqa: BLE001
                 pass
         else:

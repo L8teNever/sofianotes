@@ -266,6 +266,20 @@
     offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : 130);
   }
 
+  // Seiten-Hintergrundbild, ggf. in Vierteldrehungen gedreht (page.rot = 0..3, im Uhrzeigersinn)
+  function drawPageMedia(g, img, r) {
+    const rot = ((r.page && r.page.rot) || 0) % 4;
+    if (!rot) return g.drawImage(img, r.x, r.y, r.w, r.h);
+    const odd = rot % 2 === 1;
+    const w0 = odd ? r.h : r.w;
+    const h0 = odd ? r.w : r.h;
+    g.save();
+    g.translate(r.x + r.w / 2, r.y + r.h / 2);
+    g.rotate((rot * Math.PI) / 2);
+    g.drawImage(img, -w0 / 2, -h0 / 2, w0, h0);
+    g.restore();
+  }
+
   function drawPages() {
     const a = screenToWorld(viewLeft, 0);
     const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
@@ -283,7 +297,7 @@
       ctx.rect(r.x, r.y, r.w, r.h);
       ctx.clip();
       const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
-      if (img && img.complete && img.naturalWidth) ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      if (img && img.complete && img.naturalWidth) drawPageMedia(ctx, img, r);
       else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r);
       ctx.restore();
     }
@@ -785,6 +799,26 @@
     const dx = p.x - cx;
     const dy = p.y - cy;
     return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos, p: p.p, text: p.text };
+  }
+
+  // Strich um c drehen (ang) und danach um (dx, dy) verschieben - wie beim Drehen der Auswahl
+  function turnStroke(s, c, ang, dx, dy) {
+    const pts = s.points;
+    if ((s.tool === "image" || s.tool === "table") && pts.length >= 2) {
+      const ocx = (Math.min(pts[0].x, pts[1].x) + Math.max(pts[0].x, pts[1].x)) / 2;
+      const ocy = (Math.min(pts[0].y, pts[1].y) + Math.max(pts[0].y, pts[1].y)) / 2;
+      const nc = rotatePoint({ x: ocx, y: ocy }, c.x, c.y, ang);
+      const mx = nc.x - ocx + dx;
+      const my = nc.y - ocy + dy;
+      s.points = pts.map((p) => ({ ...p, x: p.x + mx, y: p.y + my }));
+    } else {
+      s.points = pts.map((p) => {
+        const q = rotatePoint(p, c.x, c.y, ang);
+        return { ...p, x: q.x + dx, y: q.y + dy };
+      });
+    }
+    if (s.tool === "image" || s.tool === "text") s.extra = Object.assign({}, s.extra || {}, { rotation: strokeRotation(s) + ang });
+    s.bbox = strokeWorldBBox(s);
   }
 
   function strokeRotation(stroke) {
@@ -5981,7 +6015,7 @@
         zctx.fillStyle = "#ffffff";
         zctx.fillRect(r.x, r.y, r.w, r.h);
         const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
-        if (img && img.complete && img.naturalWidth) zctx.drawImage(img, r.x, r.y, r.w, r.h);
+        if (img && img.complete && img.naturalWidth) drawPageMedia(zctx, img, r);
         else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r, zctx, k);
         zctx.restore();
       }
@@ -7961,6 +7995,7 @@
     if (kiBtn) kiBtn.classList.toggle("hidden", cropping || pens.length === 0);
     if (copyBtn) copyBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (cutBtn) cutBtn.classList.toggle("hidden", cropping || !selection.ids.size);
+    document.getElementById("btn-sel-rotate")?.classList.toggle("hidden", cropping || !selection.ids.size);
     const delBtn = document.getElementById("btn-sel-delete");
     if (delBtn) delBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
@@ -8247,6 +8282,18 @@
     if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
     e.preventDefault();
     importFiles(e.dataTransfer.files);
+  });
+  // Auswahl (z. B. ein schief eingefuegtes Bild) mit einem Tipp um 90 Grad drehen
+  document.getElementById("btn-sel-rotate")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!selection.ids.size || !selection.bbox || dragState) return;
+    const b = selection.bbox;
+    const c = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
+    startSelectionRotate(null, { x: c.x + 100, y: c.y });
+    updateSelectionRotate({ x: c.x, y: c.y + 100 });
+    finalizeSelectionDrag();
+    syncSelectionToolbar();
+    requestRedraw();
   });
   document.getElementById("btn-media-crop")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -12864,6 +12911,47 @@
       else delete pg.mediaId;
       saveNotebook(nb);
     }
+    // Seite um 90 Grad im Uhrzeigersinn drehen: Hintergrund und alles darauf dreht mit
+    function rotatePage(i) {
+      if (selection.ids.size || cropState) clearSelection();
+      const oldRects = pageRects(notebook);
+      const nb = clone();
+      const pg = nb.pages[i];
+      const w = pg.w || A4_W;
+      pg.w = pg.h || A4_H;
+      pg.h = w;
+      pg.rot = ((pg.rot || 0) + 1) % 4;
+      if (!pg.rot) delete pg.rot;
+      const newRects = pageRects(nb);
+      const byId = new Map(newRects.map((r) => [r.id, r]));
+      const o = oldRects[i];
+      const n = newRects[i];
+      const oc = { x: o.x + o.w / 2, y: o.y + o.h / 2 };
+      for (const st of boardStrokes.values()) {
+        const b = st.bbox || strokeWorldBBox(st);
+        const cx = (b.minX + b.maxX) / 2;
+        const cy = (b.minY + b.maxY) / 2;
+        const old = oldRects.find((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h);
+        if (!old) continue;
+        if (old.id === o.id) {
+          turnStroke(st, oc, Math.PI / 2, n.x + n.w / 2 - oc.x, n.y + n.h / 2 - oc.y);
+        } else {
+          const nw = byId.get(old.id);
+          const dx = nw.x - old.x;
+          const dy = nw.y - old.y;
+          if (!dx && !dy) continue;
+          for (const p of st.points) {
+            p.x += dx;
+            p.y += dy;
+          }
+          st.bbox = strokeWorldBBox(st);
+        }
+        tagShape(st);
+        wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
+      }
+      saveNotebook(nb);
+      fitPage(i);
+    }
     function setLayout(layout) {
       if (notebook.layout === layout) return;
       const i = currentPage();
@@ -12993,6 +13081,7 @@
       for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBg(i, { paper: "blank", mediaId: u.mediaId }) });
       items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
       items.push({ head: "Seite" });
+      items.push({ icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) });
       items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
       items.push({ icon: "content_copy", label: "Neue Seite davor", run: () => addPages(i - 1, [templatePage()]) });
       items.push({ icon: "delete", label: "Seite löschen", danger: true, run: () => deletePage(i) });
@@ -13075,7 +13164,7 @@
       c.fillRect(0, 0, W, r.h * k);
       c.setTransform(k * d, 0, 0, k * d, -r.x * k * d, -r.y * k * d);
       const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
-      if (img && img.complete && img.naturalWidth) c.drawImage(img, r.x, r.y, r.w, r.h);
+      if (img && img.complete && img.naturalWidth) drawPageMedia(c, img, r);
       else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r, c, k);
       c.save();
       c.beginPath();
