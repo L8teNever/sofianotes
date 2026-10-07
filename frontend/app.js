@@ -1148,8 +1148,27 @@
     } else drawGrid();
     if (full && window.sofiaPagesUi) window.sofiaPagesUi();
     // im Versionsverlauf: alter Stand statt des aktuellen Blatts
-    const src = historyView ? historyView.strokes : boardStrokes;
+    const all = historyView ? historyView.strokes : boardStrokes;
     drawHistoryMarks();
+    // Nur zeichnen, was im Bild ist: auf vollen Blaettern spart das beim Schreiben
+    // den Grossteil der Arbeit pro Bild.
+    const vw0 = screenToWorld(canvasLeft, 0);
+    const vw1 = screenToWorld(canvasLeft + canvas.width / dpr, canvas.height / dpr);
+    const pad = 30 / Math.max(scale, 0.05);
+    const vx0 = Math.min(vw0.x, vw1.x) - pad;
+    const vy0 = Math.min(vw0.y, vw1.y) - pad;
+    const vx1 = Math.max(vw0.x, vw1.x) + pad;
+    const vy1 = Math.max(vw0.y, vw1.y) + pad;
+    const src = [];
+    for (const st of all.values()) {
+      // nur Tinte aussortieren; Bilder, Text und Tabellen sind wenige und werden immer gezeichnet
+      const b = st.tool === "pen" || st.tool === "marker" ? st.bbox : null;
+      if (b && Number.isFinite(b.minX)) {
+        const m = (st.size || 0) / 2;
+        if (b.maxX + m < vx0 || b.minX - m > vx1 || b.maxY + m < vy0 || b.minY - m > vy1) continue;
+      }
+      src.push(st);
+    }
 
     for (const stroke of src.values()) if (stroke.tool === "image") drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
@@ -2554,14 +2573,14 @@
   }
 
   function wsSend(obj) {
-    if (window.sofiaHistoryChanged && /^(stroke_end|stroke_move|erase)$/.test(obj && obj.type)) window.sofiaHistoryChanged();
-    if (window.sofiaPagesChanged && /^(stroke_end|stroke_move|erase)$/.test(obj && obj.type)) window.sofiaPagesChanged();
+    const structural = /^(stroke_end|stroke_move|stroke_replace|erase)$/.test(obj && obj.type);
+    if (structural && window.sofiaHistoryChanged) window.sofiaHistoryChanged();
+    if (structural && window.sofiaPagesChanged) window.sofiaPagesChanged();
+    if (structural) scheduleSaveBoard();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(obj));
-      scheduleSaveBoard();
       return;
     }
-    scheduleSaveBoard();
     if (!currentBoardId || !currentPersonId) return;
     if (obj.type === "stroke_end" && currentStroke) {
       enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: serializeStroke(currentStroke) });
@@ -2584,15 +2603,41 @@
     setConnState(connected ? "live" : "offline");
   }
 
+  // Lokale Kopie (fuer offline und schnelles Oeffnen): gesammelt, wenn gerade Ruhe ist -
+  // nie mitten im Schreiben und nicht nach jedem einzelnen Strich.
   let saveBoardTimer = null;
+  let saveBoardFor = null;
   function scheduleSaveBoard() {
     if (!currentBoardId || !window.SofiaOffline) return;
+    saveBoardFor = currentBoardId;
     clearTimeout(saveBoardTimer);
-    saveBoardTimer = setTimeout(() => {
-      const list = Array.from(boardStrokes.values()).map(cloneStroke);
-      SofiaOffline.setStrokes(currentBoardId, list).catch(() => {});
-    }, 80);
+    saveBoardTimer = setTimeout(saveBoardWhenIdle, 1200);
   }
+  function saveBoardWhenIdle() {
+    saveBoardTimer = null;
+    if (saveBoardFor !== currentBoardId) return saveBoardNow();
+    // Stift liegt auf oder etwas wird gezogen: spaeter nochmal
+    if (currentStroke || dragState || pinchState || panState) {
+      saveBoardTimer = setTimeout(saveBoardWhenIdle, 700);
+      return;
+    }
+    if (window.requestIdleCallback) requestIdleCallback(() => saveBoardNow(), { timeout: 2000 });
+    else saveBoardNow();
+  }
+  function saveBoardNow() {
+    clearTimeout(saveBoardTimer);
+    saveBoardTimer = null;
+    const bid = saveBoardFor;
+    saveBoardFor = null;
+    if (!bid || bid !== currentBoardId || !window.SofiaOffline) return;
+    // IndexedDB kopiert selbst - kein eigenes tiefes Kopieren aller Striche noetig
+    const list = [];
+    for (const s of boardStrokes.values()) list.push(serializeStroke(s));
+    SofiaOffline.setStrokes(bid, list).catch(() => {});
+  }
+  // App wird verlassen/versteckt: sofort sichern
+  window.addEventListener("pagehide", () => saveBoardFor && saveBoardNow());
+  document.addEventListener("visibilitychange", () => document.hidden && saveBoardFor && saveBoardNow());
 
   function applyStrokeList(list) {
     boardStrokes.clear();
@@ -11657,6 +11702,8 @@
     // z.B. eine Freigabe, die laengst besteht, wuerde nach dem Verlassen
     // und Wiederbetreten des Boards nicht mehr angezeigt.
     if (currentBoardId) {
+      if (saveBoardFor) saveBoardNow();
+      if (window.sofiaFlushPageMoves) window.sofiaFlushPageMoves();
       boardStrokes.clear();
       clearSelection();
       undoStack.length = 0;

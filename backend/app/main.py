@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -868,6 +869,33 @@ async def download_pdf(board: str, me: dict = Depends(get_current_person)) -> Re
     )
 
 
+# Nacharbeiten nach Aenderungen (Export-Datei, Sofia-Loesung) gesammelt und verzoegert -
+# nicht nach jedem einzelnen Strich, damit die Verbindung frei fuer neue Striche bleibt.
+_after_change: dict[str, asyncio.Task] = {}
+
+
+def _board_changed(board_id: str) -> None:
+    t = _after_change.get(board_id)
+    if t and not t.done():
+        return
+
+    async def later() -> None:
+        await asyncio.sleep(1.5)
+        _after_change.pop(board_id, None)
+        try:
+            await goodnotes_export.schedule_write(lambda: db.load_all(board_id))
+            if sofia_sync.enabled():
+                b = await db.get_board(board_id)
+                if b and b.get("sofiaHomeworkId"):
+                    owner_settings = await db.person_settings(b["ownerId"])
+                    if owner_settings["solutionMode"] == "auto":
+                        sofia_sync.schedule_solution(board_id)
+        except Exception:  # noqa: BLE001 - Nacharbeit darf die Verbindung nie stoeren
+            pass
+
+    _after_change[board_id] = asyncio.get_event_loop().create_task(later())
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     board_id = websocket.query_params.get("board") or ""
@@ -980,15 +1008,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 extra = msg.get("extra")
                 if entry is not None and extra is not None:
                     entry["extra"] = extra
-                if entry is not None and len(entry["points"]) >= 1:
-                    entry["board_id"] = room
-                    await db.insert_stroke(entry, person)
-                    persist_changed = True
+                # erst an die anderen Geraete, dann in die Datenbank (schnellere Live-Anzeige)
                 await manager.broadcast(
                     {"type": "stroke_end", "id": client.id, "strokeId": stroke_id},
                     exclude=websocket,
                     board_id=room,
                 )
+                if entry is not None and len(entry["points"]) >= 1:
+                    entry["board_id"] = room
+                    await db.insert_stroke(entry, person)
+                    persist_changed = True
 
             elif msg_type == "stroke_replace":
                 stroke_id = msg.get("strokeId")
@@ -1013,13 +1042,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 stroke = msg.get("stroke")
                 if stroke and stroke.get("id"):
                     stroke["board_id"] = room
-                    await db.insert_stroke(stroke, person)
-                    persist_changed = True
                     await manager.broadcast(
                         {"type": "stroke_move", "id": client.id, "stroke": stroke},
                         exclude=websocket,
                         board_id=room,
                     )
+                    await db.insert_stroke(stroke, person)
+                    persist_changed = True
 
             elif msg_type == "stroke_abort":
                 stroke_id = msg.get("strokeId")
@@ -1033,23 +1062,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             elif msg_type == "erase":
                 stroke_ids = [s for s in msg.get("strokeIds", []) if s]
                 if stroke_ids:
-                    await db.delete_strokes(stroke_ids, person)
-                    persist_changed = True
                     await manager.broadcast(
                         {"type": "erase", "id": client.id, "strokeIds": stroke_ids},
                         exclude=websocket,
                         board_id=room,
                     )
+                    await db.delete_strokes(stroke_ids, person)
+                    persist_changed = True
 
             if persist_changed:
-                bid = room
-                await goodnotes_export.schedule_write(lambda: db.load_all(bid))
-                if sofia_sync.enabled():
-                    b = await db.get_board(bid)
-                    if b and b.get("sofiaHomeworkId"):
-                        owner_settings = await db.person_settings(b["ownerId"])
-                        if owner_settings["solutionMode"] == "auto":
-                            sofia_sync.schedule_solution(bid)
+                _board_changed(room)
 
     except WebSocketDisconnect:
         pass
