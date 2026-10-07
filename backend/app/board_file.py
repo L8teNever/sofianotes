@@ -44,6 +44,7 @@ def build(board: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
         "title": board.get("title") or "Unbenannte Skizze",
         "paper": board.get("paper") or "graph",
         "refs": refs,
+        "sofiaHomeworkId": board.get("sofiaHomeworkId"),
         "strokes": strokes,
     }
     buf = io.BytesIO()
@@ -121,7 +122,9 @@ def parse(data: bytes) -> dict[str, Any]:
                 refs.append({"mediaId": mid, "name": str(r.get("name") or "Bild")[:120]})
 
     paper = manifest.get("paper")
+    hw = manifest.get("sofiaHomeworkId")
     return {
+        "sofiaHomeworkId": hw if isinstance(hw, int) and not isinstance(hw, bool) else None,
         "title": str(manifest.get("title") or "Importiertes Blatt")[:200],
         "paper": paper if paper in ("graph", "dots", "lines", "blank") else "graph",
         "refs": refs[:60],

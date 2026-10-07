@@ -663,7 +663,19 @@ async def import_board_file(request: Request, me: dict = Depends(get_current_per
         await db.set_board_refs(bid, parsed["refs"])
     if parsed["strokes"]:
         await db.insert_strokes(bid, parsed["strokes"])
-    return {"ok": True, "board": await db.get_board(bid), "strokes": len(parsed["strokes"])}
+    # War das Blatt einer Sofia-Hausaufgabe zugeordnet und sieht dieses Konto die Aufgabe
+    # auch, wird die Zuordnung mit uebernommen - aber nur, wenn es dafuer noch kein Blatt gibt.
+    homework = None
+    hw_id = parsed.get("sofiaHomeworkId")
+    if hw_id and sofia_sync.enabled():
+        if hw_id in await db.homework_boards(me["id"]):
+            homework = "exists"
+        elif await sofia_sync.homework_get(me["id"], hw_id):
+            await db.link_homework_board(me["id"], hw_id, bid)
+            homework = "linked"
+        else:
+            homework = "no_access"
+    return {"ok": True, "board": await db.get_board(bid), "strokes": len(parsed["strokes"]), "homework": homework}
 
 
 @app.get("/api/export.goodnotes")

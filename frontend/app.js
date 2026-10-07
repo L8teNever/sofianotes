@@ -11702,7 +11702,8 @@
       if (!r.ok) throw new Error(r.status === 400 ? "format" : "fail");
       const res = await r.json();
       refreshLibrary();
-      showToast("Importiert: " + res.board.title);
+      const hwNote = { linked: " · mit Hausaufgabe verknüpft", exists: " · Hausaufgabe hat schon ein Blatt", no_access: "" }[res.homework] || "";
+      showToast("Importiert: " + res.board.title + hwNote);
       openBoard(res.board.id, res.board.title);
     } catch (err) {
       showToast(String(err.message) === "format" ? "Das ist keine gültige .sofianotes-Datei" : "Import hat nicht geklappt");

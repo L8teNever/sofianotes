@@ -226,3 +226,13 @@ class BoardFileTests(unittest.TestCase):
                     board_file.parse(b"kein zip")
             finally:
                 media.MEDIA_DIR = old
+
+
+class BoardFileHomeworkTests(unittest.TestCase):
+    def test_homework_id_roundtrip(self):
+        from app import board_file
+
+        data = board_file.build({"title": "x", "sofiaHomeworkId": 7}, [])
+        self.assertEqual(board_file.parse(data)["sofiaHomeworkId"], 7)
+        data = board_file.build({"title": "x"}, [])
+        self.assertIsNone(board_file.parse(data)["sofiaHomeworkId"])
