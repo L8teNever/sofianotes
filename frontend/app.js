@@ -10931,7 +10931,7 @@
     const menu = [
       { icon: "square-pen", label: "Öffnen", run: () => openBoard(board.id, board.title) },
       { icon: "folder-input", label: "In Ordner legen", run: () => openMove("board", board.id) },
-      { icon: "save", label: "Als Datei sichern", run: () => exportBoardFile(board.id) },
+      { icon: "download", label: "Exportieren", run: () => openExportDialog(board.id, board.title) },
     ];
     if (!board.shared) {
       menu.splice(1, 0, { icon: "pencil", label: "Umbenennen", run: () => renameBoard(board) });
@@ -11872,10 +11872,32 @@
     libAddMenu.classList.add("hidden");
     boardFileInput.click();
   });
+  // Exportieren: Auswahl PDF oder .sofianotes
+  const exportScrim = document.getElementById("export-scrim");
+  let exportBoardId = null;
+  function openExportDialog(boardId, title) {
+    if (!boardId) return;
+    exportBoardId = boardId;
+    document.getElementById("export-name").textContent = "„" + (title || "Blatt") + "“ speichern als:";
+    exportScrim.classList.remove("hidden");
+  }
+  const closeExport = () => exportScrim.classList.add("hidden");
+  exportScrim.addEventListener("click", (e) => {
+    if (e.target === exportScrim) closeExport();
+  });
+  document.getElementById("export-cancel").addEventListener("click", closeExport);
+  exportScrim.querySelectorAll(".export-opt").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeExport();
+      if (b.dataset.format === "pdf") window.location.href = "/api/export.pdf?board=" + encodeURIComponent(exportBoardId);
+      else exportBoardFile(exportBoardId);
+    })
+  );
   document.getElementById("canvas-menu-export")?.addEventListener("click", (e) => {
     e.stopPropagation();
     closeCanvasMenus();
-    exportBoardFile(currentBoardId);
+    openExportDialog(currentBoardId, filenameInput ? filenameInput.value : "");
   });
 
   // ---- Canvas-Kopfzeile: Teilen + Herunterladen in einem Menü ----------

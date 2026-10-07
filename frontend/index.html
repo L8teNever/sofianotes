@@ -155,13 +155,9 @@
         <span class="material-symbols-rounded">share</span>
         Teilen mit …
       </button>
-      <button type="button" id="canvas-menu-download" class="lib-add-opt">
-        <span class="material-symbols-rounded">download</span>
-        Als PDF herunterladen
-      </button>
       <button type="button" id="canvas-menu-export" class="lib-add-opt">
-        <span class="material-symbols-rounded">save</span>
-        Als Datei sichern (.sofianotes)
+        <span class="material-symbols-rounded">download</span>
+        Exportieren …
       </button>
       <button type="button" id="canvas-menu-settings" class="lib-add-opt">
         <span class="material-symbols-rounded">tune</span>
@@ -598,6 +594,27 @@
       </button>
     </div>
     <div id="move-choices" class="share-choices"></div>
+  </div>
+</div>
+
+<div id="export-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg dlg-export" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Exportieren</div>
+    <p class="dlg-text" id="export-name"></p>
+    <button type="button" class="set-nav export-opt" data-format="pdf">
+      <span class="set-ico"><span class="material-symbols-rounded">picture_as_pdf</span></span>
+      <span class="set-nav-text"><strong>PDF</strong><small>Zum Ansehen, Drucken oder Abgeben – nicht mehr bearbeitbar</small></span>
+      <span class="material-symbols-rounded set-chev">chevron_right</span>
+    </button>
+    <button type="button" class="set-nav export-opt" data-format="sofianotes">
+      <span class="set-ico"><span class="material-symbols-rounded">save</span></span>
+      <span class="set-nav-text"><strong>sofianotes-Datei (.sofianotes)</strong><small>Alles zum Sichern und wieder Importieren – bleibt voll bearbeitbar, mit Material</small></span>
+      <span class="material-symbols-rounded set-chev">chevron_right</span>
+    </button>
+    <div class="m3-sheet-actions">
+      <button type="button" id="export-cancel" class="m3-btn-outline">Abbrechen</button>
+    </div>
   </div>
 </div>
 

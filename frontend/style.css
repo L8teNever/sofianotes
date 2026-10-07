@@ -3152,3 +3152,8 @@ body.bars-stacked #toolbar.dock-right { right: calc(var(--safe-right) + var(--vi
 .conv-menu-item .material-symbols-rounded { font-size: 18px; color: #6750a4; visibility: hidden; }
 .conv-menu-item.active { background: #eaddff; }
 .conv-menu-item.active .material-symbols-rounded { visibility: visible; }
+
+/* Export-Dialog */
+.dlg-export { display: flex; flex-direction: column; gap: 8px; }
+.dlg-export .export-opt { width: 100%; text-align: left; }
+.dlg-export .dlg-text { margin: 0 0 4px; }
