@@ -261,12 +261,58 @@
   // durchgekritzeltes Wort komplett, samt i-Punkten und kurzen Strichen. Ragt Tinte weit
   // heraus (Unterlaengen, lange Linien), muss das Gekritzel sie mehrfach kreuzen. Beim
   // normalen Schreiben liegt ein Buchstabe praktisch nie in der Flaeche eines neuen Strichs.
+  // Das Gekritzel wird pro Pruefung nur einmal aufbereitet (Huelle, gleichmaessige Punkte
+  // und ein Raster der Segmente) - sonst wird es bei vielen Buchstaben in der Naehe und
+  // 240-Hz-Stiftpunkten so langsam, dass das Blatt kurz einfriert.
+  const PREP_CELL = 12;
+  let prepCache = null;
+  function prepScribble(scribble) {
+    if (prepCache && prepCache.src === scribble && prepCache.n === scribble.length) return prepCache;
+    const hull = convexHull(scribble);
+    const sb = bboxOfPoints(scribble);
+    const sc = resampleEven(scribble, 2.5);
+    const grid = new Map();
+    const key = (cx, cy) => cx * 100003 + cy;
+    for (let i = 1; i < sc.length; i++) {
+      const a = sc[i - 1];
+      const b = sc[i];
+      const x0 = Math.floor(Math.min(a.x, b.x) / PREP_CELL);
+      const x1 = Math.floor(Math.max(a.x, b.x) / PREP_CELL);
+      const y0 = Math.floor(Math.min(a.y, b.y) / PREP_CELL);
+      const y1 = Math.floor(Math.max(a.y, b.y) / PREP_CELL);
+      for (let cx = x0; cx <= x1; cx++)
+        for (let cy = y0; cy <= y1; cy++) {
+          const k = key(cx, cy);
+          let arr = grid.get(k);
+          if (!arr) grid.set(k, (arr = []));
+          arr.push(i);
+        }
+    }
+    prepCache = { src: scribble, n: scribble.length, hull, sb, sc, grid, key };
+    return prepCache;
+  }
+  // Segment-Indizes des Gekritzels in der Naehe eines Punkts/Segments (Radius r)
+  function nearSegments(prep, x0, y0, x1, y1, r) {
+    const out = new Set();
+    const cx0 = Math.floor((Math.min(x0, x1) - r) / PREP_CELL);
+    const cx1 = Math.floor((Math.max(x0, x1) + r) / PREP_CELL);
+    const cy0 = Math.floor((Math.min(y0, y1) - r) / PREP_CELL);
+    const cy1 = Math.floor((Math.max(y0, y1) + r) / PREP_CELL);
+    for (let cx = cx0; cx <= cx1; cx++)
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const arr = prep.grid.get(prep.key(cx, cy));
+        if (arr) for (const i of arr) out.add(i);
+      }
+    return out;
+  }
+
   function scribbleHitsStroke(scribble, target, size) {
     const sp = target || [];
     if (!scribble || scribble.length < 2 || !sp.length) return false;
     const sz = size || 6;
-    const hull = convexHull(scribble);
-    const sb = bboxOfPoints(scribble);
+    const prep = prepScribble(scribble);
+    const hull = prep.hull;
+    const sb = prep.sb;
     const pad = 3 + sz / 2 + Math.min(8, 0.04 * Math.max(sb.maxX - sb.minX, sb.maxY - sb.minY));
     let inside = 0;
     for (const p of sp) if (distToHull(p, hull) <= pad) inside++;
@@ -276,12 +322,19 @@
     const small = Math.hypot(tb.maxX - tb.minX, tb.maxY - tb.minY) < Math.max(14, sz * 2.5);
     if (small) return frac >= 0.99; // Punkt / Mini-Strich mitten im Gekritzel
     if (frac >= 0.95) return true; // liegt ganz in der Kritzel-Flaeche (z. B. f-/t-Querstrich zwischen zwei Zuegen)
-    const sc = resampleEven(scribble, 2.5);
+    const sc = prep.sc;
     const tp = sp.length > 2 ? resampleEven(sp, 2.5) : sp;
+    // Kreuzungen zaehlen wie vorher (jedes Gekritzel-Segment einzeln), aber nur gegen
+    // Segmente, die raeumlich ueberhaupt in Frage kommen
+    const pairs = new Map(); // Gekritzel-Segment -> Anzahl Kreuzungen damit
     let crossings = 0;
-    for (let i = 1; i < sc.length && crossings < 3; i++) {
-      for (let j = 1; j < tp.length; j++) {
-        if (segsCross(sc[i - 1], sc[i], tp[j - 1], tp[j])) {
+    for (let j = 1; j < tp.length && crossings < 3; j++) {
+      const a = tp[j - 1];
+      const b = tp[j];
+      for (const i of nearSegments(prep, a.x, a.y, b.x, b.y, 0.5)) {
+        if (segsCross(sc[i - 1], sc[i], a, b)) {
+          const c = (pairs.get(i) || 0) + 1;
+          pairs.set(i, c);
           crossings++;
           if (crossings >= 3) break;
         }
@@ -291,7 +344,11 @@
       if (crossings >= 1) return true;
       // nicht gekreuzt, aber direkt darueber gekritzelt (kleine Buchstaben zwischen den Zuegen)
       const hitR = 3 + sz * 0.6;
-      for (const q of sc) for (const p of tp) if (hypot(q.x - p.x, q.y - p.y) <= hitR) return true;
+      for (const p of tp) {
+        for (const i of nearSegments(prep, p.x, p.y, p.x, p.y, hitR)) {
+          for (const q of [sc[i - 1], sc[i]]) if (hypot(q.x - p.x, q.y - p.y) <= hitR) return true;
+        }
+      }
       return false;
     }
     // ragt heraus (hohe Buchstaben, Unterlaengen, halb ueberkritzelter Endbuchstabe):
@@ -300,8 +357,9 @@
   }
 
   function coverFraction(scribble, target, size) {
-    const hull = convexHull(scribble);
-    const sb = bboxOfPoints(scribble);
+    const prep = prepScribble(scribble);
+    const hull = prep.hull;
+    const sb = prep.sb;
     const pad = 3 + (size || 6) / 2 + Math.min(8, 0.04 * Math.max(sb.maxX - sb.minX, sb.maxY - sb.minY));
     let inside = 0;
     for (const p of target) if (distToHull(p, hull) <= pad) inside++;

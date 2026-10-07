@@ -5735,9 +5735,33 @@
     zoomWin = { x: left, y: 0, w: 100, left, right, rows: zoomRowsDefault };
     zoomFitRows();
     zoomWin.y = snapZoomY(a.y + (b.y - a.y) * 0.18);
+    // Notizbuch: Rahmen und Raender an der aktuellen A4-Seite ausrichten
+    if (notebook && window.sofiaCurrentPage) zoomToPage(window.sofiaCurrentPage(), false);
     if (zoomWinBtn) zoomWinBtn.classList.add("active");
     requestRedraw();
   }
+  // Zoom-Fenster auf eine Notizbuch-Seite setzen: Raender = Seitenraender (bzw. Randlinie),
+  // Rahmen oben links in der ersten Zeile
+  function zoomToPage(i, keepRow) {
+    if (!zoomWin || !notebook) return;
+    const r = pageRects(notebook)[i];
+    if (!r) return;
+    const lines = r.page.paper === "lines" && !r.page.mediaId;
+    zoomWin.left = r.x + (lines ? NB_MARGIN + 4 : NB_GRID);
+    zoomWin.right = r.x + r.w - NB_GRID;
+    zoomFitRows();
+    const top = r.y + (lines ? NB_LINE_TOP - zoomRowH() : NB_GRID);
+    let y = top;
+    if (keepRow) {
+      // gleiche Zeile wie auf der alten Seite (relativ zum Seitenanfang)
+      y = Math.max(top, Math.min(r.y + r.h - zoomRowH() * 3, r.y + keepRow));
+    }
+    zoomNext = null;
+    zoomWin.x = zoomWin.left;
+    zoomWin.y = snapZoomY(y);
+    requestRedraw();
+  }
+  window.sofiaZoomToPage = zoomToPage;
 
   function closeZoomWindow() {
     clearTimeout(zoomAdvanceTimer);
@@ -5888,7 +5912,24 @@
   // Zeichnet den Welt-Ausschnitt ab (ox, oy) im Massstab k in die Schreibflaeche
   function renderZoomRegion(ox, oy, wWorld, hWorld, k, d) {
     zctx.setTransform(k * d, 0, 0, k * d, -ox * k * d, -oy * k * d);
-    drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
+    if (notebook) {
+      // Notizbuch: die echte Seite (Hintergrund und Raster), daneben grau
+      zctx.fillStyle = "#e8e6ed";
+      zctx.fillRect(ox, oy, wWorld, hWorld);
+      for (const r of pageRects(notebook)) {
+        if (r.x > ox + wWorld || r.x + r.w < ox || r.y > oy + hWorld || r.y + r.h < oy) continue;
+        zctx.save();
+        zctx.beginPath();
+        zctx.rect(r.x, r.y, r.w, r.h);
+        zctx.clip();
+        zctx.fillStyle = "#ffffff";
+        zctx.fillRect(r.x, r.y, r.w, r.h);
+        const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
+        if (img && img.complete && img.naturalWidth) zctx.drawImage(img, r.x, r.y, r.w, r.h);
+        else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r, zctx, k);
+        zctx.restore();
+      }
+    } else drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
     const inView = (st) => {
       const b = st.bbox || strokeWorldBBox(st);
       return !b || (b.maxX >= ox && b.minX <= ox + wWorld && b.maxY >= oy && b.minY <= oy + hWorld);
@@ -6956,7 +6997,7 @@
   //    Ansicht auf den Stand vor der Geste zuruecksetzen
   const palmIds = new Set();
   const PALM_CONTACT_PX = 38;
-  const PEN_GRACE_MS = 650;
+  const PEN_GRACE_MS = 350; // kuerzer: direkt nach dem Schreiben/Wegkritzeln laesst sich wieder scrollen
   let lastPenActivity = -Infinity;
   let touchGestureView = null; // {scale, offsetX, offsetY} beim Start der Finger-Geste
   // Groesse allein ist auf dem iPad unzuverlaessig (Finger melden teils grosse Flaechen):
@@ -12596,6 +12637,7 @@
       requestRedraw();
     }
     window.sofiaFitPage = fitPage;
+    window.sofiaCurrentPage = () => currentPage();
     // Seite fuer Seite: nach dem Wischen zur naechsten/vorigen Seite einrasten.
     // Rueckgabe false = normal weiterscrollen (z. B. wenn hineingezoomt).
     window.sofiaPageSnap = (ps) => {
@@ -12612,6 +12654,7 @@
       if (fresh && v < -0.25) target = a + step;
       else if (fresh && v > 0.25) target = a - step;
       target = Math.max(0, Math.min(notebook.pages.length - 1, target));
+      if (target !== a && window.sofiaZoomToPage) window.sofiaZoomToPage(target);
       animateView(viewFor(target));
       return true;
     };
@@ -12929,8 +12972,10 @@
       }
       c.restore();
     }
+    let renderedSig = "";
     function renderPanel() {
       if (!panelOpen || !notebook) return;
+      renderedSig = JSON.stringify(notebook.pages) + notebook.layout;
       const rects = pageRects(notebook);
       const cur = currentPage();
       grid.innerHTML = "";
@@ -12948,6 +12993,7 @@
         cell.appendChild(foot);
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
           fitPage(i);
         });
         foot.querySelector("button").addEventListener("click", (e) => {
@@ -12973,10 +13019,18 @@
       grid.appendChild(addCell);
     }
     // nach Aenderungen die Vorschaubilder kurz verzoegert neu zeichnen
+    // Nur bei geaenderten Seiten alles neu, sonst nur das Bild der aktuellen Seite (schnell)
     window.sofiaPagesChanged = () => {
       if (!panelOpen) return;
       clearTimeout(thumbTimer);
-      thumbTimer = setTimeout(renderPanel, 700);
+      thumbTimer = setTimeout(() => {
+        if (!panelOpen || !notebook) return;
+        if (JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) return renderPanel();
+        const i = currentPage();
+        const cv = grid.querySelector('.page-thumb[data-index="' + i + '"] canvas');
+        const r = pageRects(notebook)[i];
+        if (cv && r) renderThumb(cv, r);
+      }, 900);
     };
 
     // ---- Eigene Vorlagen (am Konto, ueber die Einstellungen synchron) ----
