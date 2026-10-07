@@ -8988,6 +8988,7 @@
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) {
         if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
+        else if (!panState && window.sofiaPageSnap) window.sofiaPageSnap({}); // nach dem Zoomen mit zwei Fingern
         panState = null;
       }
       if (tapState && tapState.pointerId === e.pointerId) {
@@ -9128,9 +9129,13 @@
       offsetX = e.clientX - anchor.x * scale;
       offsetY = e.clientY - anchor.y * scale;
       requestRedraw();
+      // Notizbuch: kurz nach dem letzten Drehen wieder auf eine Seite einrasten
+      clearTimeout(wheelSnapTimer);
+      wheelSnapTimer = setTimeout(() => window.sofiaPageSnap && window.sofiaPageSnap({}), 260);
     },
     { passive: false }
   );
+  let wheelSnapTimer = null;
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   // Textfelder auf dem Blatt sind contenteditable - dort muss Markieren erlaubt bleiben
@@ -12523,7 +12528,8 @@
     }
     // Seite i in die Mitte holen, Breite eingepasst
     // Ansicht: durchgehend (Seitenbreite einpassen) oder Seite fuer Seite (ganze Seite/Doppelseite)
-    const nbPaging = () => lsGetRaw("sofianotes-nb-paging") === "page";
+    // Standard: immer auf eine Seite einrasten (nur "durchgehend" schaltet es ab)
+    const nbPaging = () => lsGetRaw("sofianotes-nb-paging") !== "scroll";
     const nbSpread = () => !!notebook && notebook.layout === "horizontal" && lsGetRaw("sofianotes-nb-spread") === "2";
     window.sofiaNbSpread = nbSpread;
     function groupOf(i) {
