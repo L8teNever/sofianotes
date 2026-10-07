@@ -3467,3 +3467,5 @@ body.view-only #selection-toolbar,
 body.view-only #text-format-bar,
 body.view-only #paste-menu { display: none !important; }
 body.view-only #undo-redo-dock > .bar-divider { display: none; }
+.page-thumb-acts { display: inline-flex; align-items: center; gap: 2px; }
+.page-thumb-rot .material-symbols-rounded { font-size: 19px; }

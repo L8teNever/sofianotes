@@ -12952,6 +12952,12 @@
       saveNotebook(nb);
       fitPage(i);
     }
+    // ⋯-Menue oben: aktuelle Seite drehen
+    document.getElementById("canvas-menu-rotate")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (typeof closeCanvasMenus === "function") closeCanvasMenus();
+      if (notebook) rotatePage(currentPage());
+    });
     function setLayout(layout) {
       if (notebook.layout === layout) return;
       const i = currentPage();
@@ -13195,15 +13201,19 @@
         cell.appendChild(cv);
         const foot = document.createElement("div");
         foot.className = "page-thumb-foot";
-        foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite"><span class="material-symbols-rounded">expand_more</span></button>';
+        foot.innerHTML = '<span></span><span class="page-thumb-acts"><button type="button" class="page-thumb-rot hw-panel-btn" title="Seite drehen"><span class="material-symbols-rounded">rotate_right</span></button><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite"><span class="material-symbols-rounded">expand_more</span></button></span>';
         foot.firstChild.textContent = i + 1;
         cell.appendChild(foot);
+        foot.querySelector(".page-thumb-rot").addEventListener("click", (e) => {
+          e.stopPropagation();
+          rotatePage(i);
+        });
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
           if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
           fitPage(i);
         });
-        foot.querySelector("button").addEventListener("click", (e) => {
+        foot.querySelector(".page-thumb-menu").addEventListener("click", (e) => {
           e.stopPropagation();
           if (!menu.classList.contains("hidden")) return closeMenu();
           pageMenu(i, e.currentTarget);
@@ -13479,6 +13489,7 @@
     window.sofiaPagesUi = () => {
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
       pagesBtn.classList.toggle("hidden", !show);
+      document.getElementById("canvas-menu-rotate")?.classList.toggle("hidden", !show);
       if (!show) {
         addBig.classList.add("hidden");
         closeMenu();
