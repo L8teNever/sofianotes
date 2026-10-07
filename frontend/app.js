@@ -306,6 +306,7 @@
   }
 
   // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
+  let creatingBoard = null; // neues Blatt, das gerade im Hintergrund angelegt wird: {id, promise}
   let viewOnly = false; // Schau-Ansicht: nur ansehen (verschieben/zoomen), nichts aendern
   let historyView = null; // {strokes: Map, marks: Map id->color, ghosts: [stroke]}
   let authorMarks = null; // Map id->color (live: wer hat was geschrieben)
@@ -2581,6 +2582,8 @@
       ws.send(JSON.stringify(obj));
       return;
     }
+    // Blatt wird gerade erst angelegt: Striche bleiben lokal und gehen danach gesammelt raus
+    if (creatingBoard && creatingBoard.id === currentBoardId) return;
     if (!currentBoardId || !currentPersonId) return;
     if (obj.type === "stroke_end" && currentStroke) {
       enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: serializeStroke(currentStroke) });
@@ -2691,7 +2694,7 @@
       const r = await fetch("/api/boards", {
         method: "POST",
         headers,
-        body: JSON.stringify({ personId: op.personId, title: op.title, folderId: op.folderId, id: op.id }),
+        body: JSON.stringify({ personId: op.personId, title: op.title, folderId: op.folderId, id: op.id, notebook: op.notebook || undefined }),
       });
       if (!r.ok) throw new Error("board");
       return;
@@ -11724,6 +11727,19 @@
     if (title) document.title = title + " – sofianotes";
     hideLibrary({ fromHistory: true });
     if (!(opts && opts.fromHistory)) syncUrl(true);
+    if (opts && opts.creating) {
+      // brandneu: sofort zeichnen, verbunden wird nach dem Anlegen
+      requestRedraw();
+      wantWs = true;
+      setConnState("sync");
+      const ok = await finishCreate(id, opts.creating, opts.notebook);
+      if (currentBoardId !== id) return;
+      if (ok && (await probeOnline())) {
+        await flushOutbox();
+        connectWS();
+      } else setConnState("offline");
+      return;
+    }
     if (window.SofiaOffline) {
       const local = await SofiaOffline.getStrokes(id);
       if (local && local.length) applyStrokeList(local);
@@ -11911,6 +11927,51 @@
   }
 
 
+  // Neues Blatt/Notizbuch: sofort oeffnen und losschreiben, angelegt wird im Hintergrund.
+  // Die ID entsteht hier, der Server uebernimmt sie. Klappt das Anlegen nicht (kein Netz),
+  // geht es in die Warteschlange und wird nachgeholt.
+  async function createBoardInstant(title, notebookData) {
+    const id = uuid();
+    const folderId = currentFolderId;
+    const entry = { id, ownerId: currentPersonId, title, folderId, shared: false, sharedWith: [], notebook: !!notebookData, updatedAt: Date.now() / 1000 };
+    if (libraryCache) {
+      libraryCache.boards = libraryCache.boards || [];
+      libraryCache.boards.unshift(entry);
+      if (window.SofiaOffline) SofiaOffline.setKv("lib:" + currentPersonId + ":" + (folderId || ""), libraryCache).catch(() => {});
+    }
+    const body = { personId: currentPersonId, title, folderId, id };
+    if (notebookData) body.notebook = notebookData;
+    const promise = api("/api/boards", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    creatingBoard = { id, promise };
+    if (notebookData) {
+      notebook = JSON.parse(JSON.stringify(notebookData));
+      notebookBoardId = id;
+    }
+    openBoard(id, title, { creating: promise, notebook: notebookData || null });
+  }
+  // nach dem Anlegen: was schon geschrieben wurde hochschicken, dann live verbinden
+  async function finishCreate(id, promise, notebookData) {
+    let ok = false;
+    let offline = false;
+    try {
+      await promise;
+      ok = true;
+    } catch (err) {
+      offline = !Number(err && err.message);
+    }
+    if (creatingBoard && creatingBoard.id === id) creatingBoard = null;
+    if (!ok && !offline) {
+      showToast("Blatt anlegen hat nicht geklappt");
+      return false;
+    }
+    if (!ok) await enqueueOp({ type: "board_create", personId: currentPersonId, title: (currentBoardMeta && currentBoardMeta.title) || "Unbenannte Skizze", folderId: currentFolderId, id, notebook: notebookData || null });
+    if (currentBoardId === id) {
+      for (const st of boardStrokes.values()) await enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: id, stroke: serializeStroke(st) });
+      if (!ok) showToast("Ohne Verbindung angelegt – wird nachgeholt");
+    }
+    return ok;
+  }
+
   // Notizbuch mit A4-Seiten (Papier der ersten Seite = Standard fuer neue Blaetter)
   async function createNotebook() {
     const res = await openNameSheet({ title: "Neues Notizbuch", label: "Titel", placeholder: "z. B. Deutsch Heft" });
@@ -11918,48 +11979,13 @@
     const title = res.value.trim() || "Notizbuch";
     const paper = mySettings.defaultPaper || "graph";
     const notebookData = { layout: "vertical", template: { paper }, pages: [{ id: "p" + uuid().slice(0, 12), paper, w: 794, h: 1123 }] };
-    try {
-      const created = await api("/api/boards", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, title, folderId: currentFolderId, notebook: notebookData }),
-      });
-      await openBoard(created.board.id, created.board.title);
-    } catch (err) {
-      showToast("Notizbuch anlegen geht nur mit Verbindung");
-    }
+    createBoardInstant(title, notebookData);
   }
 
   async function createBoard() {
     const res = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
     if (res === null) return;
-    const title = res.value.trim() || "Unbenannte Skizze";
-    try {
-      const created = await api("/api/boards", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ personId: currentPersonId, title, folderId: currentFolderId }),
-      });
-      await openBoard(created.board.id, created.board.title);
-    } catch (err) {
-      const id = uuid();
-      await enqueueOp({ type: "board_create", personId: currentPersonId, title, folderId: currentFolderId, id });
-      if (libraryCache) {
-        libraryCache.boards = libraryCache.boards || [];
-        libraryCache.boards.unshift({
-          id,
-          ownerId: currentPersonId,
-          title,
-          folderId: currentFolderId,
-          shared: false,
-          sharedWith: [],
-        });
-        if (window.SofiaOffline) {
-          await SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache);
-        }
-      }
-      await openBoard(id, title);
-    }
+    createBoardInstant(res.value.trim() || "Unbenannte Skizze", null);
   }
 
   async function createFolder() {
@@ -12990,6 +13016,7 @@
       const { bid, nb } = nbQueued;
       nbQueued = null;
       nbInFlight = true;
+      if (creatingBoard && creatingBoard.id === bid) await creatingBoard.promise.catch(() => {});
       try {
         await api("/api/boards/" + encodeURIComponent(bid), {
           method: "PATCH",
