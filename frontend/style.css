@@ -3396,3 +3396,19 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .pap-list button:hover { background: #f3edf7; }
 .pap-list .material-symbols-rounded { color: #1c1b1f; font-size: 22px; }
 #btn-pages.hidden { display: none; }
+
+/* Notizbuch-Einstellungen: eigene Vorlagen */
+#set-nb-current.hidden, #set-nb-none.hidden { display: none; }
+.set-nb-templates { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
+.set-nb-tpl { display: flex; align-items: center; gap: 12px; background: #f3edf7; border-radius: 14px; padding: 6px 6px 6px 8px; }
+.set-nb-tpl img { width: 34px; height: 48px; object-fit: cover; border-radius: 3px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
+.set-nb-tpl > span { flex: 1; min-width: 0; font: 600 14px/1.2 'Google Sans', 'Inter', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#set-nb-tpl-add { color: #6750a4; }
+.pap-own-box { width: 84px; height: 119px; border: 2px dashed #6750a4; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #6750a4; background: rgba(103, 80, 164, 0.05); }
+.pap-own-box .material-symbols-rounded { font-size: 30px; }
+/* alle Vorlagen auf einen Blick (eigene inklusive), kein Wegscrollen */
+.pap-templates { flex-wrap: wrap; overflow-x: visible; max-height: 52vh; overflow-y: auto; touch-action: pan-y; }
+.pap-card { width: 96px; }
+.pap-label { text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 92px; }
+.pap-templates { gap: 8px; }
+.pap-card { width: 92px; padding: 4px 2px; }

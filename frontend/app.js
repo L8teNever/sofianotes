@@ -38,6 +38,9 @@
     "sofianotes-hwpanel",
     "sofianotes-hwpill-pos",
     "sofianotes-calc",
+    "sofianotes-nb-paging",
+    "sofianotes-nb-spread",
+    "sofianotes-templates",
   ];
   const PREF_META = "sofianotes-prefs-sync"; // {at, dirty}
   const prefSync = (() => {
@@ -170,50 +173,56 @@
     }
     return out;
   }
+  // Wie ein echter A4-Block: 5-mm-Kaestchen bzw. -Punkte, liniert mit ca. 8,5 mm,
+  // Kopfbereich und roter Randlinie. 1 mm = A4_W / 210 Welteinheiten.
+  const MM = A4_W / 210;
+  const NB_GRID = 5 * MM;
+  const NB_LINE = 8.5 * MM;
+  const NB_LINE_TOP = 25 * MM;
+  const NB_MARGIN = 20 * MM;
   function drawPagePattern(paper, r, target, unit) {
     if (paper === "blank") return;
     const ctx = target || window.__sofiaMainCtx;
     const scale = unit || currentScale();
-    const g = GRID_SIZE;
     if (paper === "dots") {
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      const rad = 1.15 / scale;
-      for (let x = r.x + g; x < r.x + r.w - 2; x += g)
-        for (let y = r.y + g; y < r.y + r.h - 2; y += g) {
+      ctx.fillStyle = "rgba(60,70,90,0.30)";
+      const rad = Math.max(0.55, 1.0 / scale);
+      for (let x = r.x + NB_GRID; x < r.x + r.w - 1; x += NB_GRID)
+        for (let y = r.y + NB_GRID; y < r.y + r.h - 1; y += NB_GRID) {
           ctx.beginPath();
           ctx.arc(x, y, rad, 0, Math.PI * 2);
           ctx.fill();
         }
       return;
     }
-    ctx.lineWidth = 1 / scale;
+    ctx.lineWidth = Math.max(0.35, 0.9 / scale);
     if (paper === "graph") {
-      let i = 1;
-      for (let x = r.x + g; x < r.x + r.w - 2; x += g, i++) {
-        ctx.strokeStyle = i % 4 === 0 ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
-        ctx.beginPath();
+      ctx.strokeStyle = "rgba(80,100,150,0.20)";
+      ctx.beginPath();
+      for (let x = r.x + NB_GRID; x < r.x + r.w - 1; x += NB_GRID) {
         ctx.moveTo(x, r.y);
         ctx.lineTo(x, r.y + r.h);
-        ctx.stroke();
       }
+      for (let y = r.y + NB_GRID; y < r.y + r.h - 1; y += NB_GRID) {
+        ctx.moveTo(r.x, y);
+        ctx.lineTo(r.x + r.w, y);
+      }
+      ctx.stroke();
+      return;
     }
-    let j = 1;
-    const top = paper === "lines" ? r.y + g * 3 : r.y + g;
-    for (let y = top; y < r.y + r.h - 2; y += g, j++) {
-      ctx.strokeStyle = paper === "lines" ? "rgba(70,90,150,0.20)" : j % 4 === 0 ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
-      ctx.beginPath();
+    // liniert
+    ctx.strokeStyle = "rgba(80,100,150,0.30)";
+    ctx.beginPath();
+    for (let y = r.y + NB_LINE_TOP; y < r.y + r.h - NB_LINE * 0.6; y += NB_LINE) {
       ctx.moveTo(r.x, y);
       ctx.lineTo(r.x + r.w, y);
-      ctx.stroke();
     }
-    if (paper === "lines") {
-      // Randlinie links wie im Schulheft
-      ctx.strokeStyle = "rgba(217,48,37,0.35)";
-      ctx.beginPath();
-      ctx.moveTo(r.x + g * 2.5, r.y);
-      ctx.lineTo(r.x + g * 2.5, r.y + r.h);
-      ctx.stroke();
-    }
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(217,48,37,0.40)";
+    ctx.beginPath();
+    ctx.moveTo(r.x + NB_MARGIN, r.y);
+    ctx.lineTo(r.x + NB_MARGIN, r.y + r.h);
+    ctx.stroke();
   }
   // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
   function clampNotebookView() {
@@ -235,7 +244,8 @@
     const availW = right - left;
     const availH = bottom - top;
     // hoechstens so weit raus, dass eine ganze Seite drauf passt
-    const minScale = Math.max(MIN_ZOOM, Math.min(availW / maxW, availH / maxH) * 0.92);
+    const spreadW = window.sofiaNbSpread && window.sofiaNbSpread() ? maxW * 2 + PAGE_GAP : maxW;
+    const minScale = Math.max(MIN_ZOOM, Math.min(availW / spreadW, availH / maxH) * 0.92);
     if (scale < minScale) {
       const c = screenToWorld(left + availW / 2, top + availH / 2);
       scale = minScale;
@@ -5625,11 +5635,21 @@
   // Schreibhoehe in Kaestchen: das Fenster zeigt immer drei Zeilen dieser Hoehe, in der
   // mittleren wird geschrieben. Standard aus den Einstellungen, +/- gilt bis zum Schliessen.
   // Zeilenwechsel: um wie viele Kaestchen es runtergeht (0 = so hoch wie die Schreibhoehe)
+  // Raster unter dem Zoom-Fenster: im Notizbuch die echten Kaestchen/Zeilen der Seite
+  function zoomGrid() {
+    if (!notebook || !zoomWin) return { unit: GRID_SIZE, base: 0 };
+    const yc = zoomWin.y;
+    const rects = pageRects(notebook);
+    const r = rects.find((q) => yc >= q.y - PAGE_GAP && yc <= q.y + q.h) || rects[0];
+    if (!r) return { unit: GRID_SIZE, base: 0 };
+    if (r.page.paper === "lines" && !r.page.mediaId) return { unit: NB_LINE, base: r.y + NB_LINE_TOP };
+    return { unit: NB_GRID, base: r.y };
+  }
   function zoomLineStep() {
-    return zoomStepDefault > 0 ? zoomStepDefault * GRID_SIZE : zoomRowH();
+    return zoomStepDefault > 0 ? zoomStepDefault * zoomGrid().unit : zoomRowH();
   }
   function zoomRowH() {
-    return (zoomWin && zoomWin.rows ? zoomWin.rows : zoomRowsDefault) * GRID_SIZE;
+    return (zoomWin && zoomWin.rows ? zoomWin.rows : zoomRowsDefault) * zoomGrid().unit;
   }
   function zoomFitRows() {
     if (!zoomWin) return;
@@ -5640,8 +5660,9 @@
   // Rahmen so legen, dass die mittlere Zeile auf einer Kaestchenlinie beginnt
   function snapZoomY(y) {
     const rh = zoomRowH();
-    const unit = Number.isInteger(zoomWin.rows) && Number.isInteger(zoomStepDefault) ? GRID_SIZE : GRID_SIZE / 2;
-    return Math.round((y + rh) / unit) * unit - rh;
+    const g = zoomGrid();
+    const unit = Number.isInteger(zoomWin.rows) && Number.isInteger(zoomStepDefault) ? g.unit : g.unit / 2;
+    return g.base + Math.round((y + rh - g.base) / unit) * unit - rh;
   }
   function paneToWorld(clientX, clientY) {
     const r = zoomPaneRect();
@@ -8966,7 +8987,7 @@
       }
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) {
-        if (panState && e.type === "pointerup") startFling(panState);
+        if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
         panState = null;
       }
       if (tapState && tapState.pointerId === e.pointerId) {
@@ -12501,17 +12522,93 @@
       return best;
     }
     // Seite i in die Mitte holen, Breite eingepasst
-    function fitPage(i) {
+    // Ansicht: durchgehend (Seitenbreite einpassen) oder Seite fuer Seite (ganze Seite/Doppelseite)
+    const nbPaging = () => lsGetRaw("sofianotes-nb-paging") === "page";
+    const nbSpread = () => !!notebook && notebook.layout === "horizontal" && lsGetRaw("sofianotes-nb-spread") === "2";
+    window.sofiaNbSpread = nbSpread;
+    function groupOf(i) {
+      const n = notebook.pages.length;
+      i = Math.max(0, Math.min(n - 1, i));
+      if (!nbSpread()) return [i, i];
+      const a = i - (i % 2);
+      return [a, Math.min(n - 1, a + 1)];
+    }
+    function viewFor(i) {
       const rects = pageRects(notebook);
-      const r = rects[Math.max(0, Math.min(rects.length - 1, i))];
-      if (!r) return;
-      const avail = window.innerWidth - viewLeft - viewRight;
-      scale = clampZoom(Math.min(1.25, (avail - 48) / r.w));
-      offsetX = viewLeft + (avail - r.w * scale) / 2 - r.x * scale;
-      offsetY = 84 - r.y * scale;
+      if (!rects.length) return null;
+      const [a, b] = groupOf(i);
+      const x0 = rects[a].x;
+      const y0 = Math.min(rects[a].y, rects[b].y);
+      const x1 = rects[b].x + rects[b].w;
+      const y1 = Math.max(rects[a].y + rects[a].h, rects[b].y + rects[b].h);
+      const availW = window.innerWidth - viewLeft - viewRight;
+      const top = 76;
+      const availH = window.innerHeight - top - 16;
+      let sc;
+      let ox;
+      let oy;
+      if (nbPaging() || nbSpread()) {
+        sc = clampZoom(Math.min((availW - 32) / (x1 - x0), (availH - 8) / (y1 - y0)));
+        ox = viewLeft + (availW - (x1 - x0) * sc) / 2 - x0 * sc;
+        oy = top + (availH - (y1 - y0) * sc) / 2 - y0 * sc;
+      } else {
+        sc = clampZoom(Math.min(1.25, (availW - 48) / (x1 - x0)));
+        ox = viewLeft + (availW - (x1 - x0) * sc) / 2 - x0 * sc;
+        oy = 84 - y0 * sc;
+      }
+      return { scale: sc, offsetX: ox, offsetY: oy };
+    }
+    let viewAnim = null;
+    function animateView(v, ms) {
+      if (!v) return;
+      const from = { scale, offsetX, offsetY };
+      const t0 = performance.now();
+      const me = {};
+      viewAnim = me;
+      const step = (now) => {
+        if (viewAnim !== me) return;
+        const t = Math.min(1, (now - t0) / (ms || 260));
+        const e = 1 - Math.pow(1 - t, 3);
+        scale = from.scale + (v.scale - from.scale) * e;
+        offsetX = from.offsetX + (v.offsetX - from.offsetX) * e;
+        offsetY = from.offsetY + (v.offsetY - from.offsetY) * e;
+        requestRedraw();
+        if (t < 1) requestAnimationFrame(step);
+        else viewAnim = null;
+      };
+      requestAnimationFrame(step);
+    }
+    canvas.addEventListener("pointerdown", () => (viewAnim = null), true);
+    function fitPage(i, animate) {
+      const v = viewFor(i);
+      if (!v) return;
+      if (animate) return animateView(v);
+      viewAnim = null;
+      scale = v.scale;
+      offsetX = v.offsetX;
+      offsetY = v.offsetY;
       requestRedraw();
     }
     window.sofiaFitPage = fitPage;
+    // Seite fuer Seite: nach dem Wischen zur naechsten/vorigen Seite einrasten.
+    // Rueckgabe false = normal weiterscrollen (z. B. wenn hineingezoomt).
+    window.sofiaPageSnap = (ps) => {
+      if (!notebook || !nbPaging()) return false;
+      const cur = currentPage();
+      const fit = viewFor(cur);
+      if (!fit || scale > fit.scale * 1.08) return false;
+      const horiz = notebook.layout === "horizontal";
+      const v = horiz ? ps.vx || 0 : ps.vy || 0;
+      const fresh = performance.now() - (ps.t || 0) < 120;
+      const step = nbSpread() ? 2 : 1;
+      const [a] = groupOf(cur);
+      let target = a;
+      if (fresh && v < -0.25) target = a + step;
+      else if (fresh && v > 0.25) target = a - step;
+      target = Math.max(0, Math.min(notebook.pages.length - 1, target));
+      animateView(viewFor(target));
+      return true;
+    };
 
     // Striche wandern mit ihrer Seite mit (bzw. verschwinden mit einer geloeschten Seite)
     function moveStrokesWithPages(oldRects, newRects) {
@@ -12552,6 +12649,7 @@
       if (currentBoardMeta) currentBoardMeta.notebook = next;
       requestRedraw();
       if (window.sofiaPagesChanged) window.sofiaPagesChanged();
+      renderNbSettings();
       try {
         await api("/api/boards/" + encodeURIComponent(bid), {
           method: "PATCH",
@@ -12725,7 +12823,8 @@
       const pg = notebook.pages[i];
       const items = [{ head: "Seite " + (i + 1) + " – Hintergrund" }];
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBg(i, { paper: k }) });
-      items.push({ icon: "description", label: "Bild oder PDF als Hintergrund …", active: !!pg.mediaId, run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
+      for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBg(i, { paper: "blank", mediaId: u.mediaId }) });
+      items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
       items.push({ head: "Seite" });
       items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
       items.push({ icon: "content_copy", label: "Neue Seite davor", run: () => addPages(i - 1, [templatePage()]) });
@@ -12740,7 +12839,9 @@
       items.push({ icon: "view_column", label: "Seiten nebeneinander", active: notebook.layout === "horizontal", run: () => setLayout("horizontal") });
       items.push({ head: "Neue Seiten bekommen" });
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: "note_add", label: PAPER_LABELS[k], active: !t.mediaId && (t.paper || "graph") === k, run: () => setTemplate({ paper: k }) });
-      items.push({ icon: "upload_file", label: "Eigene Vorlage (Bild/PDF) …", active: !!t.mediaId, run: () => ((bgTarget = { kind: "template" }), bgInput.click()) });
+      for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: t.mediaId === u.mediaId, run: () => setTemplate({ paper: "blank", mediaId: u.mediaId, w: u.w, h: u.h }) });
+      items.push({ icon: "upload_file", label: "Andere Datei als Vorlage …", active: !!t.mediaId && !userTemplates().some((u) => u.mediaId === t.mediaId), run: () => ((bgTarget = { kind: "template" }), bgInput.click()) });
+      items.push({ icon: "tune", label: "Notizbuch-Einstellungen …", run: () => { openSettings(); showSettingsPage("notebook"); renderNbSettings(); } });
       openMenu(items, anchor);
     }
     document.addEventListener("pointerdown", (e) => {
@@ -12872,6 +12973,122 @@
       thumbTimer = setTimeout(renderPanel, 700);
     };
 
+    // ---- Eigene Vorlagen (am Konto, ueber die Einstellungen synchron) ----
+    function userTemplates() {
+      try {
+        const v = JSON.parse(lsGetRaw("sofianotes-templates") || "[]");
+        return Array.isArray(v) ? v : [];
+      } catch (err) {
+        return [];
+      }
+    }
+    function saveUserTemplates(list) {
+      try {
+        localStorage.setItem("sofianotes-templates", JSON.stringify(list));
+      } catch (err) {}
+      renderNbSettings();
+    }
+    const tplInput = document.createElement("input");
+    tplInput.type = "file";
+    tplInput.accept = "image/*,application/pdf,.pdf";
+    tplInput.style.display = "none";
+    document.body.appendChild(tplInput);
+    let tplThenAdd = false;
+    tplInput.addEventListener("change", async () => {
+      const file = tplInput.files && tplInput.files[0];
+      tplInput.value = "";
+      if (!file) return;
+      try {
+        showToast("Vorlage wird gespeichert…");
+        const imgs = await fileToPageImages(file, 10);
+        const base = (file.name || "Vorlage").replace(/\.[a-z0-9]+$/i, "");
+        const added = imgs.map((im, k) => ({ id: newId(), name: base + (imgs.length > 1 ? " S. " + (k + 1) : ""), mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        saveUserTemplates(userTemplates().concat(added));
+        showToast(added.length > 1 ? added.length + " Vorlagen gespeichert" : "Vorlage gespeichert");
+        if (tplThenAdd && notebook && added[0]) {
+          const t = added[0];
+          addPages(currentPage(), [{ id: newId(), paper: "blank", mediaId: t.mediaId, w: t.w, h: t.h }]);
+        }
+      } catch (err) {
+        showToast("Vorlage speichern hat nicht geklappt");
+      }
+      tplThenAdd = false;
+    });
+
+    // ---- Einstellungen: Notizbuch ----
+    function renderNbSettings() {
+      const cur = document.getElementById("set-nb-current");
+      if (!cur) return;
+      cur.classList.toggle("hidden", !notebook);
+      document.getElementById("set-nb-none").classList.toggle("hidden", !!notebook);
+      document.querySelectorAll("#set-nb-layout [data-layout]").forEach((b) => b.classList.toggle("active", !!notebook && (notebook.layout || "vertical") === b.dataset.layout));
+      const paging = nbPaging() ? "page" : "scroll";
+      document.querySelectorAll("#set-nb-paging [data-paging]").forEach((b) => b.classList.toggle("active", b.dataset.paging === paging));
+      const spread = lsGetRaw("sofianotes-nb-spread") === "2" ? "2" : "1";
+      document.querySelectorAll("#set-nb-spread [data-spread]").forEach((b) => b.classList.toggle("active", b.dataset.spread === spread));
+      const box = document.getElementById("set-nb-templates");
+      box.innerHTML = "";
+      for (const t of userTemplates()) {
+        const row = document.createElement("div");
+        row.className = "set-nb-tpl";
+        const img = document.createElement("img");
+        img.src = "/api/media/" + encodeURIComponent(t.mediaId);
+        img.alt = "";
+        row.appendChild(img);
+        const name = document.createElement("span");
+        name.textContent = t.name;
+        row.appendChild(name);
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "hw-panel-btn";
+        del.title = "Vorlage entfernen";
+        del.innerHTML = '<span class="material-symbols-rounded">close</span>';
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          saveUserTemplates(userTemplates().filter((x) => x.id !== t.id));
+        });
+        row.appendChild(del);
+        box.appendChild(row);
+      }
+      const sum = document.getElementById("set-sum-notebook");
+      if (sum) sum.textContent = (paging === "page" ? "Seite für Seite" : "Durchgehend") + (spread === "2" ? " · Doppelseite" : "") + " · " + userTemplates().length + " eigene Vorlagen";
+    }
+    document.querySelector('.set-nav[data-go="notebook"]')?.addEventListener("click", () => setTimeout(renderNbSettings, 0));
+    document.querySelectorAll("#set-nb-layout [data-layout]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (notebook) setLayout(b.dataset.layout);
+        setTimeout(renderNbSettings, 0);
+      })
+    );
+    const setPref = (k, v) => {
+      try {
+        localStorage.setItem(k, v);
+      } catch (err) {}
+    };
+    document.querySelectorAll("#set-nb-paging [data-paging]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setPref("sofianotes-nb-paging", b.dataset.paging);
+        renderNbSettings();
+        if (notebook) fitPage(currentPage(), true);
+      })
+    );
+    document.querySelectorAll("#set-nb-spread [data-spread]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setPref("sofianotes-nb-spread", b.dataset.spread);
+        renderNbSettings();
+        if (notebook) fitPage(currentPage(), true);
+      })
+    );
+    document.getElementById("set-nb-tpl-add")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      tplThenAdd = false;
+      tplInput.click();
+    });
+    renderNbSettings();
+
     // ---- "Seite hinzufuegen" ----
     const photoInput = document.createElement("input");
     photoInput.type = "file";
@@ -12956,6 +13173,20 @@
       for (const k of Object.keys(PAPER_LABELS)) {
         box.appendChild(templateCard(PAPER_LABELS[k], "", { paper: k }, () => addPages(at, [{ id: newId(), paper: k, w: A4_W, h: A4_H }])));
       }
+      for (const t of userTemplates()) {
+        box.appendChild(templateCard(t.name, "Eigene", t, () => addPages(at, [{ id: newId(), paper: "blank", mediaId: t.mediaId, w: t.w, h: t.h }])));
+      }
+      const own = document.createElement("button");
+      own.type = "button";
+      own.className = "pap-card pap-own";
+      own.innerHTML = '<span class="pap-own-box"><span class="material-symbols-rounded">add</span></span><span class="pap-label">Eigene hinzufügen</span><small>PDF / Bild</small>';
+      own.addEventListener("click", (e) => {
+        e.stopPropagation();
+        addPop.classList.add("hidden");
+        tplThenAdd = true;
+        tplInput.click();
+      });
+      box.appendChild(own);
       addPop.classList.remove("hidden");
       const r = anchor.getBoundingClientRect();
       const pw = addPop.offsetWidth;

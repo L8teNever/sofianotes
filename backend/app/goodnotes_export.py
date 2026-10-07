@@ -439,27 +439,37 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
             except Exception:  # noqa: BLE001
                 pass
         else:
+            # wie ein echter A4-Block: 5-mm-Kaestchen/Punkte, liniert ca. 8,5 mm mit Randlinie
             paper = pg.get("paper") or "graph"
-            c.setLineWidth(0.5)
-            step = GRID * scale
-            if paper in ("graph", "lines"):
+            mm = 72.0 / 25.4
+            step = 5 * mm
+            if paper == "graph":
+                c.setLineWidth(0.35)
+                c.setStrokeColor(Color(80 / 255, 100 / 255, 150 / 255, alpha=0.3))
+                x = step
+                while x < pw:
+                    c.line(x, 0, x, ph)
+                    x += step
                 y = step
                 while y < ph:
-                    c.setStrokeColor(GRID_LIGHT)
-                    c.line(0 if paper == "graph" else step * 1.5, ph - y, pw, ph - y)
+                    c.line(0, ph - y, pw, ph - y)
                     y += step
-                if paper == "graph":
-                    x = step
-                    while x < pw:
-                        c.line(x, 0, x, ph)
-                        x += step
+            elif paper == "lines":
+                c.setLineWidth(0.4)
+                c.setStrokeColor(Color(80 / 255, 100 / 255, 150 / 255, alpha=0.4))
+                y = 25 * mm
+                while y < ph - 5 * mm:
+                    c.line(0, ph - y, pw, ph - y)
+                    y += 8.5 * mm
+                c.setStrokeColor(Color(217 / 255, 48 / 255, 37 / 255, alpha=0.5))
+                c.line(20 * mm, 0, 20 * mm, ph)
             elif paper == "dots":
-                c.setFillColor(GRID_BOLD)
+                c.setFillColor(Color(60 / 255, 70 / 255, 90 / 255, alpha=0.45))
                 y = step
                 while y < ph:
                     x = step
                     while x < pw:
-                        c.circle(x, ph - y, 0.8, stroke=0, fill=1)
+                        c.circle(x, ph - y, 0.55, stroke=0, fill=1)
                         x += step
                     y += step
         mine = [s for s in strokes if px <= _stroke_center(s)[0] <= px + w and py <= _stroke_center(s)[1] <= py + h]

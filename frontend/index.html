@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,backspace,brush,calculate,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,cloud_done,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,download,drag_indicator,drive_file_move,edit,expand_more,fit_screen,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,save,send,shapes,share,square_foot,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,upload_file,view_agenda,view_column,view_sidebar,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_stories,backspace,brush,calculate,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,cloud_done,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,download,drag_indicator,drive_file_move,edit,expand_more,fit_screen,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,save,send,shapes,share,square_foot,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,touch_app,tune,undo,upload_file,view_agenda,view_column,view_sidebar,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js" defer></script>
 <link rel="stylesheet" href="style.css?v=__BUILD__" />
@@ -362,6 +362,11 @@
         <span class="set-nav-text"><strong>Werkzeugleiste</strong><small id="set-sum-bar">Unten</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
+      <button type="button" class="set-nav" data-go="notebook" data-title="Notizbuch">
+        <span class="set-ico"><span class="material-symbols-rounded">auto_stories</span></span>
+        <span class="set-nav-text"><strong>Notizbuch</strong><small id="set-sum-notebook">Seiten, Blättern, Vorlagen</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
       <button type="button" class="set-nav" data-go="zoom" data-title="Zoom-Fenster">
         <span class="set-ico"><span class="material-symbols-rounded">zoom_in_map</span></span>
         <span class="set-nav-text"><strong>Zoom-Fenster</strong><small id="set-sum-zoom">1 Kästchen hoch</small></span>
@@ -438,6 +443,31 @@
         <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span><span>Links</span></button>
         <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span><span>Rechts</span></button>
       </div>
+    </div>
+
+    <div class="set-page hidden" data-page="notebook">
+      <div id="set-nb-current">
+        <div class="set-sub">Dieses Notizbuch – Anordnung</div>
+        <div class="set-seg" id="set-nb-layout">
+          <button type="button" data-layout="vertical">Untereinander</button>
+          <button type="button" data-layout="horizontal">Nebeneinander</button>
+        </div>
+      </div>
+      <p class="set-hint hidden" id="set-nb-none">Öffne ein Notizbuch, um seine Anordnung zu ändern.</p>
+      <div class="set-sub">Blättern</div>
+      <div class="set-radio" id="set-nb-paging">
+        <button type="button" data-paging="scroll"><strong>Durchgehend scrollen</strong><small>Seiten laufen frei durch, wie eine lange Rolle</small></button>
+        <button type="button" data-paging="page"><strong>Seite für Seite</strong><small>Immer eine ganze Seite – Wischen springt direkt zur nächsten</small></button>
+      </div>
+      <div class="set-sub">Bei Seiten nebeneinander</div>
+      <div class="set-seg" id="set-nb-spread">
+        <button type="button" data-spread="1">1 Seite</button>
+        <button type="button" data-spread="2">2 Seiten nebeneinander</button>
+      </div>
+      <div class="set-sub">Eigene Vorlagen</div>
+      <p class="set-hint">Eigene Seiten-Vorlagen aus PDF oder Bild (z. B. Cornell-Protokoll). Sie erscheinen bei „Seite hinzufügen“ und gelten auf all deinen Geräten.</p>
+      <div id="set-nb-templates" class="set-nb-templates"></div>
+      <button type="button" id="set-nb-tpl-add" class="set-check active"><span class="material-symbols-rounded">upload_file</span><span>Vorlage hinzufügen (PDF oder Bild)</span><span></span></button>
     </div>
 
     <div class="set-page hidden" data-page="zoom">
