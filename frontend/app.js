@@ -3249,6 +3249,14 @@
     } else if (action.type === "add_many") {
       if (direction === 1) for (const s of action.strokes) putStroke(s);
       else removeStrokes(action.strokes.map((s) => s.id));
+    } else if (action.type === "notebook") {
+      // Seiten-Aktion (drehen, Hintergrund, hinzufuegen, loeschen) samt betroffener Striche
+      if (window.sofiaApplyNotebookUndo) window.sofiaApplyNotebookUndo(direction === 1 ? action.after : action.before);
+      for (const c of action.strokes) {
+        const target = direction === 1 ? c.after : c.before;
+        if (target) putStroke(target);
+        else if (boardStrokes.has(c.id)) removeStrokes([c.id]);
+      }
     } else if (action.type === "style") {
       for (const c of action.changes) {
         const s = boardStrokes.get(c.id);
@@ -12829,6 +12837,38 @@
       return true;
     };
 
+    // Rueckgaengig fuer Seiten-Aktionen: Notizbuch vorher/nachher plus alle Striche,
+    // die dabei verschoben, gedreht oder geloescht wurden.
+    let nbUndoRec = null;
+    function noteStrokeBefore(st) {
+      if (nbUndoRec && !nbUndoRec.strokes.has(st.id)) nbUndoRec.strokes.set(st.id, cloneStroke(st));
+    }
+    function withPageUndo(fn) {
+      const outer = !nbUndoRec;
+      if (outer) nbUndoRec = { before: clone(), strokes: new Map() };
+      try {
+        fn();
+      } finally {
+        if (outer) {
+          const rec = nbUndoRec;
+          nbUndoRec = null;
+          const after = clone();
+          if (JSON.stringify(after) !== JSON.stringify(rec.before) || rec.strokes.size) {
+            const strokes = [];
+            for (const [id, before] of rec.strokes) {
+              const cur = boardStrokes.get(id);
+              strokes.push({ id, before, after: cur ? cloneStroke(cur) : null });
+            }
+            pushUndo({ type: "notebook", before: rec.before, after, strokes });
+          }
+        }
+      }
+    }
+    window.sofiaApplyNotebookUndo = (nb) => {
+      if (!notebook || !nb) return;
+      saveNotebook(JSON.parse(JSON.stringify(nb)));
+    };
+
     // Verschobene Striche erst nach dem Neuzeichnen und in kleinen Portionen an den Server
     // schicken - die Ansicht ist sofort fertig, das Speichern laeuft im Hintergrund.
     let moveQueue = new Set();
@@ -12870,12 +12910,14 @@
         if (!old) continue;
         const nw = byId.get(old.id);
         if (!nw) {
+          noteStrokeBefore(st);
           erase.push(st.id);
           continue;
         }
         const dx = nw.x - old.x;
         const dy = nw.y - old.y;
         if (!dx && !dy) continue;
+        noteStrokeBefore(st);
         for (const p of st.points) {
           p.x += dx;
           p.y += dy;
@@ -12944,7 +12986,7 @@
     function addPages(afterIndex, pages) {
       const nb = clone();
       nb.pages.splice(afterIndex + 1, 0, ...pages);
-      saveNotebook(nb, { moveStrokes: true });
+      withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
       fitPage(afterIndex + 1);
     }
     async function deletePage(i) {
@@ -12953,7 +12995,7 @@
       if (!ok) return;
       const nb = clone();
       nb.pages.splice(i, 1);
-      saveNotebook(nb, { moveStrokes: true });
+      withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
       fitPage(Math.min(i, nb.pages.length - 1));
     }
     function setPageBg(i, bg) {
@@ -12962,10 +13004,14 @@
       pg.paper = bg.paper || pg.paper || "graph";
       if (bg.mediaId) pg.mediaId = bg.mediaId;
       else delete pg.mediaId;
-      saveNotebook(nb);
+      if (!pg.mediaId) delete pg.rot;
+      withPageUndo(() => saveNotebook(nb));
     }
     // Seite um 90 Grad im Uhrzeigersinn drehen: Hintergrund und alles darauf dreht mit
     function rotatePage(i) {
+      withPageUndo(() => rotatePageNow(i));
+    }
+    function rotatePageNow(i) {
       if (selection.ids.size || cropState) clearSelection();
       const oldRects = pageRects(notebook);
       const nb = clone();
@@ -12988,12 +13034,14 @@
         const old = oldRects.find((r) => cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h);
         if (!old) continue;
         if (old.id === o.id) {
+          noteStrokeBefore(st);
           turnStroke(st, oc, Math.PI / 2, n.x + n.w / 2 - oc.x, n.y + n.h / 2 - oc.y);
         } else {
           const nw = byId.get(old.id);
           const dx = nw.x - old.x;
           const dy = nw.y - old.y;
           if (!dx && !dy) continue;
+          noteStrokeBefore(st);
           for (const p of st.points) {
             p.x += dx;
             p.y += dy;
@@ -13018,7 +13066,7 @@
       const i = currentPage();
       const nb = clone();
       nb.layout = layout;
-      saveNotebook(nb, { moveStrokes: true });
+      withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
       fitPage(i);
     }
     function setTemplate(t) {
@@ -13026,9 +13074,20 @@
       nb.template = t;
       saveNotebook(nb);
     }
+    // Eingescannte Seite / PDF-Seite nicht aus Versehen durch Papier ersetzen
+    async function confirmReplaceScan(i) {
+      const pg = notebook && notebook.pages[i];
+      if (!pg || !pg.mediaId) return true;
+      return askConfirm({ title: "Eingescannte Seite ersetzen?", text: "Der Scan bzw. die PDF-Seite wird durch das neue Papier ersetzt. Mit Rückgängig holst du sie zurück.", ok: "Ersetzen" });
+    }
+    async function setPageBgSafe(i, bg) {
+      const pg = notebook && notebook.pages[i];
+      if (pg && pg.mediaId && bg.mediaId !== pg.mediaId && !(await confirmReplaceScan(i))) return;
+      setPageBg(i, bg);
+    }
     window.sofiaSetPagePaper = (paper) => {
       if (!notebook) return false;
-      setPageBg(currentPage(), { paper });
+      setPageBgSafe(currentPage(), { paper });
       return true;
     };
 
@@ -13138,8 +13197,8 @@
     function pageMenu(i, anchor) {
       const pg = notebook.pages[i];
       const items = [{ head: "Seite " + (i + 1) + " – Hintergrund" }];
-      for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBg(i, { paper: k }) });
-      for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBg(i, { paper: "blank", mediaId: u.mediaId }) });
+      for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
+      for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBgSafe(i, { paper: "blank", mediaId: u.mediaId }) });
       items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
       items.push({ head: "Seite" });
       items.push({ icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) });
