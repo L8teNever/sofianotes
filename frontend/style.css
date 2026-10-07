@@ -3450,3 +3450,20 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .scan-chip .material-symbols-rounded { font-size: 19px; }
 .scan-chip.active { background: #d3e3fd; border-color: #d3e3fd; color: #0b57d0; }
 .scan-hint { margin: 0; text-align: center; font-size: 13px; color: rgba(255,255,255,0.6); padding: 4px 14px max(12px, env(safe-area-inset-bottom)); }
+
+/* ---- Schau-Ansicht ---- */
+#btn-view-only.active { background: #d3e3fd; color: #0b57d0; }
+body.view-only #mode-switch,
+body.view-only .insert-menu-wrap,
+body.view-only #btn-ruler,
+body.view-only #btn-zoom-window,
+body.view-only #toolbar,
+body.view-only #undo-btn,
+body.view-only #redo-btn,
+body.view-only #ruler-bar,
+body.view-only #zoom-box,
+body.view-only #zoom-pane,
+body.view-only #selection-toolbar,
+body.view-only #text-format-bar,
+body.view-only #paste-menu { display: none !important; }
+body.view-only #undo-redo-dock > .bar-divider { display: none; }

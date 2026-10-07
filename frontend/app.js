@@ -290,6 +290,7 @@
   }
 
   // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
+  let viewOnly = false; // Schau-Ansicht: nur ansehen (verschieben/zoomen), nichts aendern
   let historyView = null; // {strokes: Map, marks: Map id->color, ghosts: [stroke]}
   let authorMarks = null; // Map id->color (live: wer hat was geschrieben)
   function drawHistoryMarks() {
@@ -2292,6 +2293,7 @@
     { key: "calc", label: "Rechner", icon: "calculate", sel: "#btn-calc" },
     { key: "hw", label: "Aufgabe", icon: "assignment", sel: "#btn-hw-panel" },
     { key: "insert", label: "Einfügen", icon: "add_box", sel: ".insert-menu-wrap" },
+    { key: "view", label: "Schau-Ansicht", icon: "visibility", sel: "#btn-view-only" },
   ];
   let topBarHidden = (() => {
     try {
@@ -2379,6 +2381,7 @@
       } else if (key === "ruler") add("straighten", "Lineal an/aus", click("#btn-ruler"));
       else if (key === "zoom") add("zoom_in_map", "Zoom-Fenster", click("#btn-zoom-window"));
       else if (key === "calc") add("calculate", "Rechner", click("#btn-calc"));
+      else if (key === "view") add("visibility", viewOnly ? "Schau-Ansicht beenden" : "Schau-Ansicht", click("#btn-view-only"));
       else if (key === "hw" && !document.getElementById("btn-hw-panel").classList.contains("hidden")) add("assignment", "Aufgabe", click("#btn-hw-panel"));
       else if (key === "insert") {
         add("table", "Tabelle einfügen", click("#insert-table"));
@@ -8742,7 +8745,7 @@
     return pageRects(notebook).some((r) => w.x >= r.x && w.x <= r.x + r.w && w.y >= r.y && w.y <= r.y + r.h);
   }
   function dispatchPrimaryDown(e) {
-    if (historyView) return;
+    if (historyView || viewOnly) return;
     const world = screenToWorld(e.clientX, e.clientY);
     // Notizbuch: neben den Seiten wird nicht geschrieben (Radierer und Lasso gehen ueberall)
     if (notebook && currentTool !== "eraser" && currentTool !== "select" && !onSomePage(world)) return;
@@ -8803,8 +8806,8 @@
     e.preventDefault();
     stopFling();
     // Vorschau einer alten Version: nur ansehen (Finger/Maus verschieben, nicht schreiben)
-    if (historyView && e.pointerType !== "touch") {
-      if (e.pointerType === "mouse") {
+    if ((historyView || viewOnly) && e.pointerType !== "touch") {
+      if (e.pointerType === "mouse" || viewOnly) {
         try {
           canvas.setPointerCapture(e.pointerId);
         } catch (err) {}
@@ -8838,6 +8841,12 @@
     if (e.pointerType === "touch") {
       if (!touchPointers.size) touchGestureView = { scale, offsetX, offsetY };
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (viewOnly && touchPointers.size === 1) {
+        // Schau-Ansicht: ein Finger verschiebt nur, kein Tippen/Greifen/Einfuegen
+        tapState = null;
+        panState = { lastX: e.clientX, lastY: e.clientY };
+        return;
+      }
       if (rulerGesture && touchPointers.size === 2) {
         // zweiter Finger zum ersten aufs Lineal: drehen statt zoomen
         tapState = null;
@@ -13781,6 +13790,52 @@
         requestAnimationFrame(autoDetect);
       });
     };
+  })();
+
+  // ---- Schau-Ansicht: nur ansehen, mit Fingern/Stift/Maus verschieben und zoomen ----
+  (() => {
+    const btn = document.getElementById("btn-view-only");
+    function setViewOnly(on) {
+      viewOnly = on;
+      if (on) {
+        if (textEdit) commitTextEditor();
+        if (cropState) cancelCropMode();
+        if (currentStroke) abortStroke();
+        if (selection.ids.size) clearSelection();
+        lassoPoints = null;
+        lassoPointerId = null;
+      }
+      document.body.classList.toggle("view-only", on);
+      btn.classList.toggle("active", on);
+      btn.title = on ? "Schau-Ansicht beenden: wieder bearbeiten" : "Schau-Ansicht: nur ansehen, nichts ändern";
+      applyTopBarItems();
+      requestRedraw();
+      showToast(on ? "Schau-Ansicht: nur ansehen" : "Bearbeiten wieder an");
+    }
+    btn.addEventListener("click", () => setViewOnly(!viewOnly));
+    const isTyping = (t) => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (!viewOnly || isTyping(e.target)) return;
+        const meta = e.ctrlKey || e.metaKey;
+        if ((meta && /^[zyvxd]$/i.test(e.key)) || e.key === "Delete" || e.key === "Backspace") {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      },
+      true
+    );
+    for (const type of ["paste", "drop"])
+      window.addEventListener(
+        type,
+        (e) => {
+          if (!viewOnly || isTyping(e.target)) return;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        },
+        true
+      );
   })();
 
   // ---- Geteilte Ansicht: zwei Haelften, eine gemeinsame Bedienung ----
