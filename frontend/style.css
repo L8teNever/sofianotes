@@ -3509,6 +3509,12 @@ body.view-only #undo-redo-dock > .bar-divider { display: none; }
 body.library-open .top-side-bar { display: none; }
 /* alle drei oberen Leisten exakt gleich hoch (wie die Rueckgaengig-Leiste) */
 #undo-redo-dock,
-#top-filename-bar:not(.tb-vertical),
+#top-filename-bar:not(.tb-vertical):not(.free-drag),
 .top-side-bar:not(.tsb-vertical) { height: var(--bar-h); min-height: var(--bar-h); max-height: var(--bar-h); box-sizing: border-box; }
 body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
+/* Zoom-Knopf in der Rueckgaengig-Leiste entfaellt (dort sitzt jetzt die Schau-Ansicht) */
+.zoom-wrap.hidden { display: none; }
+/* Kopfleiste und kleine Leiste: gleiche Rundung, Polster und Schatten wie die Rueckgaengig-Leiste */
+#top-filename-bar:not(.tb-vertical):not(.free-drag),
+.top-side-bar:not(.tsb-vertical) { border-radius: 22px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); }
+.top-side-bar:not(.tsb-vertical) { padding: 6px; gap: 2px; }

@@ -541,16 +541,15 @@
       top = r.top - sh - 8;
       if (top < 4) top = r.bottom + 8;
     } else {
-      left = r.left - sw - 8;
+      // immer links neben der Kopfleiste
+      left = Math.max(4, r.left - sw - 8);
       top = r.top + (r.height - sh) / 2;
-      if (left < 4) left = r.right + 8;
     }
     // nicht ueber die Rueckgaengig-Pille legen: dann auf die andere Seite der Kopfleiste
     const undo = document.getElementById("undo-redo-dock");
     const u = undo ? undo.getBoundingClientRect() : null;
     if (u && u.width && left < u.right + 6 && left + sw > u.left - 6 && top < u.bottom + 6 && top + sh > u.top - 6) {
       if (vertical) top = r.bottom + 8;
-      else left = r.right + 8;
     }
     side.style.left = Math.round(left) + "px";
     side.style.top = Math.round(top) + "px";
