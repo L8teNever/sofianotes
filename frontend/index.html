@@ -1050,20 +1050,24 @@
     <div id="hw-panel-head" class="hw-panel-head" title="Ziehen, um die Leiste zu verschieben">
       <span id="hw-panel-subject" class="hw-subject-chip"></span>
       <span class="hw-panel-title">Aufgabe</span>
-      <button type="button" id="hw-panel-share" class="hw-panel-btn hidden" title="Blatt jetzt als Lösung in Sofia teilen"><span class="material-symbols-rounded">cloud_upload</span></button>
-      <button type="button" id="hw-panel-side" class="hw-panel-btn hidden" title="Seite wechseln"><span class="material-symbols-rounded">swap_horiz</span></button>
-      <button type="button" id="hw-panel-mode" class="hw-panel-btn" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
-      <button type="button" id="hw-panel-min" class="hw-panel-btn" title="Minimieren"><span class="material-symbols-rounded">remove</span></button>
-      <button type="button" id="hw-panel-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      <div class="hw-chrome-dock">
+        <button type="button" id="hw-panel-share" class="hw-panel-btn hidden" title="Blatt jetzt als Lösung in Sofia teilen"><span class="material-symbols-rounded">cloud_upload</span></button>
+        <button type="button" id="hw-panel-side" class="hw-panel-btn hidden" title="Seite wechseln"><span class="material-symbols-rounded">swap_horiz</span></button>
+        <button type="button" id="hw-panel-mode" class="hw-panel-btn" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+        <button type="button" id="hw-panel-min" class="hw-panel-btn" title="Minimieren"><span class="material-symbols-rounded">remove</span></button>
+      </div>
+      <button type="button" id="hw-panel-close" class="hw-panel-btn hw-chrome-close" title="Schließen"><span class="material-symbols-rounded">close</span></button>
     </div>
     <div id="hw-panel-body" class="hw-panel-body"></div>
     <div id="hw-viewer" class="hw-viewer hidden">
       <div class="hw-viewer-bar">
-        <button type="button" id="hw-viewer-back" class="hw-panel-btn" title="Zurück zur Aufgabe"><span class="material-symbols-rounded">arrow_back</span></button>
+        <button type="button" id="hw-viewer-back" class="hw-panel-btn hw-chrome-close" title="Zurück zur Aufgabe"><span class="material-symbols-rounded">arrow_back</span></button>
         <span id="hw-viewer-name" class="hw-viewer-name"></span>
-        <button type="button" id="hw-viewer-out" class="hw-panel-btn" title="Verkleinern"><span class="material-symbols-rounded">zoom_out</span></button>
-        <button type="button" id="hw-viewer-in" class="hw-panel-btn" title="Vergrößern"><span class="material-symbols-rounded">zoom_in</span></button>
-        <button type="button" id="hw-viewer-fit" class="hw-panel-btn" title="Einpassen"><span class="material-symbols-rounded">fit_screen</span></button>
+        <div class="hw-chrome-dock">
+          <button type="button" id="hw-viewer-out" class="hw-panel-btn" title="Verkleinern"><span class="material-symbols-rounded">zoom_out</span></button>
+          <button type="button" id="hw-viewer-in" class="hw-panel-btn" title="Vergrößern"><span class="material-symbols-rounded">zoom_in</span></button>
+          <button type="button" id="hw-viewer-fit" class="hw-panel-btn" title="Einpassen"><span class="material-symbols-rounded">fit_screen</span></button>
+        </div>
       </div>
       <div id="hw-viewer-stage" class="hw-viewer-stage"><img id="hw-viewer-img" alt="" draggable="false" /></div>
     </div>
