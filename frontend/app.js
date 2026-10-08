@@ -37,6 +37,8 @@
     "sofianotes-zoom-step",
     "sofianotes-zoom-chrome",
     "sofianotes-zoom-inner-bar",
+    "sofianotes-object-dash",
+    "sofianotes-object-arrow",
     "sofianotes-zoompane-pos",
     "sofianotes-math",
     "sofianotes-eraser-return",
@@ -272,18 +274,20 @@
       offsetX = left + availW / 2 - c.x * scale;
       offsetY = top + availH / 2 - c.y * scale;
     }
-    const fit = (lo, hi, a, b, endRoom) => {
+    const horiz = notebook.layout === "horizontal";
+    // Beim Weiterziehen hinter der letzten Seite extra Platz; in Ruhe mittig / am Rand.
+    const pulling = !!(panState && !pinchState && !currentStroke);
+    const endRoom = pulling ? 128 : 24;
+    const fit = (lo, hi, a, b, extra) => {
       // a..b = Inhalt am Bildschirm; lo..hi = sichtbarer Bereich -> Verschiebung.
-      // Hinter der letzten Seite bleibt Platz fuer den "Neue Seite"-Knopf.
       const m = 24;
-      if (b - a <= hi - lo - m - endRoom) return (lo + hi - endRoom) / 2 - (a + b) / 2; // kleiner als Bildschirm: mittig
+      if (!pulling && b - a <= hi - lo - m) return (lo + hi) / 2 - (a + b) / 2;
       if (a > lo + m) return lo + m - a;
-      if (b < hi - endRoom) return hi - endRoom - b;
+      if (b < hi - extra) return hi - extra - b;
       return 0;
     };
-    const horiz = notebook.layout === "horizontal";
-    offsetX += fit(left, right, minX * scale + offsetX, maxX * scale + offsetX, horiz ? 110 : 24);
-    offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : 130);
+    offsetX += fit(left, right, minX * scale + offsetX, maxX * scale + offsetX, horiz ? endRoom : 24);
+    offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : endRoom);
   }
 
   // Seiten-Hintergrundbild, ggf. in Vierteldrehungen gedreht (page.rot = 0..3, im Uhrzeigersinn)
@@ -410,6 +414,7 @@
   let zoomInnerBarPref = lsGetRaw("sofianotes-zoom-inner-bar") !== "0";
   let toolbarSavedDock = null;
   let pageAppear = null; // {ids:Set, t0, ms} kurze Einblendung neuer Seiten
+  let pagePull = null; // {t0, wx, wy} Weiterziehen hinter der letzten Seite, Ring laedt ~1s
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
@@ -929,17 +934,55 @@
     c.lineTo(last.x, last.y);
   }
 
-  function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth) {
+  function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth, dash) {
     c.save();
     c.globalAlpha = alpha;
     c.strokeStyle = color;
     c.lineCap = "round";
     c.lineJoin = "round";
     c.miterLimit = 2;
+    if (dash) {
+      const on = Math.max(10, size * 2.8);
+      const off = Math.max(7, size * 1.8);
+      c.setLineDash([on, off]);
+    }
     if (smooth && !looksLikePolygon(pts)) traceMidpointPath(c, pts);
     else traceStraightPath(c, pts);
     c.lineWidth = constantWidth ? size : avgPressureWidth(pts, size);
     c.stroke();
+    c.restore();
+  }
+
+  function paintArrowHead(c, from, to, size) {
+    const ang = Math.atan2(to.y - from.y, to.x - from.x);
+    const len = Math.max(14, size * 3.4);
+    const leftAng = ang + Math.PI * 0.82;
+    const rightAng = ang - Math.PI * 0.82;
+    const L = { x: to.x + Math.cos(leftAng) * len, y: to.y + Math.sin(leftAng) * len };
+    const R = { x: to.x + Math.cos(rightAng) * len, y: to.y + Math.sin(rightAng) * len };
+    const neck = { x: to.x - Math.cos(ang) * len * 0.28, y: to.y - Math.sin(ang) * len * 0.28 };
+    c.beginPath();
+    c.moveTo(L.x, L.y);
+    c.quadraticCurveTo(neck.x, neck.y, to.x, to.y);
+    c.quadraticCurveTo(neck.x, neck.y, R.x, R.y);
+    c.stroke();
+  }
+
+  function drawArrowHeads(c, stroke, alpha) {
+    const pts = stroke.points;
+    if (!pts || pts.length < 2) return;
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    const heads = (stroke.extra && stroke.extra.arrowHeads) || "end";
+    c.save();
+    c.globalAlpha = alpha == null ? 1 : alpha;
+    c.strokeStyle = stroke.color;
+    c.lineWidth = stroke.size;
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.setLineDash([]);
+    if (heads === "end" || heads === "both") paintArrowHead(c, a, b, stroke.size);
+    if (heads === "start" || heads === "both") paintArrowHead(c, b, a, stroke.size);
     c.restore();
   }
 
@@ -989,17 +1032,20 @@
       return;
     }
     const taggedShape = stroke.extra && stroke.extra.shape;
+    const dash = !!(stroke.extra && stroke.extra.dash);
     if (
       taggedShape === "rectangle" ||
       taggedShape === "triangle" ||
       taggedShape === "line" ||
+      taggedShape === "arrow" ||
       looksLikePolygon(pts)
     ) {
-      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false);
+      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false, dash);
+      if (taggedShape === "arrow") drawArrowHeads(c, stroke, alpha);
       return;
     }
     // feste Breite, glatte Kurve — Druckstaerke aendert die Dicke nicht
-    drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
+    drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true, dash);
   }
 
   const mediaImages = new Map();
@@ -1504,6 +1550,7 @@
     drawLassoAndSelection();
     drawRuler();
     drawHoldHint();
+    drawPagePullRing();
     positionTextEditor();
     positionInkChips();
     positionScanBoxes();
@@ -1517,7 +1564,9 @@
 
   function tick() {
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
+    if (pagePull) dirty = true;
     if (pageAppear) dirty = true;
+    if (window.sofiaPagePullTick) window.sofiaPagePullTick();
     if (dirty) {
       draw();
       dirty = false;
@@ -1528,6 +1577,11 @@
 
   // ---- toolbar ------------------------------------------------------
   let currentTool = "pen"; // pen | marker | eraser | select
+  let objectKind = null; // null | rect | line | circle | triangle | arrow
+  let objectDash = lsGetRaw("sofianotes-object-dash") === "1";
+  let objectArrowHeads = ["end", "start", "both"].includes(lsGetRaw("sofianotes-object-arrow"))
+    ? lsGetRaw("sofianotes-object-arrow")
+    : "end";
   let currentColor = "#1E1F22";
   let penSize = 6;
   let markerSize = 24;
@@ -1666,6 +1720,8 @@
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
+    document.getElementById("objects-menu")?.classList.add("hidden");
+    if (typeof closeTextColorPop === "function") closeTextColorPop();
   }
 
   function hexToRgba(hex, alpha) {
@@ -1863,6 +1919,107 @@
     renderToolPopover();
     savePrefs();
   }
+  const textColorBtn = document.getElementById("btn-text-color");
+  const textColorFlag = textColorBtn && textColorBtn.querySelector(".text-color-flag");
+  const textColorPop = document.getElementById("text-color-pop");
+  const textColorPopSwatches = document.getElementById("text-color-pop-swatches");
+  function syncTextColorFlag() {
+    if (textColorFlag) textColorFlag.style.background = normColor(currentColor);
+    if (textColorPop) {
+      textColorPop.querySelectorAll(".swatch").forEach((b) => {
+        b.classList.toggle("active", b.dataset.color === normColor(currentColor));
+      });
+    }
+  }
+  function closeTextColorPop() {
+    if (!textColorPop || textColorPop.classList.contains("hidden")) return;
+    textColorPop.classList.add("hidden");
+    if (textColorBtn) {
+      textColorBtn.setAttribute("aria-expanded", "false");
+      textColorBtn.classList.remove("active-pop");
+    }
+  }
+  function positionTextColorPop() {
+    if (!textColorPop || !textColorBtn) return;
+    const r = textColorBtn.getBoundingClientRect();
+    const mw = textColorPop.offsetWidth;
+    const mh = textColorPop.offsetHeight;
+    const dock = currentDock();
+    const vertical = toolbarEl.classList.contains("orient-vertical") || dock === "left" || dock === "right";
+    let left;
+    let top;
+    if (vertical && dock === "right") {
+      left = r.left - mw - 10;
+      top = r.top + r.height / 2 - mh / 2;
+    } else if (vertical) {
+      left = r.right + 10;
+      top = r.top + r.height / 2 - mh / 2;
+    } else if (dock === "top") {
+      left = r.left + r.width / 2 - mw / 2;
+      top = r.bottom + 10;
+    } else {
+      left = r.left + r.width / 2 - mw / 2;
+      top = r.top - mh - 10;
+    }
+    textColorPop.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, left)) + "px";
+    textColorPop.style.top = Math.max(8, Math.min(window.innerHeight - mh - 8, top)) + "px";
+  }
+  function renderTextColorPop() {
+    if (!textColorPopSwatches) return;
+    textColorPopSwatches.textContent = "";
+    palette.base.concat(palette.custom).forEach((c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "swatch";
+      b.dataset.color = c;
+      b.style.background = c;
+      b.title = COLOR_NAMES[c] || c;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        pickColor(c);
+        closeTextColorPop();
+      });
+      textColorPopSwatches.appendChild(b);
+    });
+    syncTextColorFlag();
+  }
+  function openTextColorPop() {
+    if (!textColorPop || !textColorBtn) return;
+    if (!textColorPop.classList.contains("hidden")) return closeTextColorPop();
+    hidePopovers();
+    renderTextColorPop();
+    textColorPop.classList.remove("hidden");
+    textColorBtn.setAttribute("aria-expanded", "true");
+    textColorBtn.classList.add("active-pop");
+    positionTextColorPop();
+  }
+  if (textColorBtn) {
+    textColorBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    textColorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openTextColorPop();
+    });
+  }
+  if (textColorPop) {
+    textColorPop.addEventListener("pointerdown", (e) => e.stopPropagation());
+    const popInput = document.getElementById("text-color-pop-input");
+    popInput?.addEventListener("input", (e) => pickColor(e.target.value));
+    popInput?.addEventListener("change", (e) => {
+      const c = normColor(e.target.value);
+      if (!palette.base.includes(c) && !palette.custom.includes(c)) {
+        palette.custom.push(c);
+        savePalette();
+        renderSwatches();
+      }
+      pickColor(c);
+      closeTextColorPop();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (textColorPop.classList.contains("hidden")) return;
+      if (e.target.closest("#text-color-pop") || e.target.closest("#btn-text-color")) return;
+      closeTextColorPop();
+    }, true);
+  }
   function markActiveSwatch() {
     let found = null;
     toolbarEl.querySelectorAll("#swatches-container .swatch").forEach((b) => {
@@ -1876,6 +2033,7 @@
         swatchCustomEl.scrollLeft = l - swatchCustomEl.clientWidth / 2;
       }
     }
+    syncTextColorFlag();
   }
   function makeSwatch(color, group, index) {
     const b = document.createElement("button");
@@ -2181,6 +2339,7 @@
     document.querySelectorAll(".set-dlg .btn-dock-quick").forEach((b) => b.classList.toggle("active", b.dataset.pos === currentDock()));
     const st = document.getElementById("settings-version-status-text");
     set("set-sum-app", (document.getElementById("settings-version-label")?.textContent || "") + (st ? " · " + st.textContent : ""));
+    set("set-sum-import", "GoodNotes-Ordner als PDFs");
   }
   if (settingsPopover) {
     settingsPopover.querySelectorAll(".set-nav").forEach((b) =>
@@ -2466,7 +2625,7 @@
   const HOLD_MOVE_CANCEL_PX = 14;
   const CHROME_DRAG_PX = 8;
   function isDockInteractiveTarget(target) {
-    return !!(target && target.closest && target.closest("button, input, textarea, a, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .zoom-wrap"));
+    return !!(target && target.closest && target.closest("button, input, textarea, a, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .text-color-pop, .zoom-wrap"));
   }
 
   function hideGuides() {
@@ -2582,7 +2741,7 @@
 
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu")) return;
+    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .text-color-pop, .text-color-btn")) return;
     if (kind !== "topbar") e.preventDefault();
     const el = kind === "dock" ? toolbarEl : kind === "topbar" ? topBar : undoDock;
     const fromChrome = !isDockInteractiveTarget(e.target);
@@ -2731,6 +2890,7 @@
     { key: "status", label: "Verbindung", icon: "wifi", sel: "#status" },
     { key: "modes", label: "Modus-Knöpfe", icon: "ink_pen", sel: "#mode-switch" },
     { key: "ruler", label: "Lineal", icon: "straighten", sel: "#btn-ruler" },
+    { key: "objects", label: "Objekte", icon: "shapes", sel: ".objects-menu-wrap" },
     { key: "zoom", label: "Zoom-Fenster", icon: "zoom_in_map", sel: "#btn-zoom-window" },
     { key: "calc", label: "Rechner", icon: "calculate", sel: "#btn-calc" },
     { key: "hw", label: "Aufgabe", icon: "assignment", sel: "#btn-hw-panel" },
@@ -2949,6 +3109,7 @@
     }
     const helpers = [];
     if (want("ruler")) helpers.push(["straighten", "Lineal", "#btn-ruler"]);
+    if (want("objects")) helpers.push(["shapes", "Objekte", "#btn-objects"]);
     if (want("zoom")) helpers.push(["zoom_in_map", "Zoom-Fenster", "#btn-zoom-window"]);
     if (want("calc")) helpers.push(["calculate", "Rechner", "#btn-calc"]);
     if (want("hw") && hwOk) helpers.push(["assignment", "Aufgabe", "#btn-hw-panel"]);
@@ -4209,6 +4370,24 @@
     ctx.restore();
   }
 
+  function drawPagePullRing() {
+    if (!pagePull || pagePull.done) return;
+    const progress = Math.min(1, (performance.now() - pagePull.t0) / 1000);
+    const r = 20 / scale;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 4 / scale;
+    ctx.strokeStyle = "rgba(26,115,232,0.18)";
+    ctx.beginPath();
+    ctx.arc(pagePull.wx, pagePull.wy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#1A73E8";
+    ctx.beginPath();
+    ctx.arc(pagePull.wx, pagePull.wy, r, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function perpDist(p, a, b) {
     const dx = b.x - a.x, dy = b.y - a.y;
     const len2 = dx * dx + dy * dy;
@@ -4758,6 +4937,7 @@
   function inferShape(stroke) {
     if (!stroke || stroke.tool === "image" || stroke.tool === "text" || stroke.tool === "table") return null;
     const tagged = stroke.extra && stroke.extra.shape;
+    if (tagged === "arrow") return "arrow";
     if (tagged) return tagged;
     const pts = stroke.points || [];
     if (pts.length === 2) return "line";
@@ -4818,7 +4998,7 @@
       }
       return best;
     }
-    if (shape === "line") {
+    if (shape === "line" || shape === "arrow") {
       const a = pts[0];
       const b = pts[pts.length - 1];
       const da = Math.hypot(a.x - grab.x, a.y - grab.y);
@@ -4862,10 +5042,12 @@
         const f = d / (g.grabR || 1);
         s.points = makeEllipsePoints(g.cx, g.cy, Math.max(8, g.rx * f), Math.max(8, g.ry * f), p, 96);
       }
-    } else if (s.shape === "line") {
+    } else if (s.shape === "line" || s.shape === "arrow") {
       const pts = (s.shapeBase || s.points).map((pt) => ({ x: pt.x, y: pt.y, p: pt.p }));
       const i = (s.shapeHandle && s.shapeHandle.i) || pts.length - 1;
-      pts[i] = { x: wx, y: wy, p };
+      const other = pts[i ? 0 : pts.length - 1];
+      const snapped = s.shape === "arrow" ? snapCardinalFrom(other, world) : world;
+      pts[i] = { x: snapped.x, y: snapped.y, p };
       s.points = pts;
     } else if (s.shape === "triangle") {
       const g = s.shapeGeom;
@@ -4906,7 +5088,7 @@
         .slice(0, 3)
         .map((c, i) => ({ kind: "corner", corner: i, i, x: c.x, y: c.y }));
     }
-    if (shape === "line" && pts.length >= 2) {
+    if ((shape === "line" || shape === "arrow") && pts.length >= 2) {
       const last = pts.length - 1;
       return [
         { kind: "end", i: 0, x: pts[0].x, y: pts[0].y },
@@ -6667,12 +6849,13 @@
 
   function applyZoomChrome() {
     if (!zoomPaneEl) return;
-    zoomPaneEl.classList.toggle("chrome-side", zoomChromeLayout === "side");
-    zoomPaneEl.classList.toggle("chrome-top", zoomChromeLayout !== "side");
-    if (toolbarEl.classList.contains("zoom-inner")) {
-      toolbarEl.classList.toggle("orient-vertical", zoomChromeLayout === "side");
-    }
-    document.getElementById("btn-zw-pen")?.classList.toggle("active", toolbarEl.classList.contains("zoom-inner"));
+    const inner = toolbarEl.classList.contains("zoom-inner");
+    // Mit Stiftleiste im Fenster immer eine Zeile oben — nicht daneben/darunter stapeln
+    const side = !inner && zoomChromeLayout === "side";
+    zoomPaneEl.classList.toggle("chrome-side", side);
+    zoomPaneEl.classList.toggle("chrome-top", !side);
+    if (inner) toolbarEl.classList.remove("orient-vertical");
+    document.getElementById("btn-zw-pen")?.classList.toggle("active", inner);
   }
   function attachZoomInnerBar() {
     if (!zoomInnerBarPref || !zoomWin || !zoomPaneEl || !toolbarEl) return;
@@ -6686,9 +6869,8 @@
         top: toolbarEl.style.top,
       };
     }
-    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging");
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging", "orient-vertical");
     toolbarEl.classList.add("zoom-inner");
-    toolbarEl.classList.toggle("orient-vertical", zoomChromeLayout === "side");
     toolbarEl.style.left = "";
     toolbarEl.style.top = "";
     toolbarEl.style.right = "";
@@ -6721,8 +6903,9 @@
   }
 
   function zoomPaneBounds(h) {
+    const inner = toolbarEl.classList.contains("zoom-inner");
     const tb = toolbarEl.getBoundingClientRect();
-    const dock = currentDock();
+    const dock = inner ? "" : currentDock();
     const tbPos = topBarPos();
     const topBarRect = topBar ? topBar.getBoundingClientRect() : { bottom: 0, top: window.innerHeight };
     const undoRect = undoDock ? undoDock.getBoundingClientRect() : { bottom: 0 };
@@ -7939,6 +8122,7 @@
 
   function setMode(mode) {
     if (textEdit) commitTextEditor();
+    if (mode !== "pen") setObjectKind(null);
     // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Text aufheben
     if (mode !== "lasso" && selection.ids.size) clearSelection();
     modeSyncing = true;
@@ -7968,6 +8152,7 @@
     else if (tool === "eraser") mode = "eraser";
     else if (tool === "text") mode = "text";
     else if (tool === "select") mode = "lasso";
+    if (tool !== "pen" && tool !== "marker") setObjectKind(null);
     if (mode !== currentMode) showMode(mode);
   }
 
@@ -8099,6 +8284,7 @@
     if (panState && panState.pointerId === undefined) panState = null;
     tapState = null;
     touchGestureView = null;
+    if (window.sofiaPagePullCancel) window.sofiaPagePullCancel();
   }
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
@@ -9061,9 +9247,9 @@
     });
   // Schneller Weg: JPEG asynchron erzeugen, sofort lokal anzeigen, binaer hochladen.
   // Die ID ist sofort da; der Upload laeuft im Hintergrund (bei Fehler in die Warteschlange).
-  async function uploadJpeg(jpeg) {
+  async function uploadJpeg(jpeg, opts) {
     if (typeof jpeg === "string") return uploadJpegDataUrl(jpeg);
-    const blob = await new Promise((res) => jpeg.canvas.toBlob(res, "image/jpeg", 0.82));
+    const blob = jpeg.blob || (await new Promise((res) => jpeg.canvas.toBlob(res, "image/jpeg", 0.82)));
     if (!blob) return uploadJpegDataUrl(jpeg.dataUrl);
     const id = uuid();
     const img = new Image();
@@ -9072,15 +9258,23 @@
     img.src = URL.createObjectURL(blob);
     mediaImages.set(id, img);
     if (window.SofiaOffline) SofiaOffline.putMedia(id, blob).catch(() => {});
-    fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": "image/jpeg" }, body: blob })
+    const send = () =>
+      fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": "image/jpeg" }, body: blob });
+    const fallback = async () => {
+      try {
+        await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
+      } catch (err) {}
+    };
+    if (opts && opts.wait) {
+      const r = await send();
+      if (!r.ok) throw new Error(r.status === 413 ? "too_large" : "upload");
+      return id;
+    }
+    send()
       .then((r) => {
         if (!r.ok) throw new Error("upload");
       })
-      .catch(async () => {
-        try {
-          await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
-        } catch (err) {}
-      });
+      .catch(fallback);
     return id;
   }
 
@@ -9160,6 +9354,138 @@
     const mediaId = await uploadJpeg(jpeg);
     return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
   }
+
+  const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+  const MEDIA_JPEG_MAX = 3200000;
+  async function canvasToJpegBlob(canvas, quality) {
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+    if (!blob) throw new Error("jpeg");
+    return blob;
+  }
+  async function fitJpegBlob(source, maxEdge) {
+    let edge = maxEdge;
+    let quality = 0.86;
+    for (let i = 0; i < 8; i++) {
+      const jpeg = bitmapToJpeg(source, edge);
+      const blob = await canvasToJpegBlob(jpeg.canvas, quality);
+      if (blob.size <= MEDIA_JPEG_MAX) {
+        jpeg.blob = blob;
+        return jpeg;
+      }
+      quality = Math.max(0.5, quality - 0.08);
+      edge = Math.max(720, Math.round(edge * 0.82));
+    }
+    const jpeg = bitmapToJpeg(source, 900);
+    jpeg.blob = await canvasToJpegBlob(jpeg.canvas, 0.5);
+    return jpeg;
+  }
+  async function renderPdfToImages(file, maxPages, onProgress) {
+    if (window.ensurePdf) await window.ensurePdf().catch(() => null);
+    if (!window.pdfjsLib) throw new Error("pdfjs");
+    const pdfjsLib = window.pdfjsLib;
+    const pdf = await pdfjsLib.getDocument({
+      data: new Uint8Array(await file.arrayBuffer()),
+      cMapUrl: PDFJS_CDN + "cmaps/",
+      cMapPacked: true,
+      standardFontDataUrl: PDFJS_CDN + "standard_fonts/",
+      disableStream: true,
+      disableRange: true,
+    }).promise;
+    const cap = maxPages || 2000;
+    const n = Math.min(pdf.numPages, cap);
+    if (!n) throw new Error("empty pdf");
+    const out = [];
+    const ann = (pdfjsLib.AnnotationMode && pdfjsLib.AnnotationMode.ENABLE) || 1;
+    for (let i = 1; i <= n; i++) {
+      if (onProgress) onProgress(i, pdf.numPages);
+      const page = await pdf.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: Math.min(2.6, 2200 / Math.max(base.width, base.height, 1)) });
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(vp.width));
+      c.height = Math.max(1, Math.round(vp.height));
+      const c2d = c.getContext("2d", { alpha: false });
+      c2d.fillStyle = "#ffffff";
+      c2d.fillRect(0, 0, c.width, c.height);
+      await page.render({
+        canvasContext: c2d,
+        viewport: vp,
+        intent: "print",
+        annotationMode: ann,
+        background: "#ffffff",
+      }).promise;
+      const jpeg = await fitJpegBlob(c, 2200);
+      c.width = c.height = 0;
+      out.push({
+        mediaId: await uploadJpeg(jpeg, { wait: true }),
+        ratio: base.height / base.width,
+        w: jpeg.w,
+        h: jpeg.h,
+        ptW: base.width,
+        ptH: base.height,
+      });
+    }
+    return out;
+  }
+  // DIN A4 in PDF-Punkten (72 dpi). Letter/Legal/A5/A3 liegen nah an Heft-Formaten.
+  function pdfPageIsPaper(ptW, ptH) {
+    const a = Math.min(ptW, ptH);
+    const b = Math.max(ptW, ptH);
+    const r = b / Math.max(a, 1);
+    const mm = (mmv) => (mmv * 72) / 25.4;
+    const near = (x, y) => Math.abs(x - y) / y <= 0.07;
+    const named = [
+      [mm(210), mm(297)],
+      [mm(148), mm(210)],
+      [mm(297), mm(420)],
+      [8.5 * 72, 11 * 72],
+      [8.5 * 72, 14 * 72],
+      [11 * 72, 17 * 72],
+    ];
+    if (named.some(([s, l]) => near(a, s) && near(b, l))) return true;
+    return r >= 1.22 && r <= 1.55 && a >= 360 && a <= 980 && b <= 1300;
+  }
+  function classifyPdfDoc(pages) {
+    const list = pages || [];
+    if (!list.length) return "notebook";
+    const paper = list.filter((p) => pdfPageIsPaper(p.ptW, p.ptH)).length;
+    if (paper === list.length) return "notebook";
+    if (paper === 0) return "board";
+    return paper >= list.length / 2 ? "notebook" : "board";
+  }
+  function notebookSizeFromPdf(ptW, ptH, ratio) {
+    let w = Number(ptW);
+    let h = Number(ptH);
+    if (!(w > 0 && h > 0)) {
+      const r = Number(ratio) || A4_H / A4_W;
+      w = A4_W;
+      h = A4_W * r;
+    }
+    const landscape = w > h;
+    const longRatio = Math.max(w, h) / Math.max(Math.min(w, h), 1);
+    const closeA4 = Math.abs(longRatio - A4_H / A4_W) <= 0.06;
+    if (closeA4) return landscape ? { w: A4_H, h: A4_W } : { w: A4_W, h: A4_H };
+    if (landscape) return { w: A4_H, h: Math.max(200, Math.round(A4_H * (h / w))) };
+    return { w: A4_W, h: Math.max(200, Math.round(A4_W * (h / w))) };
+  }
+  function notebookPagesFromPdfImages(imgs) {
+    return (imgs || []).map((im) => {
+      const sz = notebookSizeFromPdf(im.ptW, im.ptH, im.ratio);
+      return {
+        id: "p" + uuid().slice(0, 12),
+        paper: "blank",
+        mediaId: im.mediaId,
+        w: sz.w,
+        h: sz.h,
+      };
+    });
+  }
+  window.sofiaPdfToImages = renderPdfToImages;
+  window.sofiaPdfToNotebookPages = async function (file, onProgress) {
+    return notebookPagesFromPdfImages(await renderPdfToImages(file, 2000, onProgress));
+  };
+  window.sofiaClassifyPdfDoc = classifyPdfDoc;
+  window.sofiaNotebookSizeFromPdf = notebookSizeFromPdf;
 
   async function importPdfFile(file, origin) {
     if (window.ensurePdf) await window.ensurePdf().catch(() => null);
@@ -9261,7 +9587,60 @@
   });
   document.addEventListener("pointerdown", (e) => {
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
+    const objMenu = document.getElementById("objects-menu");
+    if (objMenu && !objMenu.classList.contains("hidden") && !e.target.closest(".objects-menu-wrap") && !e.target.closest("#objects-menu")) objMenu.classList.add("hidden");
   }, true);
+
+  const objectsMenu = document.getElementById("objects-menu");
+  const objectsBtn = document.getElementById("btn-objects");
+  function syncObjectsMenu() {
+    document.getElementById("btn-objects")?.classList.toggle("active", !!objectKind);
+    document.querySelectorAll("#objects-menu .lib-add-opt[data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
+    document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => b.classList.toggle("active", (b.dataset.dash === "1") === objectDash));
+    document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => b.classList.toggle("active", b.dataset.heads === objectArrowHeads));
+  }
+  function setObjectKind(kind) {
+    objectKind = kind || null;
+    if (objectKind && currentTool !== "pen" && currentTool !== "marker") setTool("pen");
+    syncObjectsMenu();
+  }
+  objectsBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasOpen = !!(objectsMenu && !objectsMenu.classList.contains("hidden"));
+    hidePopovers();
+    if (!objectsMenu) return;
+    objectsMenu.classList.toggle("hidden", wasOpen);
+    syncObjectsMenu();
+  });
+  objectsMenu?.querySelectorAll(".lib-add-opt[data-obj]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const kind = b.dataset.obj;
+      setObjectKind(objectKind === kind ? null : kind);
+      objectsMenu.classList.add("hidden");
+    });
+  });
+  document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      objectDash = b.dataset.dash === "1";
+      try {
+        localStorage.setItem("sofianotes-object-dash", objectDash ? "1" : "0");
+      } catch (err) {}
+      syncObjectsMenu();
+    });
+  });
+  document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      objectArrowHeads = b.dataset.heads;
+      try {
+        localStorage.setItem("sofianotes-object-arrow", objectArrowHeads);
+      } catch (err) {}
+      syncObjectsMenu();
+    });
+  });
+  syncObjectsMenu();
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) e.preventDefault();
@@ -9440,6 +9819,80 @@
     return e.pressure > 0 ? e.pressure : 0.5;
   }
 
+  function snapCardinalFrom(a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (Math.abs(dx) >= Math.abs(dy)) return { x: b.x, y: a.y };
+    return { x: a.x, y: b.y };
+  }
+
+  function fitObjectShape(kind, a, b, pressure) {
+    const p = pressure == null ? 0.5 : pressure;
+    const minX = Math.min(a.x, b.x);
+    const maxX = Math.max(a.x, b.x);
+    const minY = Math.min(a.y, b.y);
+    const maxY = Math.max(a.y, b.y);
+    const w = Math.max(2, maxX - minX);
+    const h = Math.max(2, maxY - minY);
+    if (kind === "rect") {
+      return {
+        type: "rectangle",
+        points: [
+          { x: minX, y: minY, p },
+          { x: maxX, y: minY, p },
+          { x: maxX, y: maxY, p },
+          { x: minX, y: maxY, p },
+          { x: minX, y: minY, p },
+        ],
+      };
+    }
+    if (kind === "circle") {
+      const side = Math.max(w, h);
+      const sx = b.x >= a.x ? 1 : -1;
+      const sy = b.y >= a.y ? 1 : -1;
+      const cx = a.x + (sx * side) / 2;
+      const cy = a.y + (sy * side) / 2;
+      const r = side / 2;
+      return { type: "circle", points: makeEllipsePoints(cx, cy, r, r, p, 96) };
+    }
+    if (kind === "triangle") {
+      return {
+        type: "triangle",
+        points: [
+          { x: (minX + maxX) / 2, y: minY, p },
+          { x: maxX, y: maxY, p },
+          { x: minX, y: maxY, p },
+          { x: (minX + maxX) / 2, y: minY, p },
+        ],
+      };
+    }
+    const end = snapCardinalFrom(a, b);
+    return {
+      type: kind === "arrow" ? "arrow" : "line",
+      points: [
+        { x: a.x, y: a.y, p },
+        { x: end.x, y: end.y, p },
+      ],
+    };
+  }
+
+  function applyObjectPreview(wx, wy, pressure) {
+    const s = currentStroke;
+    if (!s || !s.objectKind) return;
+    const origin = s.objectOrigin || s.points[0];
+    const built = fitObjectShape(s.objectKind, origin, { x: wx, y: wy }, pressure);
+    s.points = built.points;
+    s.unsent = [];
+    s.shape = built.type;
+    s.extra = Object.assign({}, s.extra || {}, {
+      shape: built.type,
+      dash: objectDash || undefined,
+      arrowHeads: s.objectKind === "arrow" ? objectArrowHeads : undefined,
+    });
+    wsSend({ type: "stroke_replace", strokeId: s.id, points: s.points, extra: s.extra });
+    requestRedraw();
+  }
+
   function startStroke(pointerId, pointerType, wx, wy, pressure) {
     clearSelection();
     const id = uuid();
@@ -9457,13 +9910,26 @@
       pointerType,
       locked: false,
     };
-    wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points });
-    if (isHoldSnapTool(tool)) armHoldTimer();
+    if (objectKind) {
+      currentStroke.objectKind = objectKind;
+      currentStroke.objectOrigin = { x: wx, y: wy };
+      currentStroke.extra = {
+        shape: objectKind === "arrow" ? "arrow" : objectKind === "rect" ? "rectangle" : objectKind === "circle" ? "circle" : objectKind === "triangle" ? "triangle" : "line",
+        dash: objectDash || undefined,
+        arrowHeads: objectKind === "arrow" ? objectArrowHeads : undefined,
+      };
+    }
+    wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points, extra: currentStroke.extra || null });
+    if (isHoldSnapTool(tool) && !objectKind) armHoldTimer();
     requestRedraw();
   }
 
   function extendStroke(wx, wy, pressure) {
     if (!currentStroke) return;
+    if (currentStroke.objectKind) {
+      applyObjectPreview(wx, wy, pressure);
+      return;
+    }
     if (currentStroke.locked) {
       reshapeLockedStroke(wx, wy);
       return;
@@ -9631,7 +10097,7 @@
     clearHoldTimer();
     // Durchstreichen loescht - aber nicht bei Lineal-Strichen (die sind immer gerade und
     // laufen oft absichtlich an anderer Tinte entlang)
-    if (currentStroke.tool === "pen" && !currentStroke.locked && !currentStroke.rulerEdge) {
+    if (currentStroke.tool === "pen" && !currentStroke.locked && !currentStroke.rulerEdge && !currentStroke.objectKind) {
       const struck = findStruckStrokes(currentStroke.points);
       if (struck.length > 0) {
         wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
@@ -9649,6 +10115,17 @@
         requestRedraw();
         return;
       }
+    }
+    if (currentStroke.objectKind) {
+      const o = currentStroke.objectOrigin || currentStroke.points[0];
+      const last = currentStroke.points[currentStroke.points.length - 1];
+      if (!last || Math.hypot(last.x - o.x, last.y - o.y) < 8) {
+        wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
+        currentStroke = null;
+        requestRedraw();
+        return;
+      }
+      currentStroke.locked = true;
     }
     if (currentStroke.unsent.length > 0) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
@@ -10295,7 +10772,9 @@
       }
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) {
-        if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
+        const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
+        if (addedPage) panState = null;
+        else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
         else if (!panState && window.sofiaPageSnap) window.sofiaPageSnap({}); // nach dem Zoomen mit zwei Fingern
         panState = null;
       }
@@ -10325,7 +10804,9 @@
       if (Math.hypot(e.clientX - md.startX, e.clientY - md.startY) < 4) openRulerAngleInput(e.clientX, e.clientY);
       return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
+      const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
       panState = null;
+      if (!addedPage && notebook && window.sofiaPageSnap) window.sofiaPageSnap({});
       return;
     }
 
@@ -11315,15 +11796,20 @@
       }
       container.appendChild(grid);
     }
-    for (const a of files) {
-      const l = document.createElement("a");
-      l.className = "hw-file";
-      l.href = a.url;
-      l.target = "_blank";
-      l.rel = "noopener";
-      l.innerHTML = '<span class="material-symbols-rounded">attach_file</span><span></span>';
-      l.lastChild.textContent = a.name || "Datei";
-      container.appendChild(l);
+    if (files.length) {
+      const fileGrid = document.createElement("div");
+      fileGrid.className = "hw-images";
+      for (const a of files) {
+        const l = document.createElement("a");
+        l.className = "hw-file";
+        l.href = a.url;
+        l.target = "_blank";
+        l.rel = "noopener";
+        l.innerHTML = '<span class="material-symbols-rounded">attach_file</span><span></span>';
+        l.lastChild.textContent = a.name || "Datei";
+        fileGrid.appendChild(l);
+      }
+      container.appendChild(fileGrid);
     }
   }
   function renderHwDetail(hw) {
@@ -11736,66 +12222,93 @@
   function renderOwnRefs() {
     const sec = document.createElement("div");
     sec.className = "hw-own";
-    const head = document.createElement("div");
-    head.className = "hw-own-head";
-    head.innerHTML = '<span>Eigenes Material</span><button type="button" class="hw-own-add"><span class="material-symbols-rounded">add</span>Foto / Datei</button>';
-    head.querySelector("button").addEventListener("click", (e) => {
+    const sub = document.createElement("div");
+    sub.className = "pap-sub";
+    sub.textContent = "Eigenes Material";
+    sec.appendChild(sub);
+    const all = boardRefs();
+    const removeRef = (ref) => saveBoardRefs(boardRefs().filter((x) => x !== ref), "Entfernen hat nicht geklappt");
+    const grid = document.createElement("div");
+    grid.className = "mat-grid";
+    const addThumb = (face, name, onOpen, onRemove) => {
+      const cell = document.createElement("div");
+      cell.className = "mat-thumb";
+      face.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onOpen();
+      });
+      const foot = document.createElement("div");
+      foot.className = "page-thumb-foot";
+      const lab = document.createElement("span");
+      lab.textContent = name;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "page-thumb-menu hw-panel-btn";
+      del.title = "Entfernen";
+      del.innerHTML = '<span class="material-symbols-rounded">close</span>';
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onRemove();
+      });
+      foot.appendChild(lab);
+      foot.appendChild(del);
+      cell.appendChild(face);
+      cell.appendChild(foot);
+      grid.appendChild(cell);
+    };
+    for (const r of all.filter((x) => x.fileId)) {
+      const pdf = isPdfItem(r);
+      const face = document.createElement("button");
+      face.type = "button";
+      face.className = "mat-thumb-file";
+      face.title = pdf ? "Antippen: hier im Fenster öffnen" : "Antippen: öffnen";
+      face.innerHTML = '<span class="material-symbols-rounded"></span>';
+      face.querySelector(".material-symbols-rounded").textContent = pdf ? "picture_as_pdf" : "description";
+      addThumb(
+        face,
+        r.name || "Datei",
+        () => {
+          if (pdf) openHwViewer(panelItems().findIndex((it) => it.fileId === r.fileId));
+          else window.open(ownFileUrl(r), "_blank", "noopener");
+        },
+        () => removeRef(r)
+      );
+    }
+    for (const r of all.filter((x) => x.mediaId)) {
+      const im = document.createElement("img");
+      im.className = "mat-thumb-img";
+      im.src = "/api/media/" + encodeURIComponent(r.mediaId);
+      im.alt = r.name || "Bild";
+      im.loading = "lazy";
+      addThumb(
+        im,
+        r.name || "Bild",
+        () => openHwViewer(panelItems().findIndex((it) => it.mediaId === r.mediaId)),
+        () => removeRef(r)
+      );
+    }
+    const addCell = document.createElement("div");
+    addCell.className = "mat-thumb";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "page-thumb-add mat-add";
+    add.title = "Foto oder Datei hinzufügen";
+    add.innerHTML = '<span class="material-symbols-rounded">add</span>';
+    add.addEventListener("click", (e) => {
       e.stopPropagation();
       refFileInput.click();
     });
-    sec.appendChild(head);
-    const all = boardRefs();
-    const removeRef = (ref) => saveBoardRefs(boardRefs().filter((x) => x !== ref), "Entfernen hat nicht geklappt");
-    const fileRefs = all.filter((r) => r.fileId);
-    for (const r of fileRefs) {
-      const row = document.createElement("div");
-      row.className = "hw-file hw-own-file";
-      const pdf = isPdfItem(r);
-      row.innerHTML = '<span class="material-symbols-rounded"></span><span class="hw-own-file-name"></span><button type="button" class="hw-ref-del" title="Entfernen"><span class="material-symbols-rounded">close</span></button>';
-      row.children[0].textContent = pdf ? "picture_as_pdf" : "description";
-      row.children[1].textContent = r.name || "Datei";
-      row.title = pdf ? "Antippen: hier im Fenster öffnen" : "Antippen: öffnen";
-      row.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (pdf) openHwViewer(panelItems().findIndex((it) => it.fileId === r.fileId));
-        else window.open(ownFileUrl(r), "_blank", "noopener");
-      });
-      row.querySelector(".hw-ref-del").addEventListener("click", (e) => {
-        e.stopPropagation();
-        removeRef(r);
-      });
-      sec.appendChild(row);
-    }
-    const refs = all.filter((r) => r.mediaId);
-    if (refs.length) {
-      const grid = document.createElement("div");
-      grid.className = "hw-images hw-refs";
-      refs.forEach((r, i) => {
-        const wrap = document.createElement("div");
-        wrap.className = "hw-ref";
-        const im = document.createElement("img");
-        im.src = "/api/media/" + encodeURIComponent(r.mediaId);
-        im.alt = r.name || "Bild";
-        im.loading = "lazy";
-        const del = document.createElement("button");
-        del.type = "button";
-        del.className = "hw-ref-del";
-        del.title = "Entfernen";
-        del.innerHTML = '<span class="material-symbols-rounded">close</span>';
-        del.addEventListener("click", (e) => {
-          e.stopPropagation();
-          removeRef(r);
-        });
-        wrap.appendChild(im);
-        wrap.appendChild(del);
-        grid.appendChild(wrap);
-      });
-      sec.appendChild(grid);
-    }
+    const addFoot = document.createElement("div");
+    addFoot.className = "page-thumb-foot";
+    addFoot.innerHTML = "<span>Hinzufügen</span>";
+    addCell.appendChild(add);
+    addCell.appendChild(addFoot);
+    grid.appendChild(addCell);
+    sec.appendChild(grid);
     if (!all.length) {
       const empty = document.createElement("div");
       empty.className = "hw-hint";
-      empty.textContent = "Hier kannst du z. B. die Buchseite, ein Foto der Aufgabe oder ein PDF ablegen – mit der Kamera, aus deinen Bildern oder Dateien.";
+      empty.textContent = "Buchseite, Foto oder PDF – wie eine Seite in der Leiste links.";
       sec.appendChild(empty);
     }
     return sec;
@@ -13919,6 +14432,368 @@
     libAddMenu.classList.add("hidden");
     boardFileInput.click();
   });
+  document.getElementById("btn-library-settings")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSettings();
+  });
+
+  // ---- GoodNotes: Ordner/ZIP mit annotierten PDFs importieren (Einstellungen) ----
+  function gnNormPath(p) {
+    return String(p || "")
+      .replace(/\\/g, "/")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+/g, "/")
+      .replace(/^\/+/, "");
+  }
+  function gnIsPdfName(name) {
+    return /\.pdf$/i.test(name || "");
+  }
+  function gnPdfTitle(name) {
+    return String(name || "").replace(/\.pdf$/i, "").trim() || "Notizbuch";
+  }
+  function gnAnalyzeExport(entries) {
+    const list = (entries || [])
+      .map((e) => ({ path: gnNormPath(e.path), file: e.file }))
+      .filter((e) => e.path && gnIsPdfName(e.path.split("/").pop()) && !/(^|\/)__macosx\//i.test(e.path));
+    if (!list.length) return { tops: [], loose: [] };
+    const split = (rows) => {
+      const byTop = new Map();
+      const loose = [];
+      for (const e of rows) {
+        const segs = e.path.split("/").filter(Boolean);
+        if (segs.length < 2) {
+          loose.push(e);
+          continue;
+        }
+        const top = segs[0];
+        if (!byTop.has(top)) byTop.set(top, []);
+        byTop.get(top).push({ rel: segs.slice(1).join("/"), file: e.file, name: segs[segs.length - 1] });
+      }
+      const tops = Array.from(byTop.entries()).map(([name, pdfs]) => ({ name, pdfs }));
+      tops.sort((a, b) => a.name.localeCompare(b.name, "de"));
+      return { tops, loose };
+    };
+    const raw = split(list);
+    const parts = list.map((e) => e.path.split("/").filter(Boolean));
+    const wrap = parts[0] && parts[0][0];
+    const wrapped = !!(wrap && parts.every((p) => p[0] === wrap) && parts.some((p) => p.length > 1));
+    if (!wrapped) return raw;
+    const inner = split(
+      list
+        .map((e) => {
+          const segs = e.path.split("/").filter(Boolean).slice(1);
+          return { path: segs.join("/"), file: e.file };
+        })
+        .filter((e) => e.path)
+    );
+    // Nur die ZIP-/Export-Hülle abziehen, wenn darunter mehrere Fächer liegen.
+    // Ein einzelner Ordner (z. B. nur „Mathematik“) bleibt die Zuordnungsebene.
+    return inner.tops.length >= 2 ? inner : raw;
+  }
+  window.sofiaGnAnalyzeExport = gnAnalyzeExport;
+  async function gnEntriesFromZip(file) {
+    if (!window.ensureFflate) throw new Error("zip");
+    const fflate = await window.ensureFflate();
+    if (!fflate || !fflate.unzipSync) throw new Error("zip");
+    const unzipped = fflate.unzipSync(new Uint8Array(await file.arrayBuffer()), {
+      filter: (f) => gnIsPdfName(f.name) && !/(^|\/)__macosx\//i.test(f.name.replace(/\\/g, "/")),
+    });
+    return Object.entries(unzipped).map(([path, data]) => ({
+      path,
+      file: new File([data], path.split(/[/\\]/).pop(), { type: "application/pdf" }),
+    }));
+  }
+  function gnEntriesFromDir(fileList) {
+    return Array.from(fileList || [])
+      .filter((f) => gnIsPdfName(f.name))
+      .map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
+  }
+  function gnGuessFolderId(name, roots) {
+    const n = String(name || "").trim().toLowerCase();
+    if (!n) return "new";
+    const exact = roots.find((f) => f.name.toLowerCase() === n);
+    if (exact) return exact.id;
+    const part = roots.find((f) => n.startsWith(f.name.toLowerCase()) || f.name.toLowerCase().startsWith(n));
+    return part ? part.id : "new";
+  }
+  let gnPending = null; // {tops, loose, roots}
+  function gnSetStatus(text) {
+    const el = document.getElementById("gn-import-status");
+    if (el) el.textContent = text || "";
+  }
+  function gnShowPick() {
+    gnPending = null;
+    document.getElementById("gn-import-pick")?.classList.remove("hidden");
+    document.getElementById("gn-import-map")?.classList.add("hidden");
+    gnSetStatus("");
+  }
+  function gnRenderMap() {
+    const box = document.getElementById("gn-map-rows");
+    const count = document.getElementById("gn-import-count");
+    if (!box || !gnPending) return;
+    const { tops, loose, roots } = gnPending;
+    const nPdf = tops.reduce((s, t) => s + t.pdfs.length, 0) + loose.length;
+    if (count) count.textContent = nPdf + (nPdf === 1 ? " PDF gefunden." : " PDFs gefunden.") + " Ordne die obersten Ordner einem Fach zu.";
+    box.innerHTML = "";
+    const fillSelect = (sel, name, forLoose) => {
+      const skip = document.createElement("option");
+      skip.value = "";
+      skip.textContent = "Nicht importieren";
+      sel.appendChild(skip);
+      if (forLoose) {
+        const root = document.createElement("option");
+        root.value = "root";
+        root.textContent = "Ohne Ordner (Alle Blätter)";
+        sel.appendChild(root);
+      }
+      const neu = document.createElement("option");
+      neu.value = "new";
+      neu.textContent = name ? "Neuer Ordner „" + name + "“" : "Neuer Ordner „Import“";
+      sel.appendChild(neu);
+      for (const f of roots) {
+        const o = document.createElement("option");
+        o.value = f.id;
+        o.textContent = f.name + (f.sofiaSubjectId ? " (Fach)" : "");
+        sel.appendChild(o);
+      }
+    };
+    const addRow = (key, title, sub, guessed, forLoose) => {
+      const row = document.createElement("div");
+      row.className = "gn-map-row";
+      row.dataset.key = key;
+      const lab = document.createElement("strong");
+      lab.textContent = title;
+      const hint = document.createElement("small");
+      hint.textContent = sub;
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", title);
+      fillSelect(sel, forLoose ? "Import" : title, forLoose);
+      sel.value = guessed;
+      row.appendChild(lab);
+      row.appendChild(hint);
+      row.appendChild(sel);
+      box.appendChild(row);
+    };
+    for (const t of tops) addRow("top:" + t.name, t.name, t.pdfs.length + (t.pdfs.length === 1 ? " PDF" : " PDFs"), gnGuessFolderId(t.name, roots), false);
+    if (loose.length) addRow("loose", "Lose PDFs (ohne Ordner)", loose.length + (loose.length === 1 ? " PDF" : " PDFs"), "root", true);
+    document.getElementById("gn-import-pick")?.classList.add("hidden");
+    document.getElementById("gn-import-map")?.classList.remove("hidden");
+  }
+  async function gnLoadRoots() {
+    const lib = await api("/api/library");
+    const atRoot = (lib && lib.folders) || [];
+    if (atRoot.length) return atRoot;
+    return ((lib && lib.allFolders) || []).filter((f) => !f.parentId);
+  }
+  async function gnPrepare(entries) {
+    const analyzed = gnAnalyzeExport(entries);
+    const n = analyzed.tops.reduce((s, t) => s + t.pdfs.length, 0) + analyzed.loose.length;
+    if (!n) {
+      showToast("Keine PDFs in diesem Ordner gefunden");
+      gnShowPick();
+      return;
+    }
+    gnPending = { ...analyzed, roots: await gnLoadRoots() };
+    gnRenderMap();
+    gnSetStatus("");
+  }
+  async function gnEnsureFolder(name, parentId, cache) {
+    const key = String(parentId || "") + "\0" + name.toLowerCase();
+    if (cache.has(key)) return cache.get(key);
+    const roots = gnPending.roots || [];
+    const all = (libraryCache && libraryCache.allFolders) || [];
+    const pool = parentId ? all.filter((f) => f.parentId === parentId) : roots;
+    const hit = pool.find((f) => f.name.toLowerCase() === name.toLowerCase());
+    if (hit) {
+      cache.set(key, hit.id);
+      return hit.id;
+    }
+    const id = uuid();
+    const color = FOLDER_COLORS[Math.abs(Array.from(name).reduce((s, ch) => s + ch.charCodeAt(0), 0)) % FOLDER_COLORS.length];
+    await api("/api/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, parentId: parentId || null, id, color }),
+    });
+    cache.set(key, id);
+    if (libraryCache) {
+      libraryCache.allFolders = libraryCache.allFolders || [];
+      libraryCache.allFolders.push({ id, parentId: parentId || null, name });
+    }
+    return id;
+  }
+  async function gnImportAsBoard(imgs, title, folderId) {
+    const res = await api("/api/boards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, folderId: folderId || null }),
+    });
+    const boardId = res && res.board && res.board.id;
+    if (!boardId) throw new Error("board");
+    let y = 64;
+    const x = 64;
+    for (const im of imgs) {
+      const maxW = 1600;
+      const iw = im.w || 1000;
+      const ih = im.h || Math.round(iw * (im.ratio || 1));
+      const fit = Math.min(1, maxW / Math.max(iw, 1));
+      const dw = Math.max(80, iw * fit);
+      const dh = Math.max(80, ih * fit);
+      const stroke = {
+        id: uuid(),
+        tool: "image",
+        color: "#000000",
+        size: 1,
+        points: [
+          { x, y, p: 1 },
+          { x: x + dw, y: y + dh, p: 1 },
+        ],
+        extra: { mediaId: im.mediaId, crop: { l: 0, t: 0, r: 1, b: 1 }, nw: iw, nh: ih, name: title },
+      };
+      await api("/api/boards/" + encodeURIComponent(boardId) + "/strokes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stroke }),
+      });
+      y += dh + 48;
+    }
+    return imgs.length;
+  }
+  async function gnImportPdf(file, title, folderId) {
+    const imgs = await renderPdfToImages(file, 2000, (i, n) => {
+      gnSetStatus("„" + title + "“: Seite " + i + " von " + n);
+    });
+    if (!imgs.length) throw new Error("empty pdf");
+    const kind = classifyPdfDoc(imgs);
+    if (kind === "board") {
+      const n = await gnImportAsBoard(imgs, title, folderId);
+      return { kind: "board", pages: n };
+    }
+    const pages = notebookPagesFromPdfImages(imgs);
+    await api("/api/boards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        folderId: folderId || null,
+        notebook: { layout: "vertical", template: { paper: "blank" }, pages },
+      }),
+    });
+    return { kind: "notebook", pages: pages.length };
+  }
+  async function gnRunImport() {
+    if (!gnPending) return;
+    await refreshLibrary();
+    const box = document.getElementById("gn-map-rows");
+    const go = document.getElementById("gn-import-go");
+    if (go) go.disabled = true;
+    const map = {};
+    box?.querySelectorAll(".gn-map-row").forEach((row) => {
+      map[row.dataset.key] = row.querySelector("select")?.value || "";
+    });
+    const cache = new Map();
+    let done = 0;
+    let failed = 0;
+    let pagesDone = 0;
+    let notebooks = 0;
+    let boards = 0;
+    const jobs = [];
+    for (const t of gnPending.tops) {
+      const choice = map["top:" + t.name];
+      if (!choice) continue;
+      jobs.push(...t.pdfs.map((pdf) => ({ top: t.name, choice, pdf, loose: false })));
+    }
+    const looseChoice = map.loose;
+    if (looseChoice && gnPending.loose.length) {
+      for (const e of gnPending.loose) jobs.push({ loose: true, choice: looseChoice, pdf: { file: e.file, rel: e.file.name, name: e.file.name } });
+    }
+    try {
+      const parentByTop = new Map();
+      for (let j = 0; j < jobs.length; j++) {
+        const job = jobs[j];
+        const fileName = (job.pdf.rel || job.pdf.name || "").split("/").filter(Boolean).pop() || "Notizbuch";
+        gnSetStatus((j + 1) + "/" + jobs.length + " · „" + gnPdfTitle(fileName) + "“");
+        try {
+          let folderId = null;
+          if (job.loose) {
+            if (job.choice === "new") folderId = await gnEnsureFolder("Import", null, cache);
+            else if (job.choice !== "root") folderId = job.choice;
+          } else {
+            if (!parentByTop.has(job.top)) {
+              parentByTop.set(job.top, job.choice === "new" ? await gnEnsureFolder(job.top, null, cache) : job.choice);
+            }
+            folderId = parentByTop.get(job.top);
+            const segs = (job.pdf.rel || "").split("/").filter(Boolean);
+            segs.pop();
+            for (const dir of segs) folderId = await gnEnsureFolder(dir, folderId, cache);
+          }
+          const got = await gnImportPdf(job.pdf.file, gnPdfTitle(fileName), folderId);
+          pagesDone += got.pages || 0;
+          if (got.kind === "board") boards += 1;
+          else notebooks += 1;
+          done += 1;
+        } catch (err) {
+          failed += 1;
+          console.warn("gn import", fileName, err);
+        }
+      }
+      await refreshLibrary();
+      const parts = [];
+      if (notebooks) parts.push(notebooks + (notebooks === 1 ? " Notizbuch" : " Notizbücher"));
+      if (boards) parts.push(boards + (boards === 1 ? " Blatt" : " Blätter"));
+      if (!parts.length && done) parts.push(done === 1 ? "1 Dokument" : done + " Dokumente");
+      const msg =
+        (parts.join(" · ") || "Nichts") +
+        " importiert" +
+        (pagesDone ? " · " + pagesDone + (pagesDone === 1 ? " Seite" : " Seiten") : "") +
+        (failed ? " · " + failed + " fehlgeschlagen" : "");
+      gnPending = null;
+      document.getElementById("gn-import-pick")?.classList.remove("hidden");
+      document.getElementById("gn-import-map")?.classList.add("hidden");
+      gnSetStatus(msg);
+      showToast(msg);
+    } catch (err) {
+      gnSetStatus("Import hat nicht geklappt");
+      showToast("Import hat nicht geklappt");
+    }
+    if (go) go.disabled = false;
+  }
+  document.getElementById("gn-pick-dir")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("gn-dir-input")?.click();
+  });
+  document.getElementById("gn-pick-zip")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("gn-zip-input")?.click();
+  });
+  document.getElementById("gn-dir-input")?.addEventListener("change", async (e) => {
+    const files = e.target.files;
+    e.target.value = "";
+    try {
+      await gnPrepare(gnEntriesFromDir(files));
+    } catch (err) {
+      showToast("Ordner lesen hat nicht geklappt");
+    }
+  });
+  document.getElementById("gn-zip-input")?.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      showToast("ZIP wird gelesen…");
+      await gnPrepare(await gnEntriesFromZip(file));
+    } catch (err) {
+      showToast("ZIP konnte nicht gelesen werden");
+    }
+  });
+  document.getElementById("gn-import-go")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    gnRunImport();
+  });
+  document.getElementById("gn-import-reset")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    gnShowPick();
+  });
   // Exportieren: Auswahl PDF oder .sofianotes
   const exportScrim = document.getElementById("export-scrim");
   let exportBoardId = null;
@@ -14201,7 +15076,6 @@
   // ---- Notizbuch: Seiten-Leiste, Seiten anlegen/loeschen, Hintergruende, PDF-Seiten ----
   (() => {
     const menu = document.getElementById("page-menu");
-    const addBig = document.getElementById("page-add-big");
     const PAPER_LABELS = { graph: "Kariert", lines: "Liniert", dots: "Punkte", blank: "Blanko" };
     const newId = () => "p" + uuid().slice(0, 12);
 
@@ -14583,40 +15457,20 @@
 
     // PDF oder Bild in Seitenbilder umwandeln
     async function fileToPageImages(file, maxPages) {
-      const out = [];
       const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name || "");
       if (isPdf) {
-        if (window.ensurePdf) await window.ensurePdf().catch(() => null);
-        if (!window.pdfjsLib) throw new Error("pdfjs");
-        const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-        const n = Math.min(pdf.numPages, maxPages || 200);
-        for (let i = 1; i <= n; i++) {
-          showToast("PDF-Seite " + i + " von " + n + " …");
-          const page = await pdf.getPage(i);
-          const base = page.getViewport({ scale: 1 });
-          const vp = page.getViewport({ scale: Math.min(2.5, 2000 / Math.max(base.width, base.height)) });
-          const c = document.createElement("canvas");
-          c.width = Math.round(vp.width);
-          c.height = Math.round(vp.height);
-          await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-          const jpeg = bitmapToJpeg(c, 2000);
-          c.width = c.height = 0;
-          out.push({ mediaId: await uploadJpeg(jpeg), ratio: base.height / base.width });
-        }
-      } else {
-        const jpeg = await scanImageToJpeg(file, 2000);
-        if (!jpeg) return out;
-        out.push({ mediaId: await uploadJpeg(jpeg), ratio: jpeg.h / jpeg.w });
+        return renderPdfToImages(file, maxPages || 2000, (i, n) => showToast("PDF-Seite " + i + " von " + n + " …"));
       }
-      return out;
+      const jpeg = await scanImageToJpeg(file, 2000);
+      return jpeg ? [{ mediaId: await uploadJpeg(jpeg), ratio: jpeg.h / jpeg.w }] : [];
     }
     // PDF ins Notizbuch: jede PDF-Seite wird eine eigene Seite (in voller Seitengroesse)
     window.sofiaInsertPdfPages = async (file) => {
       if (!notebook) return false;
       try {
-        const imgs = await fileToPageImages(file, 200);
+        const imgs = await fileToPageImages(file, 2000);
         if (!imgs.length) return true;
-        const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        const pages = notebookPagesFromPdfImages(imgs).map((p) => ({ ...p, id: newId() }));
         addPages(currentPage(), pages);
         showToast(pages.length + (pages.length === 1 ? " Seite" : " Seiten") + " eingefügt");
       } catch (err) {
@@ -14721,11 +15575,92 @@
       if (!addPop.classList.contains("hidden") && !e.target.closest("#page-add-pop") && !e.target.closest(".page-thumb-add")) addPop.classList.add("hidden");
     }, true);
     menu.addEventListener("pointerdown", (e) => e.stopPropagation());
-    addBig.addEventListener("pointerdown", (e) => e.stopPropagation());
-    addBig.addEventListener("click", (e) => {
-      e.stopPropagation();
+
+    // Letzte Seite: am Ende weiterziehen und ~1s halten (Ladekreis) legt eine Seite an.
+    // Finger/Maus-Verschieben, nicht Stift-Zeichnen, nicht Pinch-Zoom.
+    const PULL_MS = 1000;
+    const PULL_START_PX = 52;
+    const PULL_KEEP_PX = 22;
+    function pullPastLastPx() {
+      if (!notebook || !currentBoardId) return 0;
+      const n = notebook.pages.length;
+      if (!n) return 0;
+      const fit = viewFor(n - 1);
+      if (!fit || scale > fit.scale * 1.08) return 0;
+      const [ga] = groupOf(n - 1);
+      if (currentPage() < ga) return 0;
+      const last = pageRects(notebook)[n - 1];
+      if (!last) return 0;
+      const horiz = notebook.layout === "horizontal";
+      if (horiz) {
+        const now = (last.x + last.w) * scale + offsetX;
+        const rest = (last.x + last.w) * fit.scale + fit.offsetX;
+        return rest - now;
+      }
+      const now = (last.y + last.h) * scale + offsetY;
+      const rest = (last.y + last.h) * fit.scale + fit.offsetY;
+      return rest - now;
+    }
+    function pagePullRingPos() {
+      const last = pageRects(notebook)[notebook.pages.length - 1];
+      const horiz = notebook.layout === "horizontal";
+      const gap = 36 / Math.max(scale, 0.2);
+      return horiz
+        ? { wx: last.x + last.w + gap, wy: last.y + last.h / 2 }
+        : { wx: last.x + last.w / 2, wy: last.y + last.h + gap };
+    }
+    function cancelPagePull() {
+      if (!pagePull) return;
+      pagePull = null;
+      requestRedraw();
+    }
+    function completePagePull() {
+      if (!pagePull || pagePull.done) return;
+      if (myRole === "view") return cancelPagePull();
+      pagePull.done = true;
+      pagePull = null;
       addPages(notebook.pages.length - 1, [templatePage()]);
-    });
+    }
+    function pagePullHint() {
+      try {
+        if (localStorage.getItem("sofianotes-page-pull-hint") === "1") return;
+        localStorage.setItem("sofianotes-page-pull-hint", "1");
+      } catch (err) {}
+      showToast("Weiter ziehen und halten, um eine Seite anzulegen");
+    }
+    window.sofiaPagePullCancel = cancelPagePull;
+    window.sofiaPagePullTick = () => {
+      if (!notebook || viewOnly || historyView || myRole === "view") return cancelPagePull();
+      if (pinchState || currentStroke || penIsDown() || rulerGesture || touchPointers.size > 1) return cancelPagePull();
+      if (!panState) {
+        if (pagePull && !pagePull.done) cancelPagePull();
+        return;
+      }
+      const past = pullPastLastPx();
+      if (pagePull) {
+        if (past < PULL_KEEP_PX) return cancelPagePull();
+        const pos = pagePullRingPos();
+        pagePull.wx = pos.wx;
+        pagePull.wy = pos.wy;
+        if (performance.now() - pagePull.t0 >= PULL_MS) completePagePull();
+        return;
+      }
+      if (past < PULL_START_PX) return;
+      const pos = pagePullRingPos();
+      pagePull = { t0: performance.now(), wx: pos.wx, wy: pos.wy };
+      pagePullHint();
+      requestRedraw();
+    };
+    window.sofiaPagePullEnd = () => {
+      if (!pagePull) return false;
+      const past = pullPastLastPx();
+      if (!pagePull.done && past >= PULL_KEEP_PX && performance.now() - pagePull.t0 >= PULL_MS) {
+        completePagePull();
+        return true;
+      }
+      cancelPagePull();
+      return false;
+    };
 
     // ---- Seiten-Leiste links (wie in GoodNotes) ----
     const panel = document.getElementById("pages-panel");
@@ -15304,9 +16239,9 @@
       if (!file) return;
       try {
         showToast("Wird hinzugefügt…");
-        const imgs = await fileToPageImages(file, 200);
+        const imgs = await fileToPageImages(file, 2000);
         if (!imgs.length) return;
-        const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        const pages = notebookPagesFromPdfImages(imgs).map((p) => ({ ...p, id: newId() }));
         addPages(currentPage(), pages);
       } catch (err) {
         showToast("Hinzufügen hat nicht geklappt");
@@ -15413,7 +16348,7 @@
       })
     );
 
-    // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste, "Neue Seite"-Knopf hinter der letzten Seite
+    // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste
     let lastCur = -1;
     let lastNb = null;
     window.sofiaPagesUi = () => {
@@ -15421,7 +16356,6 @@
       pagesBtn.classList.toggle("hidden", !show);
       document.getElementById("canvas-menu-rotate")?.classList.add("hidden");
       if (!show) {
-        addBig.classList.add("hidden");
         closeMenu();
         if (panelOpen) setPanel(false);
         return;
@@ -15443,21 +16377,6 @@
           if (act && act.scrollIntoView) act.scrollIntoView({ block: "nearest" });
         }
         if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
-      }
-      const rects = pageRects(notebook);
-      const last = rects[rects.length - 1];
-      if (!last || historyView) {
-        addBig.classList.add("hidden");
-        return;
-      }
-      const horiz = notebook.layout === "horizontal";
-      const p = horiz ? worldToScreen(last.x + last.w + PAGE_GAP / 2, last.y + last.h / 2) : worldToScreen(last.x + last.w / 2, last.y + last.h + PAGE_GAP / 2);
-      const onScreen = p.x > viewLeft - 100 && p.x < window.innerWidth - viewRight + 100 && p.y > -60 && p.y < window.innerHeight + 60;
-      addBig.classList.toggle("hidden", !onScreen);
-      addBig.classList.toggle("vertical", horiz);
-      if (onScreen) {
-        addBig.style.left = p.x + "px";
-        addBig.style.top = p.y + "px";
       }
     };
   })();
@@ -16081,6 +17000,7 @@
     const pairs = [
       ["canvas-menu", "btn-canvas-menu"],
       ["insert-menu", "btn-insert"],
+      ["objects-menu", "btn-objects"],
       ["split-menu", "btn-split"],
       ["tb-more-menu", "btn-tb-more"],
       ["canvas-share-submenu", null],

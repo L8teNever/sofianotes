@@ -27,12 +27,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_circle,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_fix_high,auto_stories,backspace,block,brush,calculate,celebration,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,close_fullscreen,cloud_done,cloud_off,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,document_scanner,download,drive_file_move,edit,expand_more,fit_screen,flip_to_back,flip_to_front,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,layers,logout,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,restart_alt,rotate_right,save,school,send,settings,shapes,share,splitscreen,square_foot,star,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,timer,touch_app,tune,undo,upload_file,vertical_split,view_agenda,view_column,view_sidebar,visibility,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_circle,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_fix_high,auto_stories,backspace,block,brush,calculate,celebration,change_history,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,circle,close,close_fullscreen,cloud_done,cloud_off,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,document_scanner,download,drive_file_move,east,edit,expand_more,fit_screen,flip_to_back,flip_to_front,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,horizontal_rule,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,layers,line_end,line_start,logout,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,restart_alt,rotate_right,save,school,send,settings,shapes,share,splitscreen,square_foot,star,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,timer,touch_app,trending_flat,tune,undo,upload_file,vertical_split,view_agenda,view_column,view_sidebar,visibility,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js" defer></script>
 <link rel="stylesheet" href="style.css?v=__BUILD__" />
 <script>
-  window.__APP_VERSION__ = "1.0.0";
+  window.__APP_VERSION__ = "%%APP_VERSION%%";
   window.__BUILD_TS__ = "__BUILD__";
 </script>
 </head>
@@ -241,6 +241,44 @@
   <button id="btn-ruler" class="icon-btn" type="button" title="Lineal an/aus (1 Finger schieben, 2 Finger drehen; Stift an der Kante zieht gerade)">
     <span class="material-symbols-rounded">straighten</span>
   </button>
+  <div class="insert-menu-wrap objects-menu-wrap">
+    <button id="btn-objects" class="icon-btn" type="button" title="Objekte: Rechteck, Linie, Kreis, Dreieck, Pfeil">
+      <span class="material-symbols-rounded">shapes</span>
+    </button>
+    <div id="objects-menu" class="lib-add-menu insert-menu hidden" role="menu" aria-label="Objekte">
+      <button type="button" class="lib-add-opt" data-obj="rect">
+        <span class="material-symbols-rounded">rectangle</span>
+        Rechteck
+      </button>
+      <button type="button" class="lib-add-opt" data-obj="line">
+        <span class="material-symbols-rounded">horizontal_rule</span>
+        Gerade Linie
+      </button>
+      <button type="button" class="lib-add-opt" data-obj="circle">
+        <span class="material-symbols-rounded">circle</span>
+        Kreis
+      </button>
+      <button type="button" class="lib-add-opt" data-obj="triangle">
+        <span class="material-symbols-rounded">change_history</span>
+        Dreieck
+      </button>
+      <button type="button" class="lib-add-opt" data-obj="arrow">
+        <span class="material-symbols-rounded">east</span>
+        Pfeil
+      </button>
+      <div class="obj-menu-sub">Strich</div>
+      <div class="set-seg obj-seg" id="obj-dash">
+        <button type="button" data-dash="0">Durchgezogen</button>
+        <button type="button" data-dash="1">Gestrichelt</button>
+      </div>
+      <div class="obj-menu-sub">Pfeilspitze</div>
+      <div class="set-seg obj-seg" id="obj-arrow">
+        <button type="button" data-heads="end">Ende</button>
+        <button type="button" data-heads="start">Anfang</button>
+        <button type="button" data-heads="both">Beide</button>
+      </div>
+    </div>
+  </div>
   <button id="btn-zoom-window" class="icon-btn" type="button" title="Zoom-Fenster: groß schreiben, klein aufs Blatt">
     <span class="material-symbols-rounded">zoom_in_map</span>
   </button>
@@ -350,6 +388,10 @@
       <button type="button" class="tool-btn fmt-btn" data-cmd="italic" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
       <button type="button" class="tool-btn fmt-btn" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
       <button type="button" class="tool-btn fmt-btn" data-cmd="underline" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
+      <span class="mode-sep"></span>
+      <button type="button" id="btn-text-color" class="tool-btn text-color-btn" title="Textfarbe" aria-haspopup="true" aria-expanded="false">
+        <span class="text-color-flag" aria-hidden="true"></span>
+      </button>
     </div>
     <div class="mode-group" data-modes="text">
       <span class="mode-sep"></span>
@@ -387,8 +429,8 @@
     </div>
   </div>
 
-  <div class="dock-divider" data-modes="pen text lasso"></div>
-  <div id="swatches-container" data-modes="pen text lasso">
+  <div class="dock-divider" data-modes="pen lasso"></div>
+  <div id="swatches-container" data-modes="pen lasso">
     <div id="swatch-base" class="swatch-group"></div>
     <div id="swatch-custom" class="swatch-group swatch-scroll"></div>
     <label class="custom-color" title="Neue Farbe hinzufügen">
@@ -445,6 +487,11 @@
       <button type="button" class="set-nav hidden" id="set-nav-sofia" data-go="sofia" data-title="Sofia">
         <span class="set-ico"><span class="material-symbols-rounded">cloud_upload</span></span>
         <span class="set-nav-text"><strong>Sofia &amp; Lösungen</strong><small id="set-sum-sofia">Automatisch teilen</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="import" data-title="Import">
+        <span class="set-ico"><span class="material-symbols-rounded">upload_file</span></span>
+        <span class="set-nav-text"><strong>Import</strong><small id="set-sum-import">GoodNotes-Ordner als PDFs</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
       <button type="button" class="set-nav" data-go="app" data-title="App &amp; Version">
@@ -603,14 +650,14 @@
         <button type="button" data-step="3">3</button>
       </div>
       <div class="set-sub">Knöpfe am Zoom-Fenster</div>
-      <p class="set-hint">Die Steuerung sitzt hochkant an der Seite oder oben über der Schreibfläche.</p>
+      <p class="set-hint">Ohne Stiftleiste im Fenster: Steuerung hochkant an der Seite oder oben. Mit Stiftleiste stehen Zoom-Knöpfe und Werkzeuge in einer Zeile oben.</p>
       <div class="set-seg" id="set-zoom-chrome">
         <button type="button" data-chrome="side">An der Seite</button>
         <button type="button" data-chrome="top">Oben</button>
       </div>
       <button id="set-zoom-inner" class="setting-toggle set-switch active" title="Stiftleiste im Zoom-Fenster">
         <span class="set-ico"><span class="material-symbols-rounded">ink_pen</span></span>
-        <span class="set-nav-text"><strong>Stiftleiste im Zoom-Fenster</strong><small>Erscheint an derselben Stelle. Beim Schließen zurück an den alten Platz.</small></span>
+        <span class="set-nav-text"><strong>Stiftleiste im Zoom-Fenster</strong><small>In derselben oberen Zeile wie die Zoom-Knöpfe. Beim Schließen zurück an den alten Platz.</small></span>
         <span class="set-knob"></span>
       </button>
     </div>
@@ -624,6 +671,25 @@
       </div>
     </div>
 
+    <div class="set-page hidden" data-page="import">
+      <p class="set-hint">Aus GoodNotes die Bibliothek oder Ordner als <strong>bearbeitbare PDFs</strong> exportieren (mit Unterordnern). Hier die Ordnerstruktur wählen und jedem obersten Ordner ein Fach zuordnen. Paginierte Hefte (DIN A4 u. Ä.) werden Notizbücher mit beschreibbaren Seiten; große Whiteboard-/Board-PDFs werden ein unendliches Blatt – wie „Neues Blatt“ bzw. „Neues Notizbuch (A4-Seiten)“.</p>
+      <div id="gn-import-pick">
+        <div class="set-sub">Dateien wählen</div>
+        <button type="button" id="gn-pick-dir" class="set-check active"><span class="material-symbols-rounded">folder_open</span><span>Ordner wählen</span><span></span></button>
+        <button type="button" id="gn-pick-zip" class="set-check active"><span class="material-symbols-rounded">upload_file</span><span>ZIP-Datei wählen</span><span></span></button>
+        <input id="gn-dir-input" type="file" webkitdirectory directory multiple hidden />
+        <input id="gn-zip-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+      </div>
+      <div id="gn-import-map" class="hidden">
+        <div class="set-sub">Oberste Ordner → Fach</div>
+        <p class="set-hint" id="gn-import-count"></p>
+        <div id="gn-map-rows"></div>
+        <button type="button" id="gn-import-go" class="m3-btn-primary gn-import-go">Importieren</button>
+        <button type="button" id="gn-import-reset" class="m3-btn-outline gn-import-reset">Andere Dateien</button>
+      </div>
+      <p class="set-hint" id="gn-import-status"></p>
+    </div>
+
     <div class="set-page hidden" data-page="app">
       <div class="version-card">
         <div class="version-row">
@@ -632,7 +698,7 @@
             <div id="settings-build-date" class="version-date">Build wird geladen…</div>
           </div>
           <div class="version-right">
-            <div id="settings-version-label">v1.0.0</div>
+            <div id="settings-version-label">v%%APP_VERSION%%</div>
             <div id="settings-version-status" class="version-status">
               <span class="material-symbols-rounded">check</span>
               <span id="settings-version-status-text">Auf neuestem Stand</span>
@@ -727,6 +793,9 @@
           </button>
         </div>
       </div>
+      <button type="button" id="btn-library-settings" class="lib-icon-btn" title="Einstellungen">
+        <i data-lucide="settings"></i>
+      </button>
       <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Zurück zum Blatt">
         <i data-lucide="x"></i>
       </button>
@@ -918,7 +987,6 @@
     </div>
   </div>
   <div id="page-menu" class="lib-add-menu page-menu hidden"></div>
-  <button type="button" id="page-add-big" class="page-add-big hidden"><span class="material-symbols-rounded">add</span>Neue Seite</button>
 
   <aside id="history-panel" class="history-panel hidden" aria-label="Versionsverlauf">
     <div class="history-head">
@@ -1042,6 +1110,15 @@
       </div>
     </div>
   </div>
+  <div id="text-color-pop" class="text-color-pop hidden" role="menu" aria-label="Textfarbe">
+    <div class="text-color-pop-title">Farbe</div>
+    <div id="text-color-pop-swatches" class="text-color-pop-swatches"></div>
+    <label class="text-color-pop-add" title="Neue Farbe hinzufügen">
+      <input id="text-color-pop-input" type="color" value="#8b5cf6" />
+      <span class="material-symbols-rounded">add</span>
+      Neue Farbe
+    </label>
+  </div>
   <div id="swatch-menu" class="swatch-menu hidden" role="menu">
     <label class="swatch-menu-btn" title="Farbe ändern">
       <span class="material-symbols-rounded">palette</span>
@@ -1080,6 +1157,9 @@
     };
     window.ensureTf = function () {
       return load("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js").then(function () { return window.tf; });
+    };
+    window.ensureFflate = function () {
+      return load("https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js").then(function () { return window.fflate; });
     };
   })();
 </script>
