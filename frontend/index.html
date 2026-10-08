@@ -140,10 +140,8 @@
 <div id="guide-bl" class="drag-guide guide-corner"></div>
 <div id="guide-br" class="drag-guide guide-corner"></div>
 
-<header id="top-filename-bar">
-  <button type="button" id="btn-open-library" class="file-icon" title="Blätter und Ordner">
-    <span class="material-symbols-rounded">folder</span>
-  </button>
+<!-- eigene kleine Leiste direkt neben der Kopfleiste: Seiten, geteilte Ansicht, Schau-Ansicht -->
+<div id="top-side-bar" class="top-side-bar">
   <button type="button" id="btn-pages" class="icon-btn hidden" title="Seiten">
     <span class="material-symbols-rounded">view_sidebar</span>
   </button>
@@ -152,6 +150,12 @@
   </button>
   <button type="button" id="btn-view-only" class="icon-btn" title="Schau-Ansicht: nur ansehen, nichts ändern">
     <span class="material-symbols-rounded">visibility</span>
+  </button>
+</div>
+
+<header id="top-filename-bar">
+  <button type="button" id="btn-open-library" class="file-icon" title="Blätter und Ordner">
+    <span class="material-symbols-rounded">folder</span>
   </button>
   <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" autocomplete="off" autocorrect="off" spellcheck="false" name="board-title-input" />
   <div class="bar-divider"></div>

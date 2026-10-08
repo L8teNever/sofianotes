@@ -474,14 +474,31 @@
     // geteilte Ansicht: eine gemeinsame Leiste ueber beiden Haelften
     const viewLeft = splitOn() ? canvasLeft : window.__sofiaViewL();
     const viewRight = splitOn() ? canvasRight : window.__sofiaViewR();
-    document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
     const vertical = bar.classList.contains("tb-vertical") || bar.classList.contains("free-drag");
-    if (!viewLeft && !viewRight || vertical) {
+    // eigene kleine Leiste (Seiten, geteilte Ansicht, Schau-Ansicht) sitzt links daneben
+    const side = document.getElementById("top-side-bar");
+    const sideOn = !!side && Array.from(side.children).some((c) => !c.classList.contains("hidden") && !c.classList.contains("tb-off"));
+    if (side) side.classList.toggle("tsb-empty", !sideOn);
+    const sideW = sideOn && !vertical ? side.offsetWidth + 8 : 0;
+    if (vertical) {
+      document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
+      bar.style.maxWidth = "";
+      if (!bar.classList.contains("free-drag")) {
+        bar.style.left = "";
+        bar.style.transform = "";
+      }
+      placeSideBar();
+      return;
+    }
+    if (!viewLeft && !viewRight && !sideW) {
+      document.body.classList.remove("view-narrow");
       bar.style.left = "";
       bar.style.transform = "";
       bar.style.maxWidth = "";
+      placeSideBar();
       return;
     }
+    // Platz zwischen Seitenraendern / Rueckgaengig-Pille; beide Leisten zusammen mittig
     let from = viewLeft + 12;
     let to = window.innerWidth - viewRight - 12;
     const u = undo && !undo.classList.contains("free-drag") ? undo.getBoundingClientRect() : null;
@@ -490,11 +507,75 @@
       if (u.left < (from + to) / 2) from = Math.max(from, u.right + 10);
       else to = Math.min(to, u.left - 10);
     }
-    bar.style.maxWidth = Math.max(200, to - from) + "px";
-    const w = Math.min(bar.scrollWidth, to - from);
+    from += sideW;
+    const avail = Math.max(200, to - from);
+    // passt die Leiste nicht ganz, wird sie seitlich scrollbar (statt aus dem Bild zu laufen)
+    bar.style.maxWidth = "none";
+    const natural = bar.scrollWidth;
+    const tight = natural > avail;
+    document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight) || tight);
+    bar.style.maxWidth = avail + "px";
+    const w = Math.min(natural, avail);
+    // mittig ueber dem ganzen Bild, aber nie in den gesperrten Bereich
+    const center = (viewLeft + window.innerWidth - viewRight) / 2;
+    let left = center - (w + sideW) / 2 + sideW;
+    left = Math.max(from, Math.min(to - w, left));
     bar.style.transform = "none";
-    bar.style.left = Math.round(from + Math.max(0, (to - from - w) / 2)) + "px";
+    bar.style.left = Math.round(left) + "px";
+    placeSideBar();
   }
+  // kleine Leiste immer direkt neben (bzw. bei senkrechter Leiste ueber) der Kopfleiste
+  function placeSideBar() {
+    const bar = document.getElementById("top-filename-bar");
+    const side = document.getElementById("top-side-bar");
+    if (!bar || !side) return;
+    const r = bar.getBoundingClientRect();
+    const vertical = bar.classList.contains("tb-vertical");
+    side.classList.toggle("tsb-vertical", vertical);
+    const sw = side.offsetWidth;
+    const sh = side.offsetHeight;
+    let left;
+    let top;
+    if (vertical) {
+      left = r.left + (r.width - sw) / 2;
+      top = r.top - sh - 8;
+      if (top < 4) top = r.bottom + 8;
+    } else {
+      left = r.left - sw - 8;
+      top = r.top + (r.height - sh) / 2;
+      if (left < 4) left = r.right + 8;
+    }
+    // nicht ueber die Rueckgaengig-Pille legen: dann auf die andere Seite der Kopfleiste
+    const undo = document.getElementById("undo-redo-dock");
+    const u = undo ? undo.getBoundingClientRect() : null;
+    if (u && u.width && left < u.right + 6 && left + sw > u.left - 6 && top < u.bottom + 6 && top + sh > u.top - 6) {
+      if (vertical) top = r.bottom + 8;
+      else left = r.right + 8;
+    }
+    side.style.left = Math.round(left) + "px";
+    side.style.top = Math.round(top) + "px";
+  }
+  (() => {
+    const bar = document.getElementById("top-filename-bar");
+    const side = document.getElementById("top-side-bar");
+    if (!bar || !side) return;
+    let raf = 0;
+    const again = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        layoutTopBar();
+      });
+    };
+    // Groesse (Dateiname, ein-/ausgeblendete Knoepfe) und Ziehen der Leiste: mitwandern
+    if (window.ResizeObserver) {
+      new ResizeObserver(again).observe(bar);
+      new ResizeObserver(again).observe(side);
+    }
+    new MutationObserver(() => placeSideBar()).observe(bar, { attributes: true, attributeFilter: ["style", "class"] });
+    new MutationObserver(again).observe(side, { attributes: true, subtree: true, attributeFilter: ["class"] });
+    bar.addEventListener("transitionend", placeSideBar);
+  })();
   window.addEventListener("resize", () => layoutTopBar());
   window.addEventListener("resize", () => {
     resizeCanvas();
@@ -2361,7 +2442,7 @@
   })();
   function applyTopBarItems() {
     for (const it of TOPBAR_ITEMS) {
-      const el = topBar.querySelector(it.sel);
+      const el = document.querySelector(it.sel);
       if (el) el.classList.toggle("tb-off", topBarHidden.includes(it.key));
     }
     // doppelte/haengende Trennstriche ausblenden
