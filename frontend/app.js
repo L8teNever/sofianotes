@@ -15636,40 +15636,117 @@
     }, true);
     menu.addEventListener("pointerdown", (e) => e.stopPropagation());
 
+    // Auswahl "Anderes Blatt": Ordner und Blaetter wie auf der Startseite, mit Ordnern zum
+    // Hineingehen; beim Suchen eine flache Liste aller zuletzt benutzten Blaetter
     let pickBoards = [];
+    let pickFolder = null;
+    let pickData = null;
+    const pickSeq = { n: 0 };
+    function pickCard(kind, icon, color, title, meta, onOpen) {
+      const el = document.createElement("div");
+      el.className = "library-item lib-card lib-card-" + kind + " pick-card";
+      el.setAttribute("role", "button");
+      el.tabIndex = 0;
+      el.appendChild(libRowIcon(icon, color));
+      el.insertAdjacentHTML("beforeend", '<div class="lib-row-text"><strong></strong><span class="meta"></span></div>');
+      el.querySelector("strong").textContent = title;
+      el.querySelector(".meta").textContent = meta;
+      el.addEventListener("click", onOpen);
+      return el;
+    }
+    function choose(b) {
+      pickScrim.classList.add("hidden");
+      start("other", b);
+    }
     function renderPicker() {
       const list = document.getElementById("split-pick-list");
       const q = document.getElementById("split-pick-search").value.trim().toLowerCase();
       list.innerHTML = "";
       const cur = currentBoardId;
-      const items = pickBoards.filter((b) => b.id !== cur && (!q || (b.title || "").toLowerCase().includes(q)));
-      if (!items.length) {
-        list.innerHTML = '<div class="inbox-empty"><p>Keine passenden Blätter.</p></div>';
+      if (q) {
+        const items = pickBoards.filter((b) => b.id !== cur && (b.title || "").toLowerCase().includes(q));
+        if (!items.length) {
+          list.innerHTML = '<div class="inbox-empty"><p>Keine passenden Blätter.</p></div>';
+          return;
+        }
+        const grid = document.createElement("div");
+        grid.className = "lib-grid lib-grid-boards pick-grid";
+        for (const b of items) grid.appendChild(pickCard("board", b.notebook ? "notebook-pen" : "file-pen-line", null, b.title || "Unbenannt", (b.folder ? b.folder + " · " : "") + relTime(b.updatedAt), () => choose(b)));
+        list.appendChild(grid);
+        if (window.lucide) lucide.createIcons();
         return;
       }
-      for (const b of items) {
-        const row = document.createElement("div");
-        row.className = "inbox-item";
-        row.innerHTML = '<span class="set-ico"><span class="material-symbols-rounded">description</span></span><span class="set-nav-text"><strong></strong><small></small></span>';
-        row.querySelector("strong").textContent = b.title || "Unbenannt";
-        row.querySelector("small").textContent = (b.folder ? b.folder + " · " : "") + relTime(b.updatedAt);
-        row.addEventListener("click", () => {
-          pickScrim.classList.add("hidden");
-          start("other", b);
-        });
-        list.appendChild(row);
+      // Pfad: Start > Ordner > Unterordner
+      const crumbs = document.createElement("div");
+      crumbs.className = "pick-crumbs";
+      const crumb = (label, id) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "pick-crumb" + (id === pickFolder ? " active" : "");
+        b.textContent = label;
+        b.addEventListener("click", () => loadPickFolder(id));
+        crumbs.appendChild(b);
+      };
+      crumb("Alle Blätter", null);
+      for (const c of (pickData && pickData.crumbs) || []) {
+        crumbs.insertAdjacentHTML("beforeend", '<span class="pick-sep material-symbols-rounded">chevron_right</span>');
+        crumb(c.name, c.id);
+      }
+      list.appendChild(crumbs);
+      if (!pickData) {
+        list.insertAdjacentHTML("beforeend", '<div class="inbox-empty"><p>Lädt…</p></div>');
+        return;
+      }
+      const folders = pickData.folders || [];
+      const boards = (pickData.boards || []).filter((b) => b.id !== cur);
+      if (folders.length) {
+        list.insertAdjacentHTML("beforeend", '<div class="lib-section-title pick-sec">Ordner</div>');
+        const fg = document.createElement("div");
+        fg.className = "lib-grid lib-grid-folders pick-grid";
+        for (const f of folders) fg.appendChild(pickCard("folder", "folder", f.color, f.name, "Ordner", () => loadPickFolder(f.id)));
+        list.appendChild(fg);
+      }
+      if (boards.length) {
+        list.insertAdjacentHTML("beforeend", '<div class="lib-section-title pick-sec">Blätter</div>');
+        const bg = document.createElement("div");
+        bg.className = "lib-grid lib-grid-boards pick-grid";
+        for (const b of boards) {
+          const when = relTime(b.updatedAt);
+          bg.appendChild(pickCard("board", b.shared ? "users" : b.notebook ? "notebook-pen" : "file-pen-line", null, b.title || "Unbenannt", (b.notebook ? "Notizbuch" : "Blatt") + (when ? " · " + when : ""), () => choose(b)));
+        }
+        list.appendChild(bg);
+      }
+      if (!folders.length && !boards.length) list.insertAdjacentHTML("beforeend", '<div class="inbox-empty"><p>Hier liegt nichts.</p></div>');
+      if (window.lucide) lucide.createIcons();
+    }
+    async function loadPickFolder(folderId) {
+      pickFolder = folderId || null;
+      const seq = ++pickSeq.n;
+      // was schon in der Bibliothek geladen ist, sofort zeigen
+      const cached = typeof libMem !== "undefined" && libMem.get(libKey(pickFolder));
+      pickData = cached || null;
+      renderPicker();
+      try {
+        const data = await api(libUrl(pickFolder));
+        if (seq !== pickSeq.n) return;
+        pickData = data;
+        renderPicker();
+      } catch (err) {
+        if (!pickData) {
+          pickData = { folders: [], boards: [], crumbs: [] };
+          renderPicker();
+        }
       }
     }
     async function openPicker() {
       pickScrim.classList.remove("hidden");
       document.getElementById("split-pick-search").value = "";
-      document.getElementById("split-pick-list").innerHTML = '<div class="inbox-empty"><p>Lädt…</p></div>';
-      try {
-        pickBoards = (await api("/api/boards/recent")).boards || [];
-      } catch (err) {
-        pickBoards = [];
-      }
-      renderPicker();
+      // im Ordner des offenen Blatts beginnen
+      loadPickFolder(currentFolderId || null);
+      api("/api/boards/recent").then(
+        (r) => (pickBoards = r.boards || []),
+        () => (pickBoards = [])
+      );
     }
     document.getElementById("split-pick-search").addEventListener("input", renderPicker);
     document.getElementById("split-pick-close").addEventListener("click", () => pickScrim.classList.add("hidden"));

@@ -3674,3 +3674,16 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 /* Cursor anderer Personen: Werkzeug-Symbol + Name in der festen Farbe der Person */
 .presence-label { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px 3px 6px; border-radius: 999px; font: 600 12px/1 'Google Sans', 'Inter', sans-serif; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22); }
 .presence-label .material-symbols-rounded { font-size: 15px; }
+
+/* Auswahl "Anderes Blatt" in der geteilten Ansicht: wie die Startseite */
+#split-pick-scrim .dlg-inbox { width: min(820px, 94vw); max-width: none; max-height: min(86vh, 760px); }
+#split-pick-list { gap: 10px; padding-bottom: 6px; }
+#split-pick-list .pick-grid { padding: 0; }
+#split-pick-list .lib-grid-folders { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+#split-pick-list .lib-grid-boards { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+#split-pick-list .pick-card { cursor: pointer; padding-right: 12px; }
+#split-pick-list .pick-sec { margin: 6px 2px 0; }
+.pick-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.pick-crumb { border: none; background: none; padding: 6px 10px; border-radius: 999px; font: 600 14px 'Google Sans', 'Inter', sans-serif; color: #6750a4; cursor: pointer; }
+.pick-crumb.active { background: #eaddff; color: #21005d; }
+.pick-sep { font-size: 18px; color: #79747e; }
