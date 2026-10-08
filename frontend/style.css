@@ -2798,10 +2798,10 @@ button {
   z-index: 90;
   display: flex;
   flex-direction: column;
-  background: #f4f3f7;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 20px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.16);
+  background: #f7f2fa;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 28px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   overflow: hidden;
   font-family: 'Google Sans', 'Inter', sans-serif;
   touch-action: none;
@@ -2941,7 +2941,7 @@ button {
   border-radius: 0;
   border-top-width: 0;
   box-shadow: none;
-  background: #f4f3f7;
+  background: #f7f2fa;
   z-index: 80;
 }
 .hw-panel.docked.dock-right { border-left: 1px solid rgba(0, 0, 0, 0.08); }
@@ -4006,7 +4006,7 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
 
 /* Material-Leiste: gleiche Sprache wie Seiten-Leiste und Blätter */
 .hw-panel.docked {
-  background: #f4f3f7;
+  background: #f7f2fa;
   border-radius: 0;
 }
 .hw-viewer-bar { padding: 8px 6px; }
