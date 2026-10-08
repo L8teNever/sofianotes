@@ -3552,3 +3552,6 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
   from { transform: translateX(calc(-100% - 24px)); opacity: 0.4; }
   to { transform: none; opacity: 1; }
 }
+
+/* Zurueck-Pfeil: genau wie die Knoepfe der anderen Leisten (normale Groesse und Strichstaerke) */
+.top-back-bar { width: auto; display: flex; align-items: center; padding: 6px; overflow: visible; }
