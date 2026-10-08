@@ -14,11 +14,11 @@ class VersionTests(unittest.TestCase):
         self.assertIn(".", info["build_date"])
 
     def test_inject_build(self):
-        sw = 'const CACHE_NAME = "sofianotes-v__BUILD__"; v=__APP_VERSION__;'
+        sw = 'const CACHE_NAME = "sofianotes-v__BUILD__"; v="%%APP_VERSION%%";'
         out = inject_build(sw, "42")
         self.assertIn("sofianotes-v42", out)
         self.assertNotIn("__BUILD__", out)
-        self.assertNotIn("__APP_VERSION__", out)
+        self.assertNotIn("%%APP_VERSION%%", out)
         self.assertIn(read_version(), out)
 
     def test_read_version_semver(self):

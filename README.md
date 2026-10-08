@@ -118,7 +118,7 @@ git config core.hooksPath .githooks
 ```
 
 `SKIP_VERSION_BUMP=1` ueberspringt das Hochzaehlen (z. B. Doku-only). Der Server
-liest die Datei fuer `/api/version` und setzt `__APP_VERSION__` in `index.html`.
+liest die Datei fuer `/api/version` und setzt `%%APP_VERSION%%` in `index.html`.
 
 ## Deployment (GitHub -> Server, Pull-Mechanismus)
 

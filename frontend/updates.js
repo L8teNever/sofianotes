@@ -22,7 +22,7 @@
 
   function clientVersion() {
     const v = String(window.__APP_VERSION__ || "1.0.0");
-    return v.indexOf("__") >= 0 ? "1.0.0" : v;
+    return v.indexOf("%") >= 0 ? "1.0.0" : v;
   }
 
   function showBanner() {

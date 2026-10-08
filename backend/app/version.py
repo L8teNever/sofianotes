@@ -59,4 +59,5 @@ def get_version_info(build_ts: str) -> dict:
 
 
 def inject_build(text: str, build_ts: str) -> str:
-    return text.replace("__BUILD__", str(build_ts)).replace("__APP_VERSION__", read_version())
+    # %%APP_VERSION%%, nicht __APP_VERSION__: das waere Teil von window.__APP_VERSION__.
+    return text.replace("__BUILD__", str(build_ts)).replace("%%APP_VERSION%%", read_version())
