@@ -13441,6 +13441,12 @@
       if (moved.length) queueStrokeMoves(moved);
       fitPage(i);
     }
+    // ⋯-Menue oben: neue Seite nach der aktuellen
+    document.getElementById("canvas-menu-addpage")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (typeof closeCanvasMenus === "function") closeCanvasMenus();
+      if (notebook) addPages(currentPage(), [templatePage()]);
+    });
     // ⋯-Menue oben: aktuelle Seite drehen
     document.getElementById("canvas-menu-rotate")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -14151,6 +14157,7 @@
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
       pagesBtn.classList.toggle("hidden", !show);
       document.getElementById("canvas-menu-rotate")?.classList.toggle("hidden", !show);
+      document.getElementById("canvas-menu-addpage")?.classList.toggle("hidden", !show);
       if (!show) {
         addBig.classList.add("hidden");
         closeMenu();
@@ -14184,9 +14191,24 @@
       const horiz = notebook.layout === "horizontal";
       const p = horiz ? worldToScreen(last.x + last.w + PAGE_GAP / 2, last.y + last.h / 2) : worldToScreen(last.x + last.w / 2, last.y + last.h + PAGE_GAP / 2);
       const onScreen = p.x > viewLeft - 100 && p.x < window.innerWidth - viewRight + 100 && p.y > -60 && p.y < window.innerHeight + 60;
-      addBig.classList.toggle("hidden", !onScreen);
+      // Seite fuer Seite rastet die Ansicht immer auf eine Seite ein - der Knopf hinter der letzten
+      // Seite waere nie erreichbar. Deshalb: ist die letzte Seite die aktuelle und der Knopf
+      // verdeckt/ausserhalb, sitzt er fest am unteren (bzw. rechten) Bildrand.
+      const onLast = currentPage() === rects.length - 1;
+      const hiddenByBars = horiz ? p.x > window.innerWidth - viewRight - 70 : p.y > window.innerHeight - 110;
+      const pin = onLast && (!onScreen || hiddenByBars);
+      addBig.classList.toggle("hidden", !onScreen && !pin);
       addBig.classList.toggle("vertical", horiz);
-      if (onScreen) {
+      if (pin) {
+        const cx = (viewLeft + window.innerWidth - viewRight) / 2;
+        if (horiz) {
+          addBig.style.left = window.innerWidth - viewRight - 44 + "px";
+          addBig.style.top = window.innerHeight / 2 + "px";
+        } else {
+          addBig.style.left = cx + "px";
+          addBig.style.top = window.innerHeight - 112 + "px";
+        }
+      } else if (onScreen) {
         addBig.style.left = p.x + "px";
         addBig.style.top = p.y + "px";
       }
