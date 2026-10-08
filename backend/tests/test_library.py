@@ -45,6 +45,28 @@ class LibraryTests(unittest.TestCase):
         sim = run(db.library("simon", None))
         self.assertEqual(sim["boards"][0]["folderId"], None)
 
+    def test_share_roles_and_authors(self):
+        s = run(db.create_board("simon", "Mathe", None))
+        bid = s["id"]
+        self.assertEqual(run(db.board_role("simon", bid)), "owner")
+        self.assertIsNone(run(db.board_role("franz", bid)))
+        run(db.share_board("simon", bid, "franz"))
+        self.assertEqual(run(db.board_role("franz", bid)), "edit")
+        b = run(db.share_board("simon", bid, "franz", "add"))
+        self.assertEqual(b["shareRoles"], {"franz": "add"})
+        self.assertEqual(run(db.board_role("franz", bid)), "add")
+        run(db.share_board("simon", bid, "franz", "view"))
+        self.assertEqual(run(db.board_role("franz", bid)), "view")
+        lib = run(db.library("franz", None))
+        self.assertEqual(lib["boards"][0]["shareRoles"], {"franz": "view"})
+        stroke = {"id": "x1", "tool": "pen", "color": "#000", "size": 4, "points": [{"x": 1, "y": 1}], "board_id": bid}
+        run(db.insert_stroke(dict(stroke), "simon"))
+        # spaeteres Aendern durch jemand anderen laesst den Autor stehen
+        run(db.insert_stroke(dict(stroke, color="#f00"), "franz"))
+        self.assertEqual(run(db.stroke_owners(["x1", "nope"])), {"x1": "simon"})
+        loaded = run(db.load_all(bid))
+        self.assertEqual(loaded[0]["author"], "simon")
+
     def test_strokes_stay_on_board(self):
         a = run(db.create_board("simon", "A", None))
         b = run(db.create_board("simon", "B", None))

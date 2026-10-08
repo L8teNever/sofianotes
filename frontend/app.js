@@ -47,6 +47,7 @@
     "sofianotes-templates",
     "sofianotes-school",
     "sofianotes-school-pos",
+    "sofianotes-back-mode",
   ];
   const PREF_META = "sofianotes-prefs-sync"; // {at, dirty}
   const prefSync = (() => {
@@ -323,6 +324,11 @@
   // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
   let creatingBoard = null; // neues Blatt, das gerade im Hintergrund angelegt wird: {id, promise}
   let viewOnly = false; // Schau-Ansicht: nur ansehen (verschieben/zoomen), nichts aendern
+  // Freigabe-Rolle im offenen Blatt: owner / edit / add (nur dazuschreiben) / view (nur ansehen)
+  let myRole = "owner";
+  const foreignIds = new Set(); // Striche anderer Personen (bei "add" nicht aenderbar)
+  const fullRights = () => myRole === "owner" || myRole === "edit";
+  const canEditStroke = (st) => !!st && (fullRights() || !foreignIds.has(st.id));
   let historyView = null; // {strokes: Map, marks: Map id->color, ghosts: [stroke]}
   let authorMarks = null; // Map id->color (live: wer hat was geschrieben)
   function drawHistoryMarks() {
@@ -600,7 +606,7 @@
     const back = document.getElementById("top-back-bar");
     const backBottom = atBottom0 && !vertical;
     if (back) back.classList.toggle("tbb-bottom", backBottom);
-    const backW = back ? back.offsetWidth + 8 : 0;
+    const backW = back && back.offsetWidth ? back.offsetWidth + 8 : 0;
     document.documentElement.style.setProperty("--back-shift", backW + "px");
     // offene Seiten-Leiste: ⋯ und "Seiten ✕" liegen ueber ihr, die Rueckgaengig-Pille rueckt nicht nach
     const overPanel = document.body.classList.contains("pages-open");
@@ -2688,8 +2694,11 @@
   }
   let topBarHidden = effectiveHidden();
   window.sofiaApplyTopBar = () => applyTopBarItems();
+  // Schau-Ansicht: oben stehen immer Lineal, Rechner und Aufgabe (egal, was sonst unter
+  // dem ▾ liegt); alles zum Schreiben ist weg, das ▾ auch
+  const VIEW_TOOLS = ["status", "ruler", "calc", "hw", "view"];
   function applyTopBarItems() {
-    topBarHidden = effectiveHidden();
+    topBarHidden = viewOnly ? TOPBAR_ITEMS.map((it) => it.key).filter((k) => !VIEW_TOOLS.includes(k)) : effectiveHidden();
     for (const it of TOPBAR_ITEMS) {
       const el = document.querySelector(it.sel);
       if (el) el.classList.toggle("tb-off", topBarHidden.includes(it.key));
@@ -2721,7 +2730,7 @@
     box.innerHTML = "";
     const subj = currentSubject();
     // im Bereich "alle Faecher" die Standard-Auswahl zeigen, sonst die des Fachs
-    const shown = tbScope === "all" || !subj ? tbDefault : topBarHidden;
+    const shown = tbScope === "all" || !subj ? tbDefault : effectiveHidden();
     for (const it of TOPBAR_ITEMS) {
       if (it.key === "view") continue; // sitzt jetzt in der Rueckgaengig-Leiste
       const b = document.createElement("button");
@@ -2788,8 +2797,8 @@
     if (!box) return;
     box.innerHTML = "";
     box.classList.add("tb-more-menu");
-    const all = viewOnly;
-    const want = (key) => all || topBarHidden.includes(key);
+    const all = false;
+    const want = (key) => topBarHidden.includes(key);
     const hwOk = !document.getElementById("btn-hw-panel").classList.contains("hidden");
     const isOn = (sel) => !all && !!document.querySelector(sel)?.classList.contains("active");
     const run = (sel) => () => {
@@ -2857,7 +2866,7 @@
     }
     // ▾ nur zeigen, wenn wirklich etwas darunter liegt
     const more = document.getElementById("tb-more-wrap");
-    if (more) more.classList.toggle("tb-off", !count);
+    if (more) more.classList.toggle("tb-off", !count || viewOnly);
     if (!count) box.classList.add("hidden");
   }
   document.getElementById("btn-tb-more")?.addEventListener("click", (e) => {
@@ -3147,6 +3156,7 @@
       }
       const c = { id: o.id, tool: o.tool, color: o.color, size: o.size, q };
       if (o.extra) c.extra = o.extra;
+      if (o.author) c.author = o.author;
       return JSON.stringify(c);
     };
     if (sync === true) {
@@ -3180,7 +3190,9 @@
 
   function applyStrokeList(list) {
     boardStrokes.clear();
+    foreignIds.clear();
     for (const s of list || []) {
+      if (s.author && s.author !== currentPersonId) foreignIds.add(s.id);
       tagShape(s);
       s.bbox = strokeWorldBBox(s);
       boardStrokes.set(s.id, s);
@@ -3212,6 +3224,11 @@
         await sendQueuedOp(item.op);
         await SofiaOffline.outboxDelete(item.key);
       } catch (err) {
+        // Server lehnt dauerhaft ab (z. B. nur Ansehen erlaubt): verwerfen statt ewig festzuhaengen
+        if (err && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+          await SofiaOffline.outboxDelete(item.key);
+          continue;
+        }
         setConnState("offline");
         return false;
       }
@@ -3219,11 +3236,16 @@
     return true;
   }
 
+  function opErr(r, what) {
+    const e = new Error(what);
+    e.status = r.status;
+    return e;
+  }
   async function sendQueuedOp(op) {
     const headers = { "Content-Type": "application/json" };
     if (op.type === "media") {
       const r = await fetch("/api/media", { method: "POST", headers, body: JSON.stringify({ id: op.id, image: op.image }) });
-      if (!r.ok) throw new Error("media");
+      if (!r.ok) throw opErr(r, "media");
       return;
     }
     if (op.type === "board_create") {
@@ -3232,7 +3254,7 @@
         headers,
         body: JSON.stringify({ personId: op.personId, title: op.title, folderId: op.folderId, id: op.id, notebook: op.notebook || undefined }),
       });
-      if (!r.ok) throw new Error("board");
+      if (!r.ok) throw opErr(r, "board");
       return;
     }
     if (op.type === "board_rename") {
@@ -3241,12 +3263,12 @@
         headers,
         body: JSON.stringify({ personId: op.personId, title: op.title }),
       });
-      if (!r.ok) throw new Error("rename");
+      if (!r.ok) throw opErr(r, "rename");
       return;
     }
     if (op.type === "board_delete") {
       const r = await fetch("/api/boards/" + encodeURIComponent(op.id) + "?person=" + encodeURIComponent(op.personId), { method: "DELETE" });
-      if (!r.ok) throw new Error("delete");
+      if (!r.ok) throw opErr(r, "delete");
       return;
     }
     if (op.type === "folder_create") {
@@ -3255,7 +3277,7 @@
         headers,
         body: JSON.stringify({ personId: op.personId, name: op.name, parentId: op.parentId, id: op.id }),
       });
-      if (!r.ok) throw new Error("folder");
+      if (!r.ok) throw opErr(r, "folder");
       return;
     }
     if (op.type === "folder_rename") {
@@ -3264,7 +3286,7 @@
         headers,
         body: JSON.stringify({ personId: op.personId, name: op.name }),
       });
-      if (!r.ok) throw new Error("folder");
+      if (!r.ok) throw opErr(r, "folder");
       return;
     }
     if (op.type === "folder_move") {
@@ -3273,12 +3295,12 @@
         headers,
         body: JSON.stringify({ personId: op.personId, parentId: op.parentId }),
       });
-      if (!r.ok) throw new Error("folder");
+      if (!r.ok) throw opErr(r, "folder");
       return;
     }
     if (op.type === "folder_delete") {
       const r = await fetch("/api/folders/" + encodeURIComponent(op.id) + "?person=" + encodeURIComponent(op.personId), { method: "DELETE" });
-      if (!r.ok) throw new Error("folder");
+      if (!r.ok) throw opErr(r, "folder");
       return;
     }
     if (op.type === "place") {
@@ -3287,16 +3309,16 @@
         headers,
         body: JSON.stringify({ personId: op.personId, boardId: op.boardId, folderId: op.folderId }),
       });
-      if (!r.ok) throw new Error("place");
+      if (!r.ok) throw opErr(r, "place");
       return;
     }
     if (op.type === "share") {
       const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId) + "/share", {
         method: "POST",
         headers,
-        body: JSON.stringify({ personId: op.personId, withPersonId: op.withPersonId }),
+        body: JSON.stringify({ personId: op.personId, withPersonId: op.withPersonId, role: op.role }),
       });
-      if (!r.ok) throw new Error("share");
+      if (!r.ok) throw opErr(r, "share");
       return;
     }
     if (op.type === "unshare") {
@@ -3304,7 +3326,7 @@
         "/api/boards/" + encodeURIComponent(op.boardId) + "/share/" + encodeURIComponent(op.withPersonId) + "?person=" + encodeURIComponent(op.personId),
         { method: "DELETE" }
       );
-      if (!r.ok) throw new Error("unshare");
+      if (!r.ok) throw opErr(r, "unshare");
       return;
     }
     if (op.type === "stroke_put") {
@@ -3313,7 +3335,7 @@
         headers,
         body: JSON.stringify({ personId: op.personId, stroke: op.stroke }),
       });
-      if (!r.ok) throw new Error("stroke");
+      if (!r.ok) throw opErr(r, "stroke");
       return;
     }
     if (op.type === "stroke_erase") {
@@ -3322,7 +3344,7 @@
         headers,
         body: JSON.stringify({ personId: op.personId, strokeIds: op.strokeIds }),
       });
-      if (!r.ok) throw new Error("erase");
+      if (!r.ok) throw opErr(r, "erase");
     }
   }
 
@@ -3400,6 +3422,7 @@
     const s = remoteInProgress.get(id);
     if (!s) return;
     remoteInProgress.delete(id);
+    if (s.author !== currentPersonId) foreignIds.add(s.id);
     if (s.points.length > 0) {
       tagShape(s);
       s.bbox = strokeWorldBBox(s);
@@ -3433,7 +3456,13 @@
           if (!restored && notebook && firstOpen && window.sofiaFitPage && !window.sofiaSplitBg) window.sofiaFitPage(0);
         }
         boardStrokes.clear();
+        foreignIds.clear();
+        if (!window.sofiaSplitBg) {
+          myRole = msg.role || "owner";
+          if (window.sofiaApplyRole) window.sofiaApplyRole();
+        }
         for (const s of msg.strokes) {
+          if (s.author !== currentPersonId) foreignIds.add(s.id);
           tagShape(s);
           s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
@@ -3443,6 +3472,17 @@
         scheduleSaveBoard();
         break;
       }
+      case "role":
+        myRole = msg.role || "edit";
+        if (window.sofiaApplyRole) window.sofiaApplyRole(true);
+        break;
+      case "board_shares":
+        if (currentBoardMeta) {
+          currentBoardMeta.sharedWith = msg.sharedWith || [];
+          currentBoardMeta.shareRoles = msg.shareRoles || {};
+        }
+        if (window.sofiaShareRefresh) window.sofiaShareRefresh();
+        break;
       case "board_reload":
         if (currentBoardId) openBoard(currentBoardId, filenameInput ? filenameInput.value : "", { fromHistory: true });
         break;
@@ -3467,10 +3507,12 @@
       case "presence_join":
         ensurePresence(msg.id, msg.color);
         renderPeopleJumpList();
+        if (window.sofiaShareRefresh) window.sofiaShareRefresh();
         break;
       case "presence_leave":
         removePresence(msg.id);
         renderPeopleJumpList();
+        if (window.sofiaShareRefresh) window.sofiaShareRefresh();
         break;
       case "cursor": {
         const p = ensurePresence(msg.id, msg.color);
@@ -3491,6 +3533,7 @@
           size: msg.size,
           points: msg.points || [],
           ownerId: msg.id,
+          author: msg.author || undefined,
         });
         requestRedraw();
         break;
@@ -3521,6 +3564,7 @@
       case "stroke_move": {
         const s = msg.stroke;
         if (s && s.id) {
+          if (s.author ? s.author !== currentPersonId : !boardStrokes.has(s.id)) foreignIds.add(s.id);
           s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
           if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
@@ -3670,11 +3714,13 @@
   function cloneStroke(s) {
     const out = { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points.map((p) => ({ ...p })) };
     if (s.extra) out.extra = JSON.parse(JSON.stringify(s.extra));
+    if (s.author) out.author = s.author;
     return out;
   }
   function serializeStroke(s) {
     const out = { id: s.id, tool: s.tool, color: s.color, size: s.size, points: s.points };
     if (s.extra) out.extra = s.extra;
+    if (s.author) out.author = s.author;
     return out;
   }
   function updateUndoRedoButtons() {
@@ -3782,7 +3828,7 @@
   function clearAllInk() {
     // Nur Tinte - Bilder, PDFs, Textfelder und Tabellen bleiben stehen.
     const clones = Array.from(boardStrokes.values())
-      .filter((s) => !isObjectStroke(s))
+      .filter((s) => !isObjectStroke(s) && canEditStroke(s))
       .map(cloneStroke);
     hideEraseAllMenu();
     if (!clones.length) return;
@@ -5516,7 +5562,7 @@
     const list = Array.from(boardStrokes.values());
     for (let i = list.length - 1; i >= 0; i--) {
       const s = list[i];
-      if (s.tool !== "text") continue;
+      if (s.tool !== "text" || !canEditStroke(s)) continue;
       const b = s.bbox || strokeWorldBBox(s);
       const pad = 6 / scale;
       if (b && world.x >= b.minX - pad && world.x <= b.maxX + pad && world.y >= b.minY - pad && world.y <= b.maxY + pad) return s;
@@ -5527,7 +5573,7 @@
     const list = Array.from(boardStrokes.values());
     for (let i = list.length - 1; i >= 0; i--) {
       const s = list[i];
-      if (s.tool === "table" && cellAt(s, world)) return s;
+      if (s.tool === "table" && canEditStroke(s) && cellAt(s, world)) return s;
     }
     return null;
   }
@@ -7817,6 +7863,12 @@
   }
 
   function selectStrokeIds(ids) {
+    // nur dazuschreiben: Fremdes laesst sich nicht auswaehlen
+    if (!fullRights()) {
+      const own = ids.filter((id) => canEditStroke(boardStrokes.get(id)));
+      if (own.length < ids.length && !own.length) showToast("Das hat jemand anderes geschrieben – nur ansehen");
+      ids = own;
+    }
     const present = withTableContents(ids.filter((id) => boardStrokes.get(id)));
     if (!present.length) {
       clearSelection();
@@ -7917,6 +7969,7 @@
     let best = null;
     let bestD = Infinity;
     for (const s of boardStrokes.values()) {
+      if (!canEditStroke(s)) continue;
       if (!strokeHitsPoint(s, world, pad)) continue;
       const b = s.bbox || makeBBox(s.points || []);
       const cx = (b.minX + b.maxX) / 2;
@@ -9362,6 +9415,7 @@
         // Eingefuegte Bilder/PDFs, Textfelder und Tabellen sind keine Tinte: der Radierer
         // laesst sie stehen (loeschen geht ueber Auswahl -> Ausschneiden).
         if (isObjectStroke(stroke)) continue;
+        if (!canEditStroke(stroke)) continue;
         if (!eraseHitsStroke(stroke, sx, sy, r)) continue;
         erasedThisGesture.add(stroke.id);
         erasedStrokesThisGesture.set(stroke.id, cloneStroke(stroke));
@@ -9611,6 +9665,13 @@
     if (e.pointerType === "touch") {
       if (!touchPointers.size) touchGestureView = { scale, offsetX, offsetY };
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (viewOnly && touchPointers.size === 1 && ruler.visible && rulerHit(e.clientX, e.clientY)) {
+        // Lineal darf man auch in der Schau-Ansicht verschieben/drehen
+        tapState = null;
+        panState = null;
+        startRulerGesture();
+        return;
+      }
       if (viewOnly && touchPointers.size === 1) {
         // Schau-Ansicht: ein Finger verschiebt nur, kein Tippen/Greifen/Einfuegen
         tapState = null;
@@ -12967,54 +13028,186 @@
     }
   }
 
-  function openShare(board) {
-    const box = document.getElementById("share-choices");
-    box.innerHTML = "";
-    for (const p of PEOPLE) {
-      if (p.id === currentPersonId) continue;
-      const on = (board.sharedWith || []).includes(p.id);
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "dlg-choice" + (on ? " on" : "");
-      b.innerHTML = '<span class="dlg-avatar"></span><span class="dlg-choice-text"><strong></strong><small></small></span><i data-lucide="' + (on ? "check" : "plus") + '"></i>';
-      b.querySelector(".dlg-avatar").textContent = (p.name || "?").slice(0, 1).toUpperCase();
-      b.querySelector("strong").textContent = p.name;
-      b.querySelector("small").textContent = on ? "Hat Zugriff – antippen zum Entfernen" : "Antippen zum Teilen";
-      b.addEventListener("click", () => {
-        const isOn = (board.sharedWith || []).includes(p.id);
-        const set = (v) => {
-          board.sharedWith = v ? [...new Set([...(board.sharedWith || []), p.id])] : (board.sharedWith || []).filter((x) => x !== p.id);
-          b.classList.toggle("on", v);
-          b.querySelector("small").textContent = v ? "Hat Zugriff – antippen zum Entfernen" : "Antippen zum Teilen";
-          b.lastElementChild.outerHTML = '<i data-lucide="' + (v ? "check" : "plus") + '"></i>';
-          if (window.lucide) lucide.createIcons();
-        };
-        optimistic({
-          apply: () => set(!isOn),
-          revert: () => set(isOn),
-          request: () =>
-            isOn
-              ? api(
-                  "/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(p.id) + "?person=" + encodeURIComponent(currentPersonId),
-                  { method: "DELETE" }
-                )
-              : api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ personId: currentPersonId, withPersonId: p.id }),
-                }),
-          offlineOp: isOn
-            ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: p.id }
-            : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: p.id },
-          failText: "Teilen hat nicht geklappt",
-        }).then(persistLibraryCache);
-      });
-      box.appendChild(b);
-    }
-    if (!box.children.length) box.innerHTML = '<p class="share-hint">Es gibt noch keine anderen Personen.</p>';
-    shareBackdrop.classList.remove("hidden");
-    if (window.lucide) lucide.createIcons();
+  // Teilen: wer Zugriff hat und wie viel (bearbeiten / nur dazuschreiben / nur ansehen),
+  // wer gerade im Blatt ist, und die feste Farbe jeder Person
+  const SHARE_ROLES = [
+    { key: "edit", icon: "edit", label: "Bearbeiten", hint: "Alles schreiben, verschieben und löschen" },
+    { key: "add", icon: "add_circle", label: "Nur dazuschreiben", hint: "Eigenes schreiben und ändern, Fremdes nicht" },
+    { key: "view", icon: "visibility", label: "Nur ansehen", hint: "Bleibt immer in der Schau-Ansicht" },
+    { key: "none", icon: "block", label: "Kein Zugriff", hint: "Blatt verschwindet bei der Person" },
+  ];
+  let shareState = null; // { board, open: personId|null, here: [] }
+  const colorOfPerson = (pid) => {
+    const p = PEOPLE.find((x) => x.id === pid);
+    return (p && p.color) || "#6750a4";
+  };
+  const roleOf = (board, pid) => ((board.sharedWith || []).includes(pid) ? (board.shareRoles && board.shareRoles[pid]) || "edit" : "none");
+  function textOn(color) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || "");
+    const lum = m ? (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255 : 0;
+    return lum > 0.62 ? "#1c1b1f" : "#fff";
   }
+  function avatarEl(pid, here) {
+    const av = document.createElement("span");
+    av.className = "share-av" + (here ? " here" : "");
+    const c = colorOfPerson(pid);
+    av.style.background = c;
+    av.style.color = textOn(c);
+    av.textContent = (personName(pid) || "?").slice(0, 1).toUpperCase();
+    return av;
+  }
+  function setShareRole(board, pid, role) {
+    const before = { sharedWith: (board.sharedWith || []).slice(), shareRoles: Object.assign({}, board.shareRoles || {}) };
+    const apply = () => {
+      if (role === "none") {
+        board.sharedWith = (board.sharedWith || []).filter((x) => x !== pid);
+        if (board.shareRoles) delete board.shareRoles[pid];
+      } else {
+        board.sharedWith = [...new Set([...(board.sharedWith || []), pid])];
+        board.shareRoles = Object.assign({}, board.shareRoles || {}, { [pid]: role });
+      }
+      renderShare();
+    };
+    const revert = () => {
+      board.sharedWith = before.sharedWith;
+      board.shareRoles = before.shareRoles;
+      renderShare();
+    };
+    return optimistic({
+      apply,
+      revert,
+      request: () =>
+        role === "none"
+          ? api("/api/boards/" + encodeURIComponent(board.id) + "/share/" + encodeURIComponent(pid) + "?person=" + encodeURIComponent(currentPersonId), { method: "DELETE" })
+          : api("/api/boards/" + encodeURIComponent(board.id) + "/share", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ personId: currentPersonId, withPersonId: pid, role }),
+            }),
+      offlineOp:
+        role === "none"
+          ? { type: "unshare", personId: currentPersonId, boardId: board.id, withPersonId: pid }
+          : { type: "share", personId: currentPersonId, boardId: board.id, withPersonId: pid, role },
+      failText: "Teilen hat nicht geklappt",
+    }).then(persistLibraryCache);
+  }
+  function renderShare() {
+    if (!shareState) return;
+    const { board } = shareState;
+    const box = document.getElementById("share-choices");
+    const hereBox = document.getElementById("share-here");
+    const owner = board.ownerId || currentPersonId;
+    const mine = owner === currentPersonId;
+    // wer gerade im Blatt ist
+    hereBox.innerHTML = "";
+    const here = shareState.here || [];
+    if (here.length) {
+      const lab = document.createElement("span");
+      lab.className = "share-here-label";
+      lab.textContent = "Gerade im Blatt";
+      hereBox.appendChild(lab);
+      for (const pid of here) {
+        const chip = document.createElement("span");
+        chip.className = "share-here-chip";
+        chip.appendChild(avatarEl(pid, false));
+        const n = document.createElement("span");
+        n.textContent = pid === currentPersonId ? "Du" : personName(pid);
+        chip.appendChild(n);
+        hereBox.appendChild(chip);
+      }
+    }
+    hereBox.classList.toggle("hidden", !here.length);
+    document.getElementById("share-sub").textContent = mine
+      ? "Antippen, um festzulegen, was die Person darf."
+      : "Geteilt von " + personName(owner) + ". Nur " + personName(owner) + " kann die Freigabe ändern.";
+    box.innerHTML = "";
+    const people = PEOPLE.filter((p) => p.id !== currentPersonId);
+    if (!mine && !people.some((p) => p.id === owner)) people.unshift({ id: owner, name: personName(owner) });
+    for (const p of people) {
+      const isOwner = p.id === owner;
+      const role = isOwner ? "owner" : roleOf(board, p.id);
+      const info = SHARE_ROLES.find((r) => r.key === role);
+      const row = document.createElement("div");
+      row.className = "share-row" + (shareState.open === p.id ? " open" : "") + (role === "none" ? " off" : "");
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "share-row-head";
+      head.appendChild(avatarEl(p.id, here.includes(p.id)));
+      const txt = document.createElement("span");
+      txt.className = "share-row-text";
+      txt.innerHTML = "<strong></strong><small></small>";
+      txt.querySelector("strong").textContent = p.name || personName(p.id);
+      txt.querySelector("small").textContent = (here.includes(p.id) ? "Gerade im Blatt · " : "") + (isOwner ? "Besitzer" : info ? info.label : "");
+      head.appendChild(txt);
+      const chip = document.createElement("span");
+      chip.className = "share-role-chip role-" + role;
+      chip.innerHTML = '<span class="material-symbols-rounded"></span>';
+      chip.firstChild.textContent = isOwner ? "star" : info ? info.icon : "block";
+      head.appendChild(chip);
+      if (mine && !isOwner) {
+        const more = document.createElement("span");
+        more.className = "material-symbols-rounded share-row-caret";
+        more.textContent = "expand_more";
+        head.appendChild(more);
+        head.addEventListener("click", () => {
+          shareState.open = shareState.open === p.id ? null : p.id;
+          renderShare();
+        });
+      } else head.disabled = true;
+      row.appendChild(head);
+      if (mine && !isOwner && shareState.open === p.id) {
+        const opts = document.createElement("div");
+        opts.className = "share-opts";
+        for (const r of SHARE_ROLES) {
+          const o = document.createElement("button");
+          o.type = "button";
+          o.className = "share-opt" + (r.key === role ? " active" : "") + (r.key === "none" ? " danger" : "");
+          o.innerHTML = '<span class="material-symbols-rounded"></span><span class="share-opt-text"><strong></strong><small></small></span>';
+          o.firstChild.textContent = r.icon;
+          o.querySelector("strong").textContent = r.label;
+          o.querySelector("small").textContent = r.hint;
+          o.addEventListener("click", () => {
+            if (r.key === role) return;
+            shareState.open = null;
+            setShareRole(board, p.id, r.key);
+          });
+          opts.appendChild(o);
+        }
+        row.appendChild(opts);
+      }
+      box.appendChild(row);
+    }
+    if (!people.length) box.innerHTML = '<p class="share-hint">Es gibt noch keine anderen Personen.</p>';
+  }
+  async function loadSharePresence() {
+    const st = shareState;
+    if (!st || !st.board.id) return;
+    try {
+      const res = await api("/api/boards/" + encodeURIComponent(st.board.id) + "/presence");
+      if (shareState !== st) return;
+      st.here = (res.people || []).slice();
+      if (st.board.id === currentBoardId && currentPersonId && !st.here.includes(currentPersonId)) st.here.unshift(currentPersonId);
+      renderShare();
+    } catch (err) {
+      /* offline: ohne Anwesenheit */
+    }
+  }
+  function openShare(board) {
+    shareState = { board, open: null, here: board.id === currentBoardId && currentPersonId ? [currentPersonId] : [] };
+    renderShare();
+    shareBackdrop.classList.remove("hidden");
+    loadSharePresence();
+  }
+  // Rollen haben sich geaendert (anderes Geraet) / jemand kam dazu: Fenster aktualisieren
+  window.sofiaShareRefresh = () => {
+    if (!shareState || shareBackdrop.classList.contains("hidden")) return;
+    if (currentBoardMeta && shareState.board.id === currentBoardMeta.id) {
+      shareState.board.sharedWith = currentBoardMeta.sharedWith;
+      shareState.board.shareRoles = currentBoardMeta.shareRoles;
+    }
+    renderShare();
+    loadSharePresence();
+  };
 
   function openMove(kind, id) {
     const box = document.getElementById("move-choices");
@@ -13274,6 +13467,36 @@
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     showLibrary();
   });
+  // Einstellung: eigener Zurueck-Knopf oben links oder "Blatt verlassen" im Zahnrad-Menue
+  function backMode() {
+    return lsGetRaw("sofianotes-back-mode") === "menu" ? "menu" : "button";
+  }
+  function applyBackMode() {
+    const m = backMode();
+    document.body.classList.toggle("back-in-menu", m === "menu");
+    document.getElementById("canvas-menu-leave")?.classList.toggle("hidden", m !== "menu");
+    document.querySelectorAll("#set-back-mode [data-back]").forEach((b) => b.classList.toggle("active", b.dataset.back === m));
+    try {
+      layoutTopBar();
+    } catch (err) {}
+  }
+  window.sofiaApplyBackMode = applyBackMode;
+  document.querySelectorAll("#set-back-mode [data-back]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      try {
+        localStorage.setItem("sofianotes-back-mode", b.dataset.back);
+      } catch (err) {}
+      applyBackMode();
+    })
+  );
+  document.getElementById("canvas-menu-leave")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (typeof closeCanvasMenus === "function") closeCanvasMenus();
+    if (window.sofiaSplitClose) window.sofiaSplitClose();
+    showLibrary();
+  });
+  applyBackMode();
   document.getElementById("btn-library-close")?.addEventListener("click", () => hideLibrary());
   document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
   const libSearchRow = document.getElementById("lib-search-row");
@@ -13623,12 +13846,8 @@
   });
   document.getElementById("canvas-menu-share")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    const board = currentOpenBoard();
-    if (board.ownerId && board.ownerId !== currentPersonId) {
-      window.alert("Nur " + personName(board.ownerId) + " kann dieses Blatt teilen.");
-      return;
-    }
-    openCanvasShareSubmenu(board);
+    closeCanvasMenus();
+    openShare(currentOpenBoard());
   });
   document.addEventListener("click", (e) => {
     if (!document.getElementById("btn-canvas-menu").contains(e.target) && !canvasMenu.contains(e.target) && !canvasShareSubmenu.contains(e.target)) {
@@ -14136,6 +14355,11 @@
     // Menue einer Seite (▾ unter dem Vorschaubild)
     function pageMenu(i, anchor) {
       const pg = notebook.pages[i];
+      // eingeschraenkte Freigabe: Seiten nur hinten anhaengen, sonst nichts veraendern
+      if (!fullRights()) {
+        if (myRole === "view") return showToast("Du darfst dieses Blatt nur ansehen");
+        return openMenu([{ head: "Seite " + (i + 1) }, { icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }], anchor);
+      }
       // Drehen ganz oben, damit es schnell zu finden ist
       const items = [{ head: "Seite " + (i + 1) }, { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) }, { head: "Hintergrund" }];
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
@@ -14149,6 +14373,7 @@
     }
     // Menue des ganzen Notizbuchs (⋯ oben in der Seiten-Leiste)
     function notebookMenu(anchor) {
+      if (!fullRights()) return showToast("Nur wer bearbeiten darf, kann das Notizbuch einrichten");
       const t = notebook.template || {};
       const items = [{ head: "Anordnung" }];
       items.push({ icon: "view_agenda", label: "Seiten untereinander", active: notebook.layout !== "horizontal", run: () => setLayout("vertical") });
@@ -14408,6 +14633,7 @@
     // Lange druecken: Seite wird ausgewaehlt und haengt am Finger; loslassen = neue Stelle
     let thumbDrag = null; // {from, cell, ghost, to, timer, x0, y0, active, done}
     function startThumbHold(e, i, cell) {
+      if (!fullRights()) return;
       if (e.button > 0) return;
       cancelThumbDrag();
       const d = { from: i, cell, to: i, x0: e.clientX, y0: e.clientY, active: false, done: false, pointerId: e.pointerId };
@@ -14816,8 +15042,10 @@
     }
     function openAddPop(anchor) {
       const box = document.getElementById("pap-templates");
+      if (myRole === "view") return showToast("Du darfst dieses Blatt nur ansehen");
       box.innerHTML = "";
-      const at = currentPage();
+      // nur dazuschreiben: neue Seiten immer hinten (sonst wuerde Fremdes verschoben)
+      const at = fullRights() ? currentPage() : notebook.pages.length - 1;
       const tpl = templatePage();
       box.appendChild(templateCard("Aktuelle Vorlage", "A4", tpl, () => addPages(at, [templatePage()])));
       for (const k of Object.keys(PAPER_LABELS)) {
@@ -15562,7 +15790,8 @@
   // ---- Schau-Ansicht: nur ansehen, mit Fingern/Stift/Maus verschieben und zoomen ----
   (() => {
     const btn = document.getElementById("btn-view-only");
-    function setViewOnly(on) {
+    let viewLocked = false; // nur Ansehen freigegeben: Schau-Ansicht laesst sich nicht verlassen
+    function setViewOnly(on, quiet) {
       viewOnly = on;
       if (on) {
         if (textEdit) commitTextEditor();
@@ -15577,9 +15806,26 @@
       btn.title = on ? "Schau-Ansicht beenden: wieder bearbeiten" : "Schau-Ansicht: nur ansehen, nichts ändern";
       applyTopBarItems();
       requestRedraw();
-      showToast(on ? "Schau-Ansicht: nur ansehen" : "Bearbeiten wieder an");
+      if (!quiet) showToast(on ? "Schau-Ansicht: nur ansehen" : "Bearbeiten wieder an");
     }
-    btn.addEventListener("click", () => setViewOnly(!viewOnly));
+    btn.addEventListener("click", () => {
+      if (viewLocked) return showToast("Du darfst dieses Blatt nur ansehen");
+      setViewOnly(!viewOnly);
+    });
+    // Freigabe-Rolle anwenden (beim Oeffnen und wenn sie sich live aendert)
+    const ROLE_TEXT = { edit: "Du darfst jetzt alles bearbeiten", add: "Du darfst jetzt nur noch dazuschreiben", view: "Du darfst dieses Blatt jetzt nur ansehen", owner: "" };
+    window.sofiaApplyRole = (announce) => {
+      const lock = myRole === "view";
+      if (lock && !viewOnly) setViewOnly(true, true);
+      else if (!lock && viewLocked && viewOnly) setViewOnly(false, true);
+      viewLocked = lock;
+      btn.classList.toggle("locked", lock);
+      btn.title = lock ? "Nur ansehen freigegeben" : btn.title;
+      document.body.classList.toggle("role-view", lock);
+      document.body.classList.toggle("role-add", myRole === "add");
+      if (!fullRights() && selection.ids.size) clearSelection();
+      if (announce && ROLE_TEXT[myRole]) showToast(ROLE_TEXT[myRole]);
+    };
     const isTyping = (t) => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
     window.addEventListener(
       "keydown",

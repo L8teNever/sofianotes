@@ -167,6 +167,22 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE strokes ADD COLUMN extra TEXT")
     if "board_id" not in cols:
         _conn.execute("ALTER TABLE strokes ADD COLUMN board_id TEXT")
+    if "author" not in cols:
+        # wer den Strich angelegt hat (fuer "nur hinzufuegen": eigene Striche aendern ja, fremde nein)
+        _conn.execute("ALTER TABLE strokes ADD COLUMN author TEXT")
+        # einmalig aus dem Verlauf nachtragen (ein Durchgang, erster Eintrag je Strich)
+        try:
+            first: dict[str, str] = {}
+            for sid, pid in _conn.execute("SELECT stroke_id, person_id FROM stroke_log ORDER BY id ASC"):
+                if sid not in first and pid:
+                    first[sid] = pid
+            _conn.executemany("UPDATE strokes SET author = ? WHERE id = ? AND author IS NULL", [(p, i) for i, p in first.items()])
+        except sqlite3.OperationalError:
+            pass
+    share_cols = {row[1] for row in _conn.execute("PRAGMA table_info(shares)").fetchall()}
+    if "role" not in share_cols:
+        # edit = alles, add = nur dazuschreiben (eigenes aendern), view = nur ansehen
+        _conn.execute("ALTER TABLE shares ADD COLUMN role TEXT NOT NULL DEFAULT 'edit'")
     folder_cols = {row[1] for row in _conn.execute("PRAGMA table_info(folders)").fetchall()}
     if "color" not in folder_cols:
         _conn.execute(f"ALTER TABLE folders ADD COLUMN color TEXT DEFAULT '{DEFAULT_FOLDER_COLOR}'")
@@ -263,12 +279,12 @@ def _migrate_legacy_sync() -> None:
 def _load_all_sync(board_id: str | None = None) -> list[dict[str, Any]]:
     if board_id:
         cur = _conn.execute(
-            "SELECT id, tool, color, size, points, extra FROM strokes WHERE board_id = ? ORDER BY created_at ASC",
+            "SELECT id, tool, color, size, points, extra, author FROM strokes WHERE board_id = ? ORDER BY created_at ASC",
             (board_id,),
         )
     else:
         cur = _conn.execute(
-            "SELECT id, tool, color, size, points, extra FROM strokes ORDER BY created_at ASC"
+            "SELECT id, tool, color, size, points, extra, author FROM strokes ORDER BY created_at ASC"
         )
     strokes = []
     for row in cur.fetchall():
@@ -286,6 +302,8 @@ def _load_all_sync(board_id: str | None = None) -> list[dict[str, Any]]:
                 extra = None
             if extra:
                 item["extra"] = extra
+        if row[6]:
+            item["author"] = row[6]
         strokes.append(item)
     return strokes
 
@@ -331,8 +349,8 @@ def _insert_sync(stroke: dict[str, Any], person_id: str | None = None) -> None:
         _log_sync(board_id, stroke["id"], person_id, before, json.dumps(_clean_stroke(stroke)))
     # Beim Aendern bleibt created_at (= Reihenfolge beim Laden) erhalten
     _conn.execute(
-        "INSERT INTO strokes (id, tool, color, size, points, extra, created_at, board_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO strokes (id, tool, color, size, points, extra, created_at, board_id, author) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(id) DO UPDATE SET tool = excluded.tool, color = excluded.color, size = excluded.size, "
         "points = excluded.points, extra = excluded.extra, board_id = excluded.board_id",
         (
@@ -344,11 +362,50 @@ def _insert_sync(stroke: dict[str, Any], person_id: str | None = None) -> None:
             extra_json,
             time.time(),
             board_id,
+            person_id or stroke.get("author"),
         ),
     )
     if board_id:
         _conn.execute("UPDATE boards SET updated_at = ? WHERE id = ?", (time.time(), board_id))
     _conn.commit()
+
+
+def _stroke_owners_sync(stroke_ids: list[str]) -> dict[str, str | None]:
+    """Strich-ID -> Autor (None = unbekannt/alt) fuer vorhandene Striche."""
+    out: dict[str, str | None] = {}
+    ids = [str(x) for x in stroke_ids if x][:2000]
+    for i in range(0, len(ids), 500):
+        part = ids[i : i + 500]
+        q = ",".join("?" for _ in part)
+        for sid, author in _conn.execute(f"SELECT id, author FROM strokes WHERE id IN ({q})", part).fetchall():
+            out[sid] = author
+    return out
+
+
+async def stroke_owners(stroke_ids: list[str]) -> dict[str, str | None]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _stroke_owners_sync, stroke_ids)
+
+
+SHARE_ROLES = ("edit", "add", "view")
+
+
+def _role_sync(person_id: str, board_id: str) -> str | None:
+    """owner / edit / add / view - oder None ohne Zugriff."""
+    row = _conn.execute("SELECT owner_id FROM boards WHERE id = ?", (board_id,)).fetchone()
+    if not row:
+        return None
+    if row[0] == person_id:
+        return "owner"
+    r = _conn.execute("SELECT role FROM shares WHERE board_id = ? AND person_id = ?", (board_id, person_id)).fetchone()
+    if not r:
+        return None
+    return r[0] if r[0] in SHARE_ROLES else "edit"
+
+
+async def board_role(person_id: str, board_id: str) -> str | None:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _role_sync, person_id, board_id)
 
 
 def _delete_sync(stroke_ids: list[str], person_id: str | None = None) -> None:
@@ -616,10 +673,8 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
     ).fetchone()
     if not row:
         return None
-    shared_with = [
-        r[0]
-        for r in _conn.execute("SELECT person_id FROM shares WHERE board_id = ?", (row[0],)).fetchall()
-    ]
+    share_rows = _conn.execute("SELECT person_id, role FROM shares WHERE board_id = ?", (row[0],)).fetchall()
+    shared_with = [r[0] for r in share_rows]
     return {
         "id": row[0],
         "ownerId": row[1],
@@ -627,6 +682,7 @@ def _board_row(board_id: str) -> dict[str, Any] | None:
         "createdAt": row[3],
         "updatedAt": row[4],
         "sharedWith": shared_with,
+        "shareRoles": {r[0]: (r[1] if r[1] in SHARE_ROLES else "edit") for r in share_rows},
         "sofiaHomeworkId": row[5],
         "solutionShare": bool(row[6]),
         "sofiaSolutionId": row[7],
@@ -753,10 +809,8 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
         (person_id, folder_id, folder_id),
     )
     for row in cur.fetchall():
-        shared_with = [
-            r[0]
-            for r in _conn.execute("SELECT person_id FROM shares WHERE board_id = ?", (row[0],)).fetchall()
-        ]
+        share_rows = _conn.execute("SELECT person_id, role FROM shares WHERE board_id = ?", (row[0],)).fetchall()
+        shared_with = [r[0] for r in share_rows]
         boards.append(
             {
                 "id": row[0],
@@ -769,6 +823,7 @@ def _library_sync(person_id: str, folder_id: str | None) -> dict[str, Any]:
                 "starred": bool(row[7]),
                 "shared": row[1] != person_id,
                 "sharedWith": shared_with,
+                "shareRoles": {r[0]: (r[1] if r[1] in SHARE_ROLES else "edit") for r in share_rows},
                 "notebook": bool(row[8]),
             }
         )
@@ -952,13 +1007,20 @@ def _delete_board_sync(person_id: str, board_id: str) -> bool:
     return True
 
 
-def _share_sync(person_id: str, board_id: str, with_person: str) -> dict[str, Any] | None:
+def _share_sync(person_id: str, board_id: str, with_person: str, role: str | None = None) -> dict[str, Any] | None:
     board = _board_row(board_id)
     if not board or board["ownerId"] != person_id:
         return None
     if with_person not in _person_ids_cache or with_person == person_id:
         return None
-    _conn.execute("INSERT OR IGNORE INTO shares (board_id, person_id) VALUES (?, ?)", (board_id, with_person))
+    role = role if role in SHARE_ROLES else None
+    if role:
+        _conn.execute(
+            "INSERT INTO shares (board_id, person_id, role) VALUES (?, ?, ?) ON CONFLICT(board_id, person_id) DO UPDATE SET role = excluded.role",
+            (board_id, with_person, role),
+        )
+    else:
+        _conn.execute("INSERT OR IGNORE INTO shares (board_id, person_id) VALUES (?, ?)", (board_id, with_person))
     _conn.execute(
         "INSERT OR IGNORE INTO placements (person_id, board_id, folder_id, sort_order) VALUES (?, ?, NULL, 0)",
         (with_person, board_id),
@@ -1628,9 +1690,9 @@ async def delete_board(person_id: str, board_id: str) -> bool:
         return await asyncio.get_event_loop().run_in_executor(None, _delete_board_sync, person_id, board_id)
 
 
-async def share_board(person_id: str, board_id: str, with_person: str) -> dict[str, Any] | None:
+async def share_board(person_id: str, board_id: str, with_person: str, role: str | None = None) -> dict[str, Any] | None:
     async with _lock:
-        return await asyncio.get_event_loop().run_in_executor(None, _share_sync, person_id, board_id, with_person)
+        return await asyncio.get_event_loop().run_in_executor(None, _share_sync, person_id, board_id, with_person, role)
 
 
 async def unshare_board(person_id: str, board_id: str, with_person: str) -> bool:

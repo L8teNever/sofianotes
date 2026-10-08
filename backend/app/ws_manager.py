@@ -23,6 +23,7 @@ class ClientState:
     websocket: WebSocket
     person_id: str | None = None
     board_id: str | None = None
+    role: str = "edit"  # owner / edit / add / view
     in_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -50,6 +51,12 @@ class ConnectionManager:
 
     def disconnect(self, websocket: WebSocket) -> ClientState | None:
         return self._clients.pop(websocket, None)
+
+    def clients_for(self, board_id: str, person_id: str | None = None) -> list[ClientState]:
+        return [
+            c for c in list(self._clients.values())
+            if c.board_id == board_id and (person_id is None or c.person_id == person_id)
+        ]
 
     def get(self, websocket: WebSocket) -> ClientState | None:
         return self._clients.get(websocket)

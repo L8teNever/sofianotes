@@ -453,11 +453,21 @@ async def create_board(request: Request, me: dict = Depends(get_current_person))
 @app.patch("/api/boards/{board_id}")
 async def patch_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
+    role = await db.board_role(me["id"], board_id)
+    if role == "view" or (role == "add" and ("refs" in body or "paper" in body)):
+        raise HTTPException(status_code=403, detail="read only")
     if "notebook" in body:
         # Seiten des Notizbuchs (Anordnung, Vorlage, Hintergrund pro Seite)
         nb = db.clean_notebook(body.get("notebook"))
         if not nb or not await db.can_access(me["id"], board_id):
             raise HTTPException(status_code=400, detail="bad notebook")
+        if role == "add":
+            # nur dazuschreiben: Seiten anhaengen ja, vorhandene entfernen nein
+            old = await db.get_board(board_id)
+            old_ids = [pg.get("id") for pg in ((old or {}).get("notebook") or {}).get("pages", [])]
+            new_ids = {pg.get("id") for pg in nb.get("pages", [])}
+            if any(pid and pid not in new_ids for pid in old_ids):
+                raise HTTPException(status_code=403, detail="read only")
         await db.set_board_notebook(board_id, nb)
         await manager.broadcast({"type": "board_notebook", "notebook": nb}, board_id=board_id)
         if "title" not in body and "paper" not in body and "refs" not in body:
@@ -505,9 +515,19 @@ async def remove_board(board_id: str, me: dict = Depends(get_current_person)) ->
 async def share_board(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     body = await _json_body(request)
     with_person = str(body.get("withPersonId") or "")
-    board = await db.share_board(me["id"], board_id, with_person)
+    role = body.get("role")
+    board = await db.share_board(me["id"], board_id, with_person, str(role) if role else None)
     if board is None:
         raise HTTPException(status_code=400, detail="cannot share")
+    # offene Fenster der Person bekommen die neue Rolle sofort
+    new_role = (board.get("shareRoles") or {}).get(with_person, "edit")
+    for c in manager.clients_for(board_id, with_person):
+        c.role = new_role
+        try:
+            await c.websocket.send_json({"type": "role", "role": new_role})
+        except Exception:
+            pass
+    await manager.broadcast({"type": "board_shares", "sharedWith": board.get("sharedWith"), "shareRoles": board.get("shareRoles")}, board_id=board_id)
     return {"ok": True, "board": board}
 
 
@@ -516,7 +536,28 @@ async def unshare_board(board_id: str, with_person: str, me: dict = Depends(get_
     ok = await db.unshare_board(me["id"], board_id, with_person)
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
+    # Zugriff weg: offene Fenster der Person schliessen (zurueck in die Bibliothek)
+    for c in manager.clients_for(board_id, with_person):
+        try:
+            await c.websocket.close(code=4403)
+        except Exception:
+            pass
+    board = await db.get_board(board_id)
+    if board:
+        await manager.broadcast({"type": "board_shares", "sharedWith": board.get("sharedWith"), "shareRoles": board.get("shareRoles")}, board_id=board_id)
     return {"ok": True}
+
+
+@app.get("/api/boards/{board_id}/presence")
+async def board_presence(board_id: str, me: dict = Depends(get_current_person)) -> dict:
+    """Wer das Blatt gerade offen hat."""
+    if not await db.can_access(me["id"], board_id):
+        raise HTTPException(status_code=404, detail="not found")
+    seen: list[str] = []
+    for c in manager.clients_for(board_id):
+        if c.person_id and c.person_id not in seen:
+            seen.append(c.person_id)
+    return {"people": seen}
 
 
 @app.get("/api/folder-colors")
@@ -707,6 +748,8 @@ async def board_authors(board_id: str, me: dict = Depends(get_current_person)) -
 async def board_history_restore(board_id: str, request: Request, me: dict = Depends(get_current_person)) -> dict:
     if not await db.can_access(me["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
+    if await db.board_role(me["id"], board_id) not in ("owner", "edit"):
+        raise HTTPException(status_code=403, detail="read only")
     body = await _json_body(request)
     try:
         upto = int(body.get("upto"))
@@ -735,6 +778,9 @@ async def upsert_stroke(board_id: str, request: Request, me: dict = Depends(get_
     stroke = body.get("stroke")
     if not isinstance(stroke, dict) or not stroke.get("id"):
         raise HTTPException(status_code=400, detail="stroke required")
+    role = await db.board_role(me["id"], board_id) or "edit"
+    if not await _writable_ids(role, me["id"], [str(stroke["id"])]):
+        raise HTTPException(status_code=403, detail="read only")
     stroke["board_id"] = board_id
     await db.insert_stroke(stroke, me["id"])
     return {"ok": True}
@@ -746,6 +792,8 @@ async def erase_board_strokes(board_id: str, request: Request, me: dict = Depend
     if not await db.can_access(me["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
     stroke_ids = [s for s in body.get("strokeIds", []) if s]
+    role = await db.board_role(me["id"], board_id) or "edit"
+    stroke_ids = await _writable_ids(role, me["id"], stroke_ids)
     if stroke_ids:
         await db.delete_strokes(stroke_ids, me["id"])
     return {"ok": True}
@@ -917,6 +965,17 @@ def _board_changed(board_id: str) -> None:
     _after_change[board_id] = asyncio.get_event_loop().create_task(later())
 
 
+async def _writable_ids(role: str, person: str, ids: list[str]) -> list[str]:
+    """Welche Striche diese Person aendern/loeschen darf (nach Freigabe-Rolle)."""
+    if role in ("owner", "edit"):
+        return ids
+    if role != "add":
+        return []
+    owners = await db.stroke_owners(ids)
+    # neue Striche (noch nicht da) und eigene ja, fremde nein
+    return [i for i in ids if i not in owners or owners[i] == person]
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     board_id = websocket.query_params.get("board") or ""
@@ -937,6 +996,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     client.person_id = person
     client.board_id = board_id
     client.color = (await db.person_color(person)) or color_for(person) or client.color
+    client.role = (await db.board_role(person, board_id)) or "edit"
 
     strokes = await db.load_all(board_id)
     board = await db.get_board(board_id)
@@ -946,6 +1006,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "clientId": client.id,
             "color": client.color,
             "personId": person,
+            "role": client.role,
             "board": board,
             "strokes": strokes,
         }
@@ -962,6 +1023,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             msg_type = msg.get("type")
             persist_changed = False
             room = client.board_id
+            # Nur ansehen: nichts aendern (Cursor ist ok)
+            if client.role == "view" and msg_type in ("stroke_start", "stroke_points", "stroke_end", "stroke_replace", "stroke_move", "erase"):
+                if msg_type in ("stroke_end", "stroke_move", "erase"):
+                    await websocket.send_json({"type": "board_reload"})
+                continue
 
             if msg_type == "cursor":
                 await manager.broadcast(
@@ -1003,6 +1069,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "color": client.in_progress[stroke_id]["color"],
                         "size": client.in_progress[stroke_id]["size"],
                         "points": client.in_progress[stroke_id]["points"],
+                        "author": person,
                     },
                     exclude=websocket,
                     board_id=room,
@@ -1027,6 +1094,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
             elif msg_type == "stroke_end":
                 stroke_id = msg.get("strokeId")
+                if client.role == "add" and stroke_id and not await _writable_ids("add", person, [stroke_id]):
+                    client.in_progress.pop(stroke_id, None)
+                    await websocket.send_json({"type": "board_reload"})
+                    continue
                 entry = client.in_progress.pop(stroke_id, None)
                 extra = msg.get("extra")
                 if entry is not None and extra is not None:
@@ -1063,6 +1134,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
             elif msg_type == "stroke_move":
                 stroke = msg.get("stroke")
+                if stroke and stroke.get("id") and client.role == "add" and not await _writable_ids("add", person, [stroke["id"]]):
+                    await websocket.send_json({"type": "board_reload"})
+                    continue
                 if stroke and stroke.get("id"):
                     stroke["board_id"] = room
                     await manager.broadcast(
@@ -1084,6 +1158,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
             elif msg_type == "erase":
                 stroke_ids = [s for s in msg.get("strokeIds", []) if s]
+                allowed = await _writable_ids(client.role, person, stroke_ids)
+                if len(allowed) != len(stroke_ids):
+                    await websocket.send_json({"type": "board_reload"})
+                stroke_ids = allowed
                 if stroke_ids:
                     await manager.broadcast(
                         {"type": "erase", "id": client.id, "strokeIds": stroke_ids},

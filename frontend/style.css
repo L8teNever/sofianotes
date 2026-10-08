@@ -3462,12 +3462,10 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 #btn-view-only.active { background: #d3e3fd; color: #0b57d0; }
 body.view-only #mode-switch,
 body.view-only .insert-menu-wrap,
-body.view-only #btn-ruler,
 body.view-only #btn-zoom-window,
 body.view-only #toolbar,
 body.view-only #undo-btn,
 body.view-only #redo-btn,
-body.view-only #ruler-bar,
 body.view-only #zoom-box,
 body.view-only #zoom-pane,
 body.view-only #selection-toolbar,
@@ -3717,3 +3715,47 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 .tbm-view small { display: block; font: 500 12px/1.3 'Google Sans', 'Inter', sans-serif; color: #3a5a9c; }
 .tbm-view:hover { background: #c4d8fb; }
 #tb-more-menu.tb-more-menu { max-height: calc(100vh - 90px); overflow-y: auto; }
+/* Zurueck liegt im Zahnrad-Menue: eigener Knopf weg (bei offener Seiten-Leiste bleibt das ⋯) */
+body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
+#canvas-menu-leave { border-top: 1px solid rgba(0, 0, 0, 0.08) !important; margin-top: 4px; color: #b3261e; }
+#canvas-menu-leave .material-symbols-rounded { color: #b3261e; }
+
+/* ---- Teilen: Personen mit Farbe, Anwesenheit und Rolle ---- */
+.share-here { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -6px 0 14px; }
+.share-here.hidden { display: none; }
+.share-here-label { font: 700 11px/1 'Google Sans', 'Inter', sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: #6750a4; margin-right: 4px; }
+.share-here-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 999px; background: #f3edf7; font: 600 13px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; }
+.share-here-chip .share-av { width: 24px; height: 24px; font-size: 12px; }
+.share-list { display: flex; flex-direction: column; gap: 8px; max-height: min(60vh, 520px); overflow-y: auto; }
+.share-av { position: relative; width: 38px; height: 38px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; font: 700 15px/1 'Google Sans', 'Inter', sans-serif; }
+.share-av.here::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 11px; height: 11px; border-radius: 50%; background: #1e8e3e; border: 2px solid #fff; }
+.share-row { border-radius: 18px; background: #f3edf7; overflow: hidden; transition: background 0.15s; }
+.share-row.open { background: #ece6f0; }
+.share-row.off .share-av { filter: grayscale(0.6); opacity: 0.75; }
+.share-row-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; background: none; cursor: pointer; text-align: left; color: #1c1b1f; -webkit-tap-highlight-color: transparent; }
+.share-row-head:disabled { cursor: default; opacity: 1; }
+.share-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.share-row-text strong { font: 600 15px/1.2 'Google Sans', 'Inter', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.share-row-text small { font: 500 12.5px/1.2 'Google Sans', 'Inter', sans-serif; color: #6b6673; }
+.share-role-chip { width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; background: #fff; color: #79747e; }
+.share-role-chip .material-symbols-rounded { font-size: 18px; }
+.share-role-chip.role-edit { background: #d3e3fd; color: #0b57d0; }
+.share-role-chip.role-add { background: #c4eed0; color: #0d652d; }
+.share-role-chip.role-view { background: #fff4d6; color: #8a5300; }
+.share-role-chip.role-owner { background: #e8def8; color: #6750a4; }
+.share-row-caret { color: #79747e; font-size: 22px; transition: transform 0.2s; }
+.share-row.open .share-row-caret { transform: rotate(180deg); }
+.share-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 10px 10px; animation: share-opts-in 0.18s ease-out; }
+@keyframes share-opts-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.share-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1.5px solid transparent; border-radius: 14px; background: #fff; cursor: pointer; text-align: left; color: #1c1b1f; -webkit-tap-highlight-color: transparent; transition: border-color 0.15s, background 0.15s; }
+.share-opt > .material-symbols-rounded { font-size: 20px; color: #6750a4; margin-top: 1px; }
+.share-opt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.share-opt-text strong { font: 600 13.5px/1.2 'Google Sans', 'Inter', sans-serif; }
+.share-opt-text small { font: 500 11.5px/1.3 'Google Sans', 'Inter', sans-serif; color: #6b6673; }
+.share-opt:hover { background: #faf7fd; }
+.share-opt.active { border-color: #6750a4; background: #f6f1fc; }
+.share-opt.danger > .material-symbols-rounded { color: #b3261e; }
+.share-opt.danger.active { border-color: #b3261e; }
+@media (max-width: 460px) { .share-opts { grid-template-columns: 1fr; } }
+/* nur Ansehen freigegeben: Auge gesperrt */
+#btn-view-only.locked { background: #fff4d6; color: #8a5300; }
