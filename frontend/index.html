@@ -451,6 +451,11 @@
         <span class="set-nav-text"><strong>Sofia &amp; Lösungen</strong><small id="set-sum-sofia">Automatisch teilen</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
+      <button type="button" class="set-nav" data-go="import" data-title="Import">
+        <span class="set-ico"><span class="material-symbols-rounded">upload_file</span></span>
+        <span class="set-nav-text"><strong>Import</strong><small id="set-sum-import">GoodNotes-Ordner als PDFs</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
       <button type="button" class="set-nav" data-go="app" data-title="App &amp; Version">
         <span class="set-ico"><span class="material-symbols-rounded">auto_awesome</span></span>
         <span class="set-nav-text"><strong>App &amp; Version</strong><small id="set-sum-app">Updates</small></span>
@@ -628,6 +633,25 @@
       </div>
     </div>
 
+    <div class="set-page hidden" data-page="import">
+      <p class="set-hint">Aus GoodNotes die Bibliothek oder Ordner als <strong>bearbeitete PDFs</strong> exportieren (mit Unterordnern). Hier die Ordnerstruktur wählen und jedem obersten Ordner ein Fach zuordnen – dann legt sofianotes die Ordner an und importiert die PDFs als Notizbücher.</p>
+      <div id="gn-import-pick">
+        <div class="set-sub">Dateien wählen</div>
+        <button type="button" id="gn-pick-dir" class="set-check active"><span class="material-symbols-rounded">folder_open</span><span>Ordner wählen</span><span></span></button>
+        <button type="button" id="gn-pick-zip" class="set-check active"><span class="material-symbols-rounded">upload_file</span><span>ZIP-Datei wählen</span><span></span></button>
+        <input id="gn-dir-input" type="file" webkitdirectory directory multiple hidden />
+        <input id="gn-zip-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+      </div>
+      <div id="gn-import-map" class="hidden">
+        <div class="set-sub">Oberste Ordner → Fach</div>
+        <p class="set-hint" id="gn-import-count"></p>
+        <div id="gn-map-rows"></div>
+        <button type="button" id="gn-import-go" class="m3-btn-primary gn-import-go">Importieren</button>
+        <button type="button" id="gn-import-reset" class="m3-btn-outline gn-import-reset">Andere Dateien</button>
+      </div>
+      <p class="set-hint" id="gn-import-status"></p>
+    </div>
+
     <div class="set-page hidden" data-page="app">
       <div class="version-card">
         <div class="version-row">
@@ -731,6 +755,9 @@
           </button>
         </div>
       </div>
+      <button type="button" id="btn-library-settings" class="lib-icon-btn" title="Einstellungen">
+        <i data-lucide="settings"></i>
+      </button>
       <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Zurück zum Blatt">
         <i data-lucide="x"></i>
       </button>
@@ -1092,6 +1119,9 @@
     };
     window.ensureTf = function () {
       return load("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js").then(function () { return window.tf; });
+    };
+    window.ensureFflate = function () {
+      return load("https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js").then(function () { return window.fflate; });
     };
   })();
 </script>

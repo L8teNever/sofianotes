@@ -2290,6 +2290,7 @@
     document.querySelectorAll(".set-dlg .btn-dock-quick").forEach((b) => b.classList.toggle("active", b.dataset.pos === currentDock()));
     const st = document.getElementById("settings-version-status-text");
     set("set-sum-app", (document.getElementById("settings-version-label")?.textContent || "") + (st ? " · " + st.textContent : ""));
+    set("set-sum-import", "GoodNotes-Ordner als PDFs");
   }
   if (settingsPopover) {
     settingsPopover.querySelectorAll(".set-nav").forEach((b) =>
@@ -9289,6 +9290,29 @@
     return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
   }
 
+  async function renderPdfToImages(file, maxPages, onProgress) {
+    if (window.ensurePdf) await window.ensurePdf().catch(() => null);
+    if (!window.pdfjsLib) throw new Error("pdfjs");
+    const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    const n = Math.min(pdf.numPages, maxPages || 200);
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      if (onProgress) onProgress(i, n);
+      const page = await pdf.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: Math.min(2.5, 2000 / Math.max(base.width, base.height)) });
+      const c = document.createElement("canvas");
+      c.width = Math.round(vp.width);
+      c.height = Math.round(vp.height);
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      const jpeg = bitmapToJpeg(c, 2000);
+      c.width = c.height = 0;
+      out.push({ mediaId: await uploadJpeg(jpeg), ratio: base.height / base.width });
+    }
+    return out;
+  }
+  window.sofiaPdfToImages = renderPdfToImages;
+
   async function importPdfFile(file, origin) {
     if (window.ensurePdf) await window.ensurePdf().catch(() => null);
     if (!window.pdfjsLib) throw new Error("pdfjs");
@@ -14051,6 +14075,313 @@
     libAddMenu.classList.add("hidden");
     boardFileInput.click();
   });
+  document.getElementById("btn-library-settings")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSettings();
+  });
+
+  // ---- GoodNotes: Ordner/ZIP mit annotierten PDFs importieren (Einstellungen) ----
+  function gnNormPath(p) {
+    return String(p || "")
+      .replace(/\\/g, "/")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+/g, "/")
+      .replace(/^\/+/, "");
+  }
+  function gnIsPdfName(name) {
+    return /\.pdf$/i.test(name || "");
+  }
+  function gnPdfTitle(name) {
+    return String(name || "").replace(/\.pdf$/i, "").trim() || "Notizbuch";
+  }
+  function gnAnalyzeExport(entries) {
+    const list = (entries || [])
+      .map((e) => ({ path: gnNormPath(e.path), file: e.file }))
+      .filter((e) => e.path && gnIsPdfName(e.path.split("/").pop()) && !/(^|\/)__macosx\//i.test(e.path));
+    if (!list.length) return { tops: [], loose: [] };
+    const split = (rows) => {
+      const byTop = new Map();
+      const loose = [];
+      for (const e of rows) {
+        const segs = e.path.split("/").filter(Boolean);
+        if (segs.length < 2) {
+          loose.push(e);
+          continue;
+        }
+        const top = segs[0];
+        if (!byTop.has(top)) byTop.set(top, []);
+        byTop.get(top).push({ rel: segs.slice(1).join("/"), file: e.file, name: segs[segs.length - 1] });
+      }
+      const tops = Array.from(byTop.entries()).map(([name, pdfs]) => ({ name, pdfs }));
+      tops.sort((a, b) => a.name.localeCompare(b.name, "de"));
+      return { tops, loose };
+    };
+    const raw = split(list);
+    const parts = list.map((e) => e.path.split("/").filter(Boolean));
+    const wrap = parts[0] && parts[0][0];
+    const wrapped = !!(wrap && parts.every((p) => p[0] === wrap) && parts.some((p) => p.length > 1));
+    if (!wrapped) return raw;
+    const inner = split(
+      list
+        .map((e) => {
+          const segs = e.path.split("/").filter(Boolean).slice(1);
+          return { path: segs.join("/"), file: e.file };
+        })
+        .filter((e) => e.path)
+    );
+    // Nur die ZIP-/Export-Hülle abziehen, wenn darunter mehrere Fächer liegen.
+    // Ein einzelner Ordner (z. B. nur „Mathematik“) bleibt die Zuordnungsebene.
+    return inner.tops.length >= 2 ? inner : raw;
+  }
+  window.sofiaGnAnalyzeExport = gnAnalyzeExport;
+  async function gnEntriesFromZip(file) {
+    if (!window.ensureFflate) throw new Error("zip");
+    const fflate = await window.ensureFflate();
+    if (!fflate || !fflate.unzipSync) throw new Error("zip");
+    const unzipped = fflate.unzipSync(new Uint8Array(await file.arrayBuffer()), {
+      filter: (f) => gnIsPdfName(f.name) && !/(^|\/)__macosx\//i.test(f.name.replace(/\\/g, "/")),
+    });
+    return Object.entries(unzipped).map(([path, data]) => ({
+      path,
+      file: new File([data], path.split(/[/\\]/).pop(), { type: "application/pdf" }),
+    }));
+  }
+  function gnEntriesFromDir(fileList) {
+    return Array.from(fileList || [])
+      .filter((f) => gnIsPdfName(f.name))
+      .map((f) => ({ path: f.webkitRelativePath || f.name, file: f }));
+  }
+  function gnGuessFolderId(name, roots) {
+    const n = String(name || "").trim().toLowerCase();
+    if (!n) return "new";
+    const exact = roots.find((f) => f.name.toLowerCase() === n);
+    if (exact) return exact.id;
+    const part = roots.find((f) => n.startsWith(f.name.toLowerCase()) || f.name.toLowerCase().startsWith(n));
+    return part ? part.id : "new";
+  }
+  let gnPending = null; // {tops, loose, roots}
+  function gnSetStatus(text) {
+    const el = document.getElementById("gn-import-status");
+    if (el) el.textContent = text || "";
+  }
+  function gnShowPick() {
+    gnPending = null;
+    document.getElementById("gn-import-pick")?.classList.remove("hidden");
+    document.getElementById("gn-import-map")?.classList.add("hidden");
+    gnSetStatus("");
+  }
+  function gnRenderMap() {
+    const box = document.getElementById("gn-map-rows");
+    const count = document.getElementById("gn-import-count");
+    if (!box || !gnPending) return;
+    const { tops, loose, roots } = gnPending;
+    const nPdf = tops.reduce((s, t) => s + t.pdfs.length, 0) + loose.length;
+    if (count) count.textContent = nPdf + (nPdf === 1 ? " PDF gefunden." : " PDFs gefunden.") + " Ordne die obersten Ordner einem Fach zu.";
+    box.innerHTML = "";
+    const fillSelect = (sel, name, forLoose) => {
+      const skip = document.createElement("option");
+      skip.value = "";
+      skip.textContent = "Nicht importieren";
+      sel.appendChild(skip);
+      if (forLoose) {
+        const root = document.createElement("option");
+        root.value = "root";
+        root.textContent = "Ohne Ordner (Alle Blätter)";
+        sel.appendChild(root);
+      }
+      const neu = document.createElement("option");
+      neu.value = "new";
+      neu.textContent = name ? "Neuer Ordner „" + name + "“" : "Neuer Ordner „Import“";
+      sel.appendChild(neu);
+      for (const f of roots) {
+        const o = document.createElement("option");
+        o.value = f.id;
+        o.textContent = f.name + (f.sofiaSubjectId ? " (Fach)" : "");
+        sel.appendChild(o);
+      }
+    };
+    const addRow = (key, title, sub, guessed, forLoose) => {
+      const row = document.createElement("div");
+      row.className = "gn-map-row";
+      row.dataset.key = key;
+      const lab = document.createElement("strong");
+      lab.textContent = title;
+      const hint = document.createElement("small");
+      hint.textContent = sub;
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", title);
+      fillSelect(sel, forLoose ? "Import" : title, forLoose);
+      sel.value = guessed;
+      row.appendChild(lab);
+      row.appendChild(hint);
+      row.appendChild(sel);
+      box.appendChild(row);
+    };
+    for (const t of tops) addRow("top:" + t.name, t.name, t.pdfs.length + (t.pdfs.length === 1 ? " PDF" : " PDFs"), gnGuessFolderId(t.name, roots), false);
+    if (loose.length) addRow("loose", "Lose PDFs (ohne Ordner)", loose.length + (loose.length === 1 ? " PDF" : " PDFs"), "root", true);
+    document.getElementById("gn-import-pick")?.classList.add("hidden");
+    document.getElementById("gn-import-map")?.classList.remove("hidden");
+  }
+  async function gnLoadRoots() {
+    const lib = await api("/api/library");
+    const atRoot = (lib && lib.folders) || [];
+    if (atRoot.length) return atRoot;
+    return ((lib && lib.allFolders) || []).filter((f) => !f.parentId);
+  }
+  async function gnPrepare(entries) {
+    const analyzed = gnAnalyzeExport(entries);
+    const n = analyzed.tops.reduce((s, t) => s + t.pdfs.length, 0) + analyzed.loose.length;
+    if (!n) {
+      showToast("Keine PDFs in diesem Ordner gefunden");
+      gnShowPick();
+      return;
+    }
+    gnPending = { ...analyzed, roots: await gnLoadRoots() };
+    gnRenderMap();
+    gnSetStatus("");
+  }
+  async function gnEnsureFolder(name, parentId, cache) {
+    const key = String(parentId || "") + "\0" + name.toLowerCase();
+    if (cache.has(key)) return cache.get(key);
+    const roots = gnPending.roots || [];
+    const all = (libraryCache && libraryCache.allFolders) || [];
+    const pool = parentId ? all.filter((f) => f.parentId === parentId) : roots;
+    const hit = pool.find((f) => f.name.toLowerCase() === name.toLowerCase());
+    if (hit) {
+      cache.set(key, hit.id);
+      return hit.id;
+    }
+    const id = uuid();
+    const color = FOLDER_COLORS[Math.abs(Array.from(name).reduce((s, ch) => s + ch.charCodeAt(0), 0)) % FOLDER_COLORS.length];
+    await api("/api/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, parentId: parentId || null, id, color }),
+    });
+    cache.set(key, id);
+    if (libraryCache) {
+      libraryCache.allFolders = libraryCache.allFolders || [];
+      libraryCache.allFolders.push({ id, parentId: parentId || null, name });
+    }
+    return id;
+  }
+  async function gnImportPdf(file, title, folderId) {
+    const imgs = await renderPdfToImages(file, 200, (i, n) => {
+      gnSetStatus("„" + title + "“: Seite " + i + " von " + n);
+    });
+    if (!imgs.length) return;
+    const pages = imgs.map((im) => ({
+      id: "p" + uuid().slice(0, 12),
+      paper: "blank",
+      mediaId: im.mediaId,
+      w: A4_W,
+      h: Math.round(A4_W * im.ratio),
+    }));
+    await api("/api/boards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        folderId: folderId || null,
+        notebook: { layout: "vertical", template: { paper: "blank" }, pages },
+      }),
+    });
+  }
+  async function gnRunImport() {
+    if (!gnPending) return;
+    await refreshLibrary();
+    const box = document.getElementById("gn-map-rows");
+    const go = document.getElementById("gn-import-go");
+    if (go) go.disabled = true;
+    const map = {};
+    box?.querySelectorAll(".gn-map-row").forEach((row) => {
+      map[row.dataset.key] = row.querySelector("select")?.value || "";
+    });
+    const cache = new Map();
+    let done = 0;
+    let failed = 0;
+    try {
+      for (const t of gnPending.tops) {
+        const choice = map["top:" + t.name];
+        if (!choice) continue;
+        let parentId = choice === "new" ? await gnEnsureFolder(t.name, null, cache) : choice;
+        for (const pdf of t.pdfs) {
+          const segs = pdf.rel.split("/").filter(Boolean);
+          const fileName = segs.pop();
+          let folderId = parentId;
+          for (const dir of segs) folderId = await gnEnsureFolder(dir, folderId, cache);
+          try {
+            await gnImportPdf(pdf.file, gnPdfTitle(fileName), folderId);
+            done += 1;
+          } catch (err) {
+            failed += 1;
+            console.warn("gn import", fileName, err);
+          }
+        }
+      }
+      const looseChoice = map.loose;
+      if (looseChoice && gnPending.loose.length) {
+        let folderId = null;
+        if (looseChoice === "new") folderId = await gnEnsureFolder("Import", null, cache);
+        else if (looseChoice !== "root") folderId = looseChoice;
+        for (const e of gnPending.loose) {
+          try {
+            await gnImportPdf(e.file, gnPdfTitle(e.file.name), folderId);
+            done += 1;
+          } catch (err) {
+            failed += 1;
+          }
+        }
+      }
+      await refreshLibrary();
+      const msg = done + (done === 1 ? " Notizbuch importiert" : " Notizbücher importiert") + (failed ? " · " + failed + " fehlgeschlagen" : "");
+      gnPending = null;
+      document.getElementById("gn-import-pick")?.classList.remove("hidden");
+      document.getElementById("gn-import-map")?.classList.add("hidden");
+      gnSetStatus(msg);
+      showToast(msg);
+    } catch (err) {
+      gnSetStatus("Import hat nicht geklappt");
+      showToast("Import hat nicht geklappt");
+    }
+    if (go) go.disabled = false;
+  }
+  document.getElementById("gn-pick-dir")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("gn-dir-input")?.click();
+  });
+  document.getElementById("gn-pick-zip")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("gn-zip-input")?.click();
+  });
+  document.getElementById("gn-dir-input")?.addEventListener("change", async (e) => {
+    const files = e.target.files;
+    e.target.value = "";
+    try {
+      await gnPrepare(gnEntriesFromDir(files));
+    } catch (err) {
+      showToast("Ordner lesen hat nicht geklappt");
+    }
+  });
+  document.getElementById("gn-zip-input")?.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      showToast("ZIP wird gelesen…");
+      await gnPrepare(await gnEntriesFromZip(file));
+    } catch (err) {
+      showToast("ZIP konnte nicht gelesen werden");
+    }
+  });
+  document.getElementById("gn-import-go")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    gnRunImport();
+  });
+  document.getElementById("gn-import-reset")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    gnShowPick();
+  });
   // Exportieren: Auswahl PDF oder .sofianotes
   const exportScrim = document.getElementById("export-scrim");
   let exportBoardId = null;
@@ -14714,32 +15045,12 @@
 
     // PDF oder Bild in Seitenbilder umwandeln
     async function fileToPageImages(file, maxPages) {
-      const out = [];
       const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name || "");
       if (isPdf) {
-        if (window.ensurePdf) await window.ensurePdf().catch(() => null);
-        if (!window.pdfjsLib) throw new Error("pdfjs");
-        const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-        const n = Math.min(pdf.numPages, maxPages || 200);
-        for (let i = 1; i <= n; i++) {
-          showToast("PDF-Seite " + i + " von " + n + " …");
-          const page = await pdf.getPage(i);
-          const base = page.getViewport({ scale: 1 });
-          const vp = page.getViewport({ scale: Math.min(2.5, 2000 / Math.max(base.width, base.height)) });
-          const c = document.createElement("canvas");
-          c.width = Math.round(vp.width);
-          c.height = Math.round(vp.height);
-          await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-          const jpeg = bitmapToJpeg(c, 2000);
-          c.width = c.height = 0;
-          out.push({ mediaId: await uploadJpeg(jpeg), ratio: base.height / base.width });
-        }
-      } else {
-        const jpeg = await scanImageToJpeg(file, 2000);
-        if (!jpeg) return out;
-        out.push({ mediaId: await uploadJpeg(jpeg), ratio: jpeg.h / jpeg.w });
+        return renderPdfToImages(file, maxPages, (i, n) => showToast("PDF-Seite " + i + " von " + n + " …"));
       }
-      return out;
+      const jpeg = await scanImageToJpeg(file, 2000);
+      return jpeg ? [{ mediaId: await uploadJpeg(jpeg), ratio: jpeg.h / jpeg.w }] : [];
     }
     // PDF ins Notizbuch: jede PDF-Seite wird eine eigene Seite (in voller Seitengroesse)
     window.sofiaInsertPdfPages = async (file) => {
