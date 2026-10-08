@@ -272,18 +272,20 @@
       offsetX = left + availW / 2 - c.x * scale;
       offsetY = top + availH / 2 - c.y * scale;
     }
-    const fit = (lo, hi, a, b, endRoom) => {
+    const horiz = notebook.layout === "horizontal";
+    // Beim Weiterziehen hinter der letzten Seite extra Platz; in Ruhe mittig / am Rand.
+    const pulling = !!(panState && !pinchState && !currentStroke);
+    const endRoom = pulling ? 128 : 24;
+    const fit = (lo, hi, a, b, extra) => {
       // a..b = Inhalt am Bildschirm; lo..hi = sichtbarer Bereich -> Verschiebung.
-      // Hinter der letzten Seite bleibt Platz fuer den "Neue Seite"-Knopf.
       const m = 24;
-      if (b - a <= hi - lo - m - endRoom) return (lo + hi - endRoom) / 2 - (a + b) / 2; // kleiner als Bildschirm: mittig
+      if (!pulling && b - a <= hi - lo - m) return (lo + hi) / 2 - (a + b) / 2;
       if (a > lo + m) return lo + m - a;
-      if (b < hi - endRoom) return hi - endRoom - b;
+      if (b < hi - extra) return hi - extra - b;
       return 0;
     };
-    const horiz = notebook.layout === "horizontal";
-    offsetX += fit(left, right, minX * scale + offsetX, maxX * scale + offsetX, horiz ? 110 : 24);
-    offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : 130);
+    offsetX += fit(left, right, minX * scale + offsetX, maxX * scale + offsetX, horiz ? endRoom : 24);
+    offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : endRoom);
   }
 
   // Seiten-Hintergrundbild, ggf. in Vierteldrehungen gedreht (page.rot = 0..3, im Uhrzeigersinn)
@@ -410,6 +412,7 @@
   let zoomInnerBarPref = lsGetRaw("sofianotes-zoom-inner-bar") !== "0";
   let toolbarSavedDock = null;
   let pageAppear = null; // {ids:Set, t0, ms} kurze Einblendung neuer Seiten
+  let pagePull = null; // {t0, wx, wy} Weiterziehen hinter der letzten Seite, Ring laedt ~1s
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
@@ -1504,6 +1507,7 @@
     drawLassoAndSelection();
     drawRuler();
     drawHoldHint();
+    drawPagePullRing();
     positionTextEditor();
     positionInkChips();
     positionScanBoxes();
@@ -1517,7 +1521,9 @@
 
   function tick() {
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
+    if (pagePull) dirty = true;
     if (pageAppear) dirty = true;
+    if (window.sofiaPagePullTick) window.sofiaPagePullTick();
     if (dirty) {
       draw();
       dirty = false;
@@ -4205,6 +4211,24 @@
     ctx.strokeStyle = "#1A73E8";
     ctx.beginPath();
     ctx.arc(holdHint.x, holdHint.y, r, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPagePullRing() {
+    if (!pagePull || pagePull.done) return;
+    const progress = Math.min(1, (performance.now() - pagePull.t0) / 1000);
+    const r = 20 / scale;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 4 / scale;
+    ctx.strokeStyle = "rgba(26,115,232,0.18)";
+    ctx.beginPath();
+    ctx.arc(pagePull.wx, pagePull.wy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#1A73E8";
+    ctx.beginPath();
+    ctx.arc(pagePull.wx, pagePull.wy, r, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }
@@ -8099,6 +8123,7 @@
     if (panState && panState.pointerId === undefined) panState = null;
     tapState = null;
     touchGestureView = null;
+    if (window.sofiaPagePullCancel) window.sofiaPagePullCancel();
   }
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
@@ -10295,7 +10320,9 @@
       }
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) {
-        if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
+        const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
+        if (addedPage) panState = null;
+        else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
         else if (!panState && window.sofiaPageSnap) window.sofiaPageSnap({}); // nach dem Zoomen mit zwei Fingern
         panState = null;
       }
@@ -10325,7 +10352,9 @@
       if (Math.hypot(e.clientX - md.startX, e.clientY - md.startY) < 4) openRulerAngleInput(e.clientX, e.clientY);
       return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
+      const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
       panState = null;
+      if (!addedPage && notebook && window.sofiaPageSnap) window.sofiaPageSnap({});
       return;
     }
 
@@ -14201,7 +14230,6 @@
   // ---- Notizbuch: Seiten-Leiste, Seiten anlegen/loeschen, Hintergruende, PDF-Seiten ----
   (() => {
     const menu = document.getElementById("page-menu");
-    const addBig = document.getElementById("page-add-big");
     const PAPER_LABELS = { graph: "Kariert", lines: "Liniert", dots: "Punkte", blank: "Blanko" };
     const newId = () => "p" + uuid().slice(0, 12);
 
@@ -14721,11 +14749,92 @@
       if (!addPop.classList.contains("hidden") && !e.target.closest("#page-add-pop") && !e.target.closest(".page-thumb-add")) addPop.classList.add("hidden");
     }, true);
     menu.addEventListener("pointerdown", (e) => e.stopPropagation());
-    addBig.addEventListener("pointerdown", (e) => e.stopPropagation());
-    addBig.addEventListener("click", (e) => {
-      e.stopPropagation();
+
+    // Letzte Seite: am Ende weiterziehen und ~1s halten (Ladekreis) legt eine Seite an.
+    // Finger/Maus-Verschieben, nicht Stift-Zeichnen, nicht Pinch-Zoom.
+    const PULL_MS = 1000;
+    const PULL_START_PX = 52;
+    const PULL_KEEP_PX = 22;
+    function pullPastLastPx() {
+      if (!notebook || !currentBoardId) return 0;
+      const n = notebook.pages.length;
+      if (!n) return 0;
+      const fit = viewFor(n - 1);
+      if (!fit || scale > fit.scale * 1.08) return 0;
+      const [ga] = groupOf(n - 1);
+      if (currentPage() < ga) return 0;
+      const last = pageRects(notebook)[n - 1];
+      if (!last) return 0;
+      const horiz = notebook.layout === "horizontal";
+      if (horiz) {
+        const now = (last.x + last.w) * scale + offsetX;
+        const rest = (last.x + last.w) * fit.scale + fit.offsetX;
+        return rest - now;
+      }
+      const now = (last.y + last.h) * scale + offsetY;
+      const rest = (last.y + last.h) * fit.scale + fit.offsetY;
+      return rest - now;
+    }
+    function pagePullRingPos() {
+      const last = pageRects(notebook)[notebook.pages.length - 1];
+      const horiz = notebook.layout === "horizontal";
+      const gap = 36 / Math.max(scale, 0.2);
+      return horiz
+        ? { wx: last.x + last.w + gap, wy: last.y + last.h / 2 }
+        : { wx: last.x + last.w / 2, wy: last.y + last.h + gap };
+    }
+    function cancelPagePull() {
+      if (!pagePull) return;
+      pagePull = null;
+      requestRedraw();
+    }
+    function completePagePull() {
+      if (!pagePull || pagePull.done) return;
+      if (myRole === "view") return cancelPagePull();
+      pagePull.done = true;
+      pagePull = null;
       addPages(notebook.pages.length - 1, [templatePage()]);
-    });
+    }
+    function pagePullHint() {
+      try {
+        if (localStorage.getItem("sofianotes-page-pull-hint") === "1") return;
+        localStorage.setItem("sofianotes-page-pull-hint", "1");
+      } catch (err) {}
+      showToast("Weiter ziehen und halten, um eine Seite anzulegen");
+    }
+    window.sofiaPagePullCancel = cancelPagePull;
+    window.sofiaPagePullTick = () => {
+      if (!notebook || viewOnly || historyView || myRole === "view") return cancelPagePull();
+      if (pinchState || currentStroke || penIsDown() || rulerGesture || touchPointers.size > 1) return cancelPagePull();
+      if (!panState) {
+        if (pagePull && !pagePull.done) cancelPagePull();
+        return;
+      }
+      const past = pullPastLastPx();
+      if (pagePull) {
+        if (past < PULL_KEEP_PX) return cancelPagePull();
+        const pos = pagePullRingPos();
+        pagePull.wx = pos.wx;
+        pagePull.wy = pos.wy;
+        if (performance.now() - pagePull.t0 >= PULL_MS) completePagePull();
+        return;
+      }
+      if (past < PULL_START_PX) return;
+      const pos = pagePullRingPos();
+      pagePull = { t0: performance.now(), wx: pos.wx, wy: pos.wy };
+      pagePullHint();
+      requestRedraw();
+    };
+    window.sofiaPagePullEnd = () => {
+      if (!pagePull) return false;
+      const past = pullPastLastPx();
+      if (!pagePull.done && past >= PULL_KEEP_PX && performance.now() - pagePull.t0 >= PULL_MS) {
+        completePagePull();
+        return true;
+      }
+      cancelPagePull();
+      return false;
+    };
 
     // ---- Seiten-Leiste links (wie in GoodNotes) ----
     const panel = document.getElementById("pages-panel");
@@ -15413,7 +15522,7 @@
       })
     );
 
-    // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste, "Neue Seite"-Knopf hinter der letzten Seite
+    // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste
     let lastCur = -1;
     let lastNb = null;
     window.sofiaPagesUi = () => {
@@ -15421,7 +15530,6 @@
       pagesBtn.classList.toggle("hidden", !show);
       document.getElementById("canvas-menu-rotate")?.classList.add("hidden");
       if (!show) {
-        addBig.classList.add("hidden");
         closeMenu();
         if (panelOpen) setPanel(false);
         return;
@@ -15443,21 +15551,6 @@
           if (act && act.scrollIntoView) act.scrollIntoView({ block: "nearest" });
         }
         if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
-      }
-      const rects = pageRects(notebook);
-      const last = rects[rects.length - 1];
-      if (!last || historyView) {
-        addBig.classList.add("hidden");
-        return;
-      }
-      const horiz = notebook.layout === "horizontal";
-      const p = horiz ? worldToScreen(last.x + last.w + PAGE_GAP / 2, last.y + last.h / 2) : worldToScreen(last.x + last.w / 2, last.y + last.h + PAGE_GAP / 2);
-      const onScreen = p.x > viewLeft - 100 && p.x < window.innerWidth - viewRight + 100 && p.y > -60 && p.y < window.innerHeight + 60;
-      addBig.classList.toggle("hidden", !onScreen);
-      addBig.classList.toggle("vertical", horiz);
-      if (onScreen) {
-        addBig.style.left = p.x + "px";
-        addBig.style.top = p.y + "px";
       }
     };
   })();

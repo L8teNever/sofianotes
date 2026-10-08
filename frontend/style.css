@@ -3409,25 +3409,6 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .page-menu-head { font: 700 11px/1 'Google Sans', 'Inter', sans-serif; letter-spacing: 0.05em; text-transform: uppercase; color: #6750a4; padding: 12px 14px 6px; }
 .page-menu .lib-add-opt { padding: 10px 14px; }
 .page-menu .lib-add-opt.danger, .page-menu .lib-add-opt.danger .material-symbols-rounded { color: #b3261e; }
-.page-add-big {
-  position: fixed;
-  z-index: 5;
-  transform: translate(-50%, -50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 2px dashed rgba(103, 80, 164, 0.45);
-  background: rgba(255, 255, 255, 0.85);
-  color: #6750a4;
-  border-radius: 999px;
-  padding: 7px 16px 7px 12px;
-  font: 600 13px/1 'Google Sans', 'Inter', sans-serif;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.page-add-big.hidden { display: none; }
-.page-add-big.vertical { writing-mode: vertical-rl; padding: 16px 7px 12px; }
-
 /* ---- Notizbuch: Seiten-Leiste links (wie GoodNotes) ---- */
 .pages-panel {
   position: fixed;
