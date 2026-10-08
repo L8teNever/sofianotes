@@ -35,6 +35,8 @@
     "sofianotes-rulerbar-pos",
     "sofianotes-zoom-rows",
     "sofianotes-zoom-step",
+    "sofianotes-zoom-chrome",
+    "sofianotes-zoom-inner-bar",
     "sofianotes-zoompane-pos",
     "sofianotes-math",
     "sofianotes-eraser-return",
@@ -301,8 +303,22 @@
   function drawPages() {
     const a = screenToWorld(viewLeft, 0);
     const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
+    let appearDone = true;
     for (const r of pageRects(notebook)) {
       if (r.x > b.x || r.x + r.w < a.x || r.y > b.y || r.y + r.h < a.y) continue;
+      ctx.save();
+      if (pageAppear && pageAppear.ids.has(r.id)) {
+        const t = Math.min(1, (performance.now() - pageAppear.t0) / pageAppear.ms);
+        if (t < 1) appearDone = false;
+        const e = 1 - Math.pow(1 - t, 3);
+        const cx = r.x + r.w / 2;
+        const cy = r.y + r.h / 2;
+        const s = 0.94 + 0.06 * e;
+        ctx.globalAlpha = e;
+        ctx.translate(cx, cy);
+        ctx.scale(s, s);
+        ctx.translate(-cx, -cy);
+      }
       ctx.save();
       ctx.shadowColor = "rgba(0,0,0,0.16)";
       ctx.shadowBlur = 14 * scale * dpr;
@@ -318,7 +334,9 @@
       if (img && img.complete && img.naturalWidth) drawPageMedia(ctx, img, r);
       else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r);
       ctx.restore();
+      ctx.restore();
     }
+    if (pageAppear && appearDone && performance.now() - pageAppear.t0 >= pageAppear.ms) pageAppear = null;
   }
 
   // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
@@ -388,6 +406,10 @@
     const v = parseFloat(lsGetRaw("sofianotes-zoom-rows"));
     return Number.isFinite(v) && v > 0 ? v : 1;
   })();
+  let zoomChromeLayout = lsGetRaw("sofianotes-zoom-chrome") === "top" ? "top" : "side";
+  let zoomInnerBarPref = lsGetRaw("sofianotes-zoom-inner-bar") !== "0";
+  let toolbarSavedDock = null;
+  let pageAppear = null; // {ids:Set, t0, ms} kurze Einblendung neuer Seiten
   const POINTS_FLUSH_MS = 30;
   const ERASE_FLUSH_MS = 60;
   const CURSOR_SEND_MS = 45;
@@ -604,7 +626,8 @@
     document.documentElement.style.setProperty("--menu-shift", mb0 && mb0.offsetWidth ? mb0.offsetWidth + 8 + "px" : "0px");
     // ganz links davor: der Zurueck-Pfeil (bei senkrechter Kopfleiste immer oben)
     const back = document.getElementById("top-back-bar");
-    const backBottom = atBottom0 && !vertical;
+    const overPanel0 = document.body.classList.contains("pages-open");
+    const backBottom = atBottom0 && !vertical && !overPanel0;
     if (back) back.classList.toggle("tbb-bottom", backBottom);
     const backW = back && back.offsetWidth ? back.offsetWidth + 8 : 0;
     document.documentElement.style.setProperty("--back-shift", backW + "px");
@@ -672,6 +695,17 @@
     if (!bar || !side) return;
     const r = bar.getBoundingClientRect();
     const vertical = bar.classList.contains("tb-vertical");
+    const overPanel = document.body.classList.contains("pages-open");
+    // Offene Seiten-Leiste: "Seiten" immer oben mittig auf der Leiste, nicht ueber einer
+    // an die Seite geschobenen Kopfleiste.
+    if (overPanel) {
+      side.classList.add("tsb-corner");
+      side.classList.remove("tsb-vertical", "tsb-bottom");
+      side.style.left = "";
+      side.style.top = "";
+      side.style.transform = "";
+      return;
+    }
     side.classList.toggle("tsb-vertical", vertical);
     const sw = side.offsetWidth;
     const sh = side.offsetHeight;
@@ -1465,6 +1499,7 @@
     }
 
     drawTextDragPreview();
+    drawTextMoveHandles();
     drawZoomBoxOnPage();
     drawLassoAndSelection();
     drawRuler();
@@ -1482,6 +1517,7 @@
 
   function tick() {
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
+    if (pageAppear) dirty = true;
     if (dirty) {
       draw();
       dirty = false;
@@ -1576,6 +1612,7 @@
   }
 
   function currentDock() {
+    if (toolbarEl.classList.contains("zoom-inner")) return toolbarEl.classList.contains("orient-vertical") ? "left" : "top";
     if (toolbarEl.classList.contains("dock-top")) return "top";
     if (toolbarEl.classList.contains("dock-left")) return "left";
     if (toolbarEl.classList.contains("dock-right")) return "right";
@@ -2126,7 +2163,13 @@
       if (el) el.textContent = t;
     };
     set("set-sum-paper", (currentBoardId ? "Dieses Blatt: " + (GRID_NAMES[gridStyle] || "Kariert") + " · " : "") + "Neue: " + (GRID_NAMES[mySettings.defaultPaper] || "Kariert"));
-    set("set-sum-zoom", (ZOOM_ROW_NAMES[zoomRowsDefault] || zoomRowsDefault + " Kästchen hoch") + (zoomStepDefault ? " · " + String(zoomStepDefault).replace(".5", "½") + " runter" : ""));
+    set(
+      "set-sum-zoom",
+      (ZOOM_ROW_NAMES[zoomRowsDefault] || zoomRowsDefault + " Kästchen hoch") +
+        (zoomStepDefault ? " · " + String(zoomStepDefault).replace(".5", "½") + " runter" : "") +
+        " · " +
+        (zoomChromeLayout === "top" ? "Knöpfe oben" : "Knöpfe an der Seite")
+    );
     set("set-sum-sofia", { auto: "Automatisch teilen", manual: "Nur per Knopf", off: "Nie teilen" }[mySettings.solutionMode] || "");
     renderZoomRowsSetting();
     const on = [];
@@ -2262,6 +2305,8 @@
   function renderZoomRowsSetting() {
     document.querySelectorAll("#set-zoom-rows [data-rows]").forEach((b) => b.classList.toggle("active", parseFloat(b.dataset.rows) === zoomRowsDefault));
     document.querySelectorAll("#set-zoom-step [data-step]").forEach((b) => b.classList.toggle("active", parseFloat(b.dataset.step) === zoomStepDefault));
+    document.querySelectorAll("#set-zoom-chrome [data-chrome]").forEach((b) => b.classList.toggle("active", b.dataset.chrome === zoomChromeLayout));
+    document.getElementById("set-zoom-inner")?.classList.toggle("active", zoomInnerBarPref);
   }
   document.querySelectorAll("#set-zoom-step [data-step]").forEach((b) =>
     b.addEventListener("click", (e) => {
@@ -2285,6 +2330,32 @@
       syncSettingsSummary();
     })
   );
+  document.querySelectorAll("#set-zoom-chrome [data-chrome]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      zoomChromeLayout = b.dataset.chrome === "top" ? "top" : "side";
+      try {
+        localStorage.setItem("sofianotes-zoom-chrome", zoomChromeLayout);
+      } catch (err) {}
+      renderZoomRowsSetting();
+      syncSettingsSummary();
+      try {
+        applyZoomChrome();
+      } catch (err) {}
+    })
+  );
+  document.getElementById("set-zoom-inner")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    zoomInnerBarPref = !zoomInnerBarPref;
+    try {
+      localStorage.setItem("sofianotes-zoom-inner-bar", zoomInnerBarPref ? "1" : "0");
+    } catch (err) {}
+    renderZoomRowsSetting();
+    try {
+      if (zoomWin && zoomInnerBarPref) attachZoomInnerBar();
+      else if (!zoomInnerBarPref) detachZoomInnerBar();
+    } catch (err) {}
+  });
 
   function applyZoomPercent(pct, cx, cy) {
     const x = cx == null ? window.innerWidth / 2 : cx;
@@ -2326,8 +2397,18 @@
   });
 
   // ---- movable docks ------------------------------------------------
+  function ensureToolbarOnBody() {
+    if (!toolbarEl || toolbarEl.parentElement === document.body) return;
+    const home = document.getElementById("undo-redo-dock");
+    if (home && home.nextSibling) document.body.insertBefore(toolbarEl, home.nextSibling);
+    else document.body.appendChild(toolbarEl);
+    toolbarEl.classList.remove("zoom-inner");
+    document.body.classList.remove("zoom-inner-bar");
+  }
   function setDockPosition(pos) {
-    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging", "orient-vertical");
+    toolbarSavedDock = null;
+    ensureToolbarOnBody();
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging", "orient-vertical", "zoom-inner");
     toolbarEl.style.left = "";
     toolbarEl.style.top = "";
     toolbarEl.style.right = "";
@@ -2463,7 +2544,8 @@
   function liftDock(el, kind) {
     const r = el.getBoundingClientRect();
     if (kind === "dock") {
-      toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right");
+      ensureToolbarOnBody();
+      toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "zoom-inner");
     } else if (kind === "topbar") {
       topBar.classList.remove("tb-top", "tb-bottom", "tb-left", "tb-right");
       topBar.style.maxWidth = "";
@@ -4901,6 +4983,57 @@
   function isBoxText(s) {
     return !!s && s.tool === "text" && !!(s.extra && s.extra.box);
   }
+  // Griffleiste oben am Textfeld: Finger verschiebt, Stift schreibt. Weltkoordinaten.
+  function textMoveHandleRect(s) {
+    const b = s && (s.bbox || strokeWorldBBox(s));
+    if (!b) return null;
+    const h = 26 / Math.max(scale, 0.25);
+    const pad = 6 / Math.max(scale, 0.25);
+    return { minX: b.minX, maxX: b.maxX, minY: b.minY - h - pad, maxY: b.minY - pad };
+  }
+  function textMoveHandleAt(world, pointerType) {
+    const slop = ((pointerType === "touch" ? 18 : 8) / Math.max(scale, 0.25));
+    const list = Array.from(boardStrokes.values());
+    for (let i = list.length - 1; i >= 0; i--) {
+      const s = list[i];
+      if (!isBoxText(s) || !canEditStroke(s)) continue;
+      if (textEdit && textEdit.kind === "text" && textEdit.strokeId === s.id) continue;
+      const hr = textMoveHandleRect(s);
+      if (!hr) continue;
+      if (world.x >= hr.minX - slop && world.x <= hr.maxX + slop && world.y >= hr.minY - slop && world.y <= hr.maxY + slop) return s;
+    }
+    return null;
+  }
+  function drawTextMoveHandles() {
+    if (viewOnly || historyView) return;
+    for (const s of boardStrokes.values()) {
+      if (!isBoxText(s)) continue;
+      if (textEdit && textEdit.kind === "text" && textEdit.strokeId === s.id) continue;
+      const hr = textMoveHandleRect(s);
+      if (!hr) continue;
+      const w = 36 / Math.max(scale, 0.25);
+      const h = 9 / Math.max(scale, 0.25);
+      const x = (hr.minX + hr.maxX) / 2 - w / 2;
+      const y = (hr.minY + hr.maxY) / 2 - h / 2;
+      const r = 4.5 / Math.max(scale, 0.25);
+      ctx.save();
+      ctx.fillStyle = "rgba(26,115,232,0.92)";
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+      else ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  function tryGrabTextBox(e, world) {
+    const s = textMoveHandleAt(world, e.pointerType);
+    if (!s) return false;
+    if (textEdit) commitTextEditor();
+    selectStrokeIds([s.id]);
+    startSelectionDrag(e.pointerId, world);
+    if (dragState) dragState.pointerType = e.pointerType;
+    return true;
+  }
   function textFont(size) {
     return `400 ${size}px Inter, sans-serif`;
   }
@@ -5873,16 +6006,22 @@
   // Griffe links/rechts am offenen Textfeld: Breite ziehen, der Text bricht dann um
   const teHandleL = document.getElementById("te-handle-l");
   const teHandleR = document.getElementById("te-handle-r");
+  const teMoveEl = document.getElementById("te-move");
   let teHandleDrag = null;
+  let teMoveDrag = null;
   function syncTextHandles(left, top, width, height) {
     const show = !!(textEdit && textEdit.kind === "text") && left != null;
-    for (const h of [teHandleL, teHandleR]) if (h) h.classList.toggle("hidden", !show);
+    for (const h of [teHandleL, teHandleR, teMoveEl]) if (h) h.classList.toggle("hidden", !show);
     if (!show) return;
     const cy = top + height / 2;
     teHandleL.style.left = left - 6 + "px";
     teHandleL.style.top = cy + "px";
     teHandleR.style.left = left + width + 6 + "px";
     teHandleR.style.top = cy + "px";
+    if (teMoveEl) {
+      teMoveEl.style.left = left + width / 2 + "px";
+      teMoveEl.style.top = top - 18 + "px";
+    }
   }
   for (const [h, side] of [
     [teHandleL, "l"],
@@ -5921,6 +6060,32 @@
     };
     h.addEventListener("pointerup", end);
     h.addEventListener("pointercancel", end);
+  }
+  if (teMoveEl) {
+    teMoveEl.addEventListener("mousedown", (e) => e.preventDefault());
+    teMoveEl.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+    teMoveEl.addEventListener("pointerdown", (e) => {
+      if (!textEdit || textEdit.kind !== "text") return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        teMoveEl.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      teMoveDrag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, origX: textEdit.x, origY: textEdit.y };
+    });
+    teMoveEl.addEventListener("pointermove", (e) => {
+      const d = teMoveDrag;
+      if (!d || d.id !== e.pointerId || !textEdit) return;
+      textEdit.x = d.origX + (e.clientX - d.x0) / scale;
+      textEdit.y = d.origY + (e.clientY - d.y0) / scale;
+      positionTextEditor();
+    });
+    const endMove = (e) => {
+      if (teMoveDrag && teMoveDrag.id === e.pointerId) teMoveDrag = null;
+      if (textEdit) textEditorEl.focus({ preventScroll: true });
+    };
+    teMoveEl.addEventListener("pointerup", endMove);
+    teMoveEl.addEventListener("pointercancel", endMove);
   }
 
   function cancelTextEditor() {
@@ -6500,6 +6665,61 @@
   })();
   let zoomPaneDrag = null;
 
+  function applyZoomChrome() {
+    if (!zoomPaneEl) return;
+    zoomPaneEl.classList.toggle("chrome-side", zoomChromeLayout === "side");
+    zoomPaneEl.classList.toggle("chrome-top", zoomChromeLayout !== "side");
+    if (toolbarEl.classList.contains("zoom-inner")) {
+      toolbarEl.classList.toggle("orient-vertical", zoomChromeLayout === "side");
+    }
+    document.getElementById("btn-zw-pen")?.classList.toggle("active", toolbarEl.classList.contains("zoom-inner"));
+  }
+  function attachZoomInnerBar() {
+    if (!zoomInnerBarPref || !zoomWin || !zoomPaneEl || !toolbarEl) return;
+    const chrome = document.getElementById("zoom-pane-chrome");
+    if (!chrome) return;
+    if (!toolbarSavedDock) {
+      toolbarSavedDock = {
+        pos: currentDock(),
+        free: toolbarEl.classList.contains("free-drag"),
+        left: toolbarEl.style.left,
+        top: toolbarEl.style.top,
+      };
+    }
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging");
+    toolbarEl.classList.add("zoom-inner");
+    toolbarEl.classList.toggle("orient-vertical", zoomChromeLayout === "side");
+    toolbarEl.style.left = "";
+    toolbarEl.style.top = "";
+    toolbarEl.style.right = "";
+    toolbarEl.style.bottom = "";
+    toolbarEl.style.transform = "";
+    chrome.appendChild(toolbarEl);
+    document.body.classList.add("zoom-inner-bar");
+    applyZoomChrome();
+    syncBarStack();
+    positionToolPopover();
+  }
+  function detachZoomInnerBar() {
+    const saved = toolbarSavedDock;
+    toolbarSavedDock = null;
+    if (!toolbarEl.classList.contains("zoom-inner") && toolbarEl.parentElement === document.body) {
+      document.getElementById("btn-zw-pen")?.classList.remove("active");
+      return;
+    }
+    ensureToolbarOnBody();
+    if (saved) {
+      if (saved.free) {
+        toolbarEl.classList.add("free-drag");
+        toolbarEl.style.left = saved.left;
+        toolbarEl.style.top = saved.top;
+      } else setDockPosition(saved.pos);
+    }
+    applyZoomChrome();
+    syncBarStack();
+    positionToolPopover();
+  }
+
   function zoomPaneBounds(h) {
     const tb = toolbarEl.getBoundingClientRect();
     const dock = currentDock();
@@ -6516,12 +6736,14 @@
 
   function layoutZoomPane() {
     if (!zoomPaneEl) return;
+    applyZoomChrome();
     const h = Math.round(Math.max(214, Math.min(368, window.innerHeight * 0.3 + 48)));
     const { minTop, maxTop } = zoomPaneBounds(h);
     zoomPaneEl.style.bottom = "auto";
     zoomPaneEl.style.top = Math.round(minTop + (maxTop - minTop) * zoomPaneFrac) + "px";
     // Stiftleiste links/rechts angedockt: Schreibflaeche daneben statt darunter
-    const dockSide = currentDock();
+    // (nicht, wenn die Leiste schon im Zoom-Fenster sitzt)
+    const dockSide = toolbarEl.classList.contains("zoom-inner") ? "" : currentDock();
     const tbr = toolbarEl.getBoundingClientRect();
     zoomPaneEl.style.left = dockSide === "left" && tbr.width ? Math.round(tbr.right + 10) + "px" : "";
     zoomPaneEl.style.right = dockSide === "right" && tbr.width ? Math.round(window.innerWidth - tbr.left + 10) + "px" : "";
@@ -6561,6 +6783,9 @@
     // Notizbuch: Rahmen und Raender an der aktuellen A4-Seite ausrichten
     if (notebook && window.sofiaCurrentPage) zoomToPage(window.sofiaCurrentPage(), false);
     if (zoomWinBtn) zoomWinBtn.classList.add("active");
+    if (zoomInnerBarPref) attachZoomInnerBar();
+    else applyZoomChrome();
+    layoutZoomPane();
     requestRedraw();
   }
   // Zoom-Fenster auf eine Notizbuch-Seite setzen: Raender = Seitenraender (bzw. Randlinie),
@@ -6594,6 +6819,7 @@
     zoomNext = null;
     zoomWin = null;
     zoomPointer = null;
+    detachZoomInnerBar();
     if (zoomPaneEl) zoomPaneEl.classList.add("hidden");
     if (zoomBoxEl) zoomBoxEl.classList.add("hidden");
     if (zoomWinBtn) zoomWinBtn.classList.remove("active");
@@ -6971,6 +7197,20 @@
     act("btn-zw-in", () => setRows(zoomWin.rows - 0.5));
     act("btn-zw-out", () => setRows(zoomWin.rows + 0.5));
     act("btn-zw-close", closeZoomWindow);
+    const penBtn = document.getElementById("btn-zw-pen");
+    if (penBtn) {
+      penBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        zoomInnerBarPref = !toolbarEl.classList.contains("zoom-inner");
+        try {
+          localStorage.setItem("sofianotes-zoom-inner-bar", zoomInnerBarPref ? "1" : "0");
+        } catch (err) {}
+        renderZoomRowsSetting();
+        if (zoomInnerBarPref) attachZoomInnerBar();
+        else detachZoomInnerBar();
+        requestRedraw();
+      });
+    }
 
     // Leiste/Rahmen ziehen (kein 6-Punkt-Griff): nicht auf der Schreibflaeche, nicht auf Knoepfen
     const endZoomPaneDrag = (e) => {
@@ -6988,7 +7228,7 @@
     };
     zoomPaneEl.addEventListener("pointerdown", (e) => {
       if (!zoomWin) return;
-      if (e.target.closest("canvas, button")) return;
+      if (e.target.closest("canvas, button, #toolbar")) return;
       e.preventDefault();
       e.stopPropagation();
       try {
@@ -9642,6 +9882,7 @@
     if (notebook && currentTool !== "eraser" && currentTool !== "select" && !onSomePage(world)) return;
     lastPointerWorld = world;
     if (currentTool === "text") {
+      if (tryGrabTextBox(e, world)) return;
       textDrag = { pointerId: e.pointerId, startWorld: world, cur: world };
       return;
     }
@@ -9784,6 +10025,12 @@
           startCanvasZoomDrag(e);
           return;
         }
+        if (!pinchState && !penIsDown() && tryGrabTextBox(e, screenToWorld(e.clientX, e.clientY))) {
+          tapState = null;
+          panState = null;
+          requestRedraw();
+          return;
+        }
         if (fingerDrawEnabled && !pinchState) {
           dispatchPrimaryDown(e);
           return;
@@ -9791,6 +10038,11 @@
         if (!pinchState) {
           // Liegt der Stift gerade auf, ist dieser Touch der Handballen: nicht greifen, nicht tippen.
           const palm = penIsDown();
+          // Textfeld-Griff: Finger verschiebt das Feld, Stift schreibt, Blatt-Pan bleibt daneben.
+          if (!palm && tryGrabTextBox(e, world)) {
+            requestRedraw();
+            return;
+          }
           // Auswahl laesst sich auch ohne Finger-Zeichnen mit dem Finger verschieben,
           // skalieren, drehen und zuschneiden.
           if (!palm && (currentTool === "select" || selection.ids.size > 0 || cropState) && !dragState && grabSelectionAt(e, world)) {
@@ -14214,6 +14466,7 @@
     function addPages(afterIndex, pages) {
       const nb = clone();
       nb.pages.splice(afterIndex + 1, 0, ...pages);
+      pageAppear = { ids: new Set(pages.map((p) => p.id)), t0: performance.now(), ms: 240 };
       withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
       fitPage(afterIndex + 1);
     }
@@ -14811,7 +15064,7 @@
       grid.innerHTML = "";
       rects.forEach((r, i) => {
         const cell = document.createElement("div");
-        cell.className = "page-thumb" + (i === cur ? " active" : "");
+        cell.className = "page-thumb" + (i === cur ? " active" : "") + (pageAppear && pageAppear.ids.has(r.id) ? " page-thumb-enter" : "");
         cell.dataset.index = i;
         const cv = document.createElement("canvas");
         cv.className = "page-thumb-img";

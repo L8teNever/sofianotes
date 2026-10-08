@@ -4,13 +4,26 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>sofianotes</title>
-<meta name="theme-color" content="#F8F9FA" />
+<meta name="theme-color" content="#e8e6ed" />
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#e8e6ed" />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#e8e6ed" />
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <link rel="icon" href="icons/favicon.png" />
+<meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="sofianotes" />
+<script>
+  (function () {
+    var standalone =
+      window.navigator.standalone === true ||
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.matchMedia("(display-mode: fullscreen)").matches ||
+      window.matchMedia("(display-mode: minimal-ui)").matches;
+    if (standalone) document.documentElement.classList.add("pwa-standalone");
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -52,17 +65,21 @@
   <div id="zoom-margin-left" class="zoom-margin" title="Linker Rand"></div>
   <div id="zoom-margin-right" class="zoom-margin" title="Rechter Rand"></div>
 </div>
-<div id="zoom-pane" class="zoom-pane hidden" title="Leiste ziehen, um die Schreibfläche zu verschieben">
-  <div class="zoom-pane-controls">
-    <button type="button" id="btn-zw-back" title="Zurück"><span class="material-symbols-rounded">arrow_back</span></button>
-    <button type="button" id="btn-zw-fwd" title="Weiter"><span class="material-symbols-rounded">arrow_forward</span></button>
-    <button type="button" id="btn-zw-return" title="Neue Zeile"><span class="material-symbols-rounded">keyboard_return</span></button>
-    <button type="button" id="btn-zw-in" title="Stärker vergrößern"><span class="material-symbols-rounded">add</span></button>
-    <button type="button" id="btn-zw-out" title="Weniger vergrößern"><span class="material-symbols-rounded">remove</span></button>
-    <button type="button" id="btn-zw-close" title="Zoom-Fenster schließen"><span class="material-symbols-rounded">close</span></button>
+<div id="zoom-pane" class="zoom-pane chrome-side hidden" title="Leiste ziehen, um die Schreibfläche zu verschieben">
+  <div id="zoom-pane-chrome" class="zoom-pane-chrome">
+    <div class="zoom-pane-controls">
+      <button type="button" id="btn-zw-back" title="Zurück"><span class="material-symbols-rounded">arrow_back</span></button>
+      <button type="button" id="btn-zw-fwd" title="Weiter"><span class="material-symbols-rounded">arrow_forward</span></button>
+      <button type="button" id="btn-zw-return" title="Neue Zeile"><span class="material-symbols-rounded">keyboard_return</span></button>
+      <button type="button" id="btn-zw-in" title="Stärker vergrößern"><span class="material-symbols-rounded">add</span></button>
+      <button type="button" id="btn-zw-out" title="Weniger vergrößern"><span class="material-symbols-rounded">remove</span></button>
+      <button type="button" id="btn-zw-pen" title="Stiftleiste hier"><span class="material-symbols-rounded">ink_pen</span></button>
+      <button type="button" id="btn-zw-close" title="Zoom-Fenster schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
   </div>
   <canvas id="zoom-canvas"></canvas>
 </div>
+<div id="te-move" class="te-move hidden" title="Textfeld verschieben"><span class="material-symbols-rounded">open_with</span></div>
 <div id="te-handle-l" class="te-handle hidden" title="Breite ziehen"></div>
 <div id="te-handle-r" class="te-handle hidden" title="Breite ziehen"></div>
 <div id="text-editor" class="text-editor hidden" contenteditable="true" spellcheck="true" autocapitalize="sentences" role="textbox" aria-multiline="true" aria-label="Text"></div>
@@ -585,6 +602,17 @@
         <button type="button" data-step="2">2</button>
         <button type="button" data-step="3">3</button>
       </div>
+      <div class="set-sub">Knöpfe am Zoom-Fenster</div>
+      <p class="set-hint">Die Steuerung sitzt hochkant an der Seite oder oben über der Schreibfläche.</p>
+      <div class="set-seg" id="set-zoom-chrome">
+        <button type="button" data-chrome="side">An der Seite</button>
+        <button type="button" data-chrome="top">Oben</button>
+      </div>
+      <button id="set-zoom-inner" class="setting-toggle set-switch active" title="Stiftleiste im Zoom-Fenster">
+        <span class="set-ico"><span class="material-symbols-rounded">ink_pen</span></span>
+        <span class="set-nav-text"><strong>Stiftleiste im Zoom-Fenster</strong><small>Erscheint an derselben Stelle. Beim Schließen zurück an den alten Platz.</small></span>
+        <span class="set-knob"></span>
+      </button>
     </div>
 
     <div class="set-page hidden" data-page="sofia">
