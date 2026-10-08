@@ -17,6 +17,7 @@ anderen Teilnehmer.
 
 ```bash
 # Variante A: direkt mit Python
+git config core.hooksPath .githooks   # Version bei jedem Commit automatisch hochzaehlen
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
@@ -105,6 +106,19 @@ und zusaetzlich `data/sofianotes.goodnotes` (ZIP mit `strokes.json` + derselben
 PDF — das native GoodNotes-Dateiformat ist geschlossen, daher kein direkter
 `.goodnotes`-Import). Download in der Leiste ist die PDF (`/api/export.pdf`);
 das Archiv bleibt unter `/api/export.goodnotes`.
+
+## Version
+
+Die angezeigte App-Version steht in `backend/version.json` (semver). Bei **jedem
+Commit** zaehlt der Git-Hook `.githooks/pre-commit` den Patch hoch (`1.0.0` →
+`1.0.1`). Einmalig im Klon:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`SKIP_VERSION_BUMP=1` ueberspringt das Hochzaehlen (z. B. Doku-only). Der Server
+liest die Datei fuer `/api/version` und setzt `__APP_VERSION__` in `index.html`.
 
 ## Deployment (GitHub -> Server, Pull-Mechanismus)
 

@@ -4,7 +4,18 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION_JSON = Path(__file__).resolve().parent.parent / "version.json"
+
+
+def read_version() -> str:
+    try:
+        data = json.loads(VERSION_JSON.read_text(encoding="utf-8"))
+        v = str(data.get("version") or "").strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    return "1.0.0"
 
 
 def get_git_commit() -> str:
@@ -12,10 +23,9 @@ def get_git_commit() -> str:
     if env_commit:
         return env_commit[:7]
 
-    json_path = Path(__file__).resolve().parent.parent / "version.json"
-    if json_path.exists():
+    if VERSION_JSON.exists():
         try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
+            data = json.loads(VERSION_JSON.read_text(encoding="utf-8"))
             if data.get("commit"):
                 return str(data["commit"])[:7]
         except Exception:
@@ -40,7 +50,7 @@ def get_version_info(build_ts: str) -> dict:
         build_date = datetime.now().strftime("%d.%m.%Y, %H:%M")
 
     return {
-        "version": VERSION,
+        "version": read_version(),
         "commit": commit,
         "build_ts": str(build_ts),
         "build_date": build_date,
@@ -49,4 +59,4 @@ def get_version_info(build_ts: str) -> dict:
 
 
 def inject_build(text: str, build_ts: str) -> str:
-    return text.replace("__BUILD__", str(build_ts))
+    return text.replace("__BUILD__", str(build_ts)).replace("__APP_VERSION__", read_version())

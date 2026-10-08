@@ -3957,3 +3957,69 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
 @media (max-width: 460px) { .share-opts { grid-template-columns: 1fr; } }
 /* nur Ansehen freigegeben: Auge gesperrt */
 #btn-view-only.locked { background: #fff4d6; color: #8a5300; }
+
+/* Material-Leiste: gleiche Sprache wie Seiten-Leiste und Blätter */
+.hw-panel.docked {
+  background: #f4f3f7;
+  border-radius: 0;
+}
+.hw-panel.docked .hw-panel-title {
+  font: 700 18px/1 'Google Sans', 'Inter', sans-serif;
+  color: #1c1b1f;
+}
+.hw-own { gap: 10px; }
+.hw-own .pap-sub { margin: 0 2px 2px; }
+.hw-panel-body .hw-own:not(:first-child) { border-top: none; padding-top: 4px; }
+.mat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 16px;
+  padding: 4px 2px 12px;
+  align-content: start;
+}
+.mat-thumb { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.mat-thumb-img,
+.mat-thumb-file {
+  width: 100%;
+  aspect-ratio: 794 / 1123;
+  display: block;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+  outline: 3px solid transparent;
+  outline-offset: 2px;
+  cursor: pointer;
+  border: none;
+  object-fit: cover;
+}
+.hw-panel-body .mat-thumb-img { max-height: none; border-radius: 4px; }
+.mat-thumb-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #1c1b1f;
+}
+.mat-thumb-file .material-symbols-rounded { font-size: 40px; color: #1a73e8; }
+.mat-thumb .page-thumb-foot span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mat-add { aspect-ratio: 794 / 1123; }
+.mat-add .material-symbols-rounded { font-size: 34px; }
+#gn-pick-dir,
+#gn-pick-zip {
+  min-height: 56px;
+  border: 2px dashed #1a73e8;
+  border-radius: 10px;
+  background: rgba(26, 115, 232, 0.04);
+  color: #1a73e8;
+  font: 700 15px/1.2 'Google Sans', 'Inter', sans-serif;
+}
+#gn-pick-dir .material-symbols-rounded,
+#gn-pick-zip .material-symbols-rounded { color: #1a73e8; font-size: 26px; }
+#gn-pick-dir.active,
+#gn-pick-zip.active { color: #1a73e8; }

@@ -12009,66 +12009,93 @@
   function renderOwnRefs() {
     const sec = document.createElement("div");
     sec.className = "hw-own";
-    const head = document.createElement("div");
-    head.className = "hw-own-head";
-    head.innerHTML = '<span>Eigenes Material</span><button type="button" class="hw-own-add"><span class="material-symbols-rounded">add</span>Foto / Datei</button>';
-    head.querySelector("button").addEventListener("click", (e) => {
+    const sub = document.createElement("div");
+    sub.className = "pap-sub";
+    sub.textContent = "Eigenes Material";
+    sec.appendChild(sub);
+    const all = boardRefs();
+    const removeRef = (ref) => saveBoardRefs(boardRefs().filter((x) => x !== ref), "Entfernen hat nicht geklappt");
+    const grid = document.createElement("div");
+    grid.className = "mat-grid";
+    const addThumb = (face, name, onOpen, onRemove) => {
+      const cell = document.createElement("div");
+      cell.className = "mat-thumb";
+      face.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onOpen();
+      });
+      const foot = document.createElement("div");
+      foot.className = "page-thumb-foot";
+      const lab = document.createElement("span");
+      lab.textContent = name;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "page-thumb-menu hw-panel-btn";
+      del.title = "Entfernen";
+      del.innerHTML = '<span class="material-symbols-rounded">close</span>';
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onRemove();
+      });
+      foot.appendChild(lab);
+      foot.appendChild(del);
+      cell.appendChild(face);
+      cell.appendChild(foot);
+      grid.appendChild(cell);
+    };
+    for (const r of all.filter((x) => x.fileId)) {
+      const pdf = isPdfItem(r);
+      const face = document.createElement("button");
+      face.type = "button";
+      face.className = "mat-thumb-file";
+      face.title = pdf ? "Antippen: hier im Fenster öffnen" : "Antippen: öffnen";
+      face.innerHTML = '<span class="material-symbols-rounded"></span>';
+      face.querySelector(".material-symbols-rounded").textContent = pdf ? "picture_as_pdf" : "description";
+      addThumb(
+        face,
+        r.name || "Datei",
+        () => {
+          if (pdf) openHwViewer(panelItems().findIndex((it) => it.fileId === r.fileId));
+          else window.open(ownFileUrl(r), "_blank", "noopener");
+        },
+        () => removeRef(r)
+      );
+    }
+    for (const r of all.filter((x) => x.mediaId)) {
+      const im = document.createElement("img");
+      im.className = "mat-thumb-img";
+      im.src = "/api/media/" + encodeURIComponent(r.mediaId);
+      im.alt = r.name || "Bild";
+      im.loading = "lazy";
+      addThumb(
+        im,
+        r.name || "Bild",
+        () => openHwViewer(panelItems().findIndex((it) => it.mediaId === r.mediaId)),
+        () => removeRef(r)
+      );
+    }
+    const addCell = document.createElement("div");
+    addCell.className = "mat-thumb";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "page-thumb-add mat-add";
+    add.title = "Foto oder Datei hinzufügen";
+    add.innerHTML = '<span class="material-symbols-rounded">add</span>';
+    add.addEventListener("click", (e) => {
       e.stopPropagation();
       refFileInput.click();
     });
-    sec.appendChild(head);
-    const all = boardRefs();
-    const removeRef = (ref) => saveBoardRefs(boardRefs().filter((x) => x !== ref), "Entfernen hat nicht geklappt");
-    const fileRefs = all.filter((r) => r.fileId);
-    for (const r of fileRefs) {
-      const row = document.createElement("div");
-      row.className = "hw-file hw-own-file";
-      const pdf = isPdfItem(r);
-      row.innerHTML = '<span class="material-symbols-rounded"></span><span class="hw-own-file-name"></span><button type="button" class="hw-ref-del" title="Entfernen"><span class="material-symbols-rounded">close</span></button>';
-      row.children[0].textContent = pdf ? "picture_as_pdf" : "description";
-      row.children[1].textContent = r.name || "Datei";
-      row.title = pdf ? "Antippen: hier im Fenster öffnen" : "Antippen: öffnen";
-      row.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (pdf) openHwViewer(panelItems().findIndex((it) => it.fileId === r.fileId));
-        else window.open(ownFileUrl(r), "_blank", "noopener");
-      });
-      row.querySelector(".hw-ref-del").addEventListener("click", (e) => {
-        e.stopPropagation();
-        removeRef(r);
-      });
-      sec.appendChild(row);
-    }
-    const refs = all.filter((r) => r.mediaId);
-    if (refs.length) {
-      const grid = document.createElement("div");
-      grid.className = "hw-images hw-refs";
-      refs.forEach((r, i) => {
-        const wrap = document.createElement("div");
-        wrap.className = "hw-ref";
-        const im = document.createElement("img");
-        im.src = "/api/media/" + encodeURIComponent(r.mediaId);
-        im.alt = r.name || "Bild";
-        im.loading = "lazy";
-        const del = document.createElement("button");
-        del.type = "button";
-        del.className = "hw-ref-del";
-        del.title = "Entfernen";
-        del.innerHTML = '<span class="material-symbols-rounded">close</span>';
-        del.addEventListener("click", (e) => {
-          e.stopPropagation();
-          removeRef(r);
-        });
-        wrap.appendChild(im);
-        wrap.appendChild(del);
-        grid.appendChild(wrap);
-      });
-      sec.appendChild(grid);
-    }
+    const addFoot = document.createElement("div");
+    addFoot.className = "page-thumb-foot";
+    addFoot.innerHTML = "<span>Hinzufügen</span>";
+    addCell.appendChild(add);
+    addCell.appendChild(addFoot);
+    grid.appendChild(addCell);
+    sec.appendChild(grid);
     if (!all.length) {
       const empty = document.createElement("div");
       empty.className = "hw-hint";
-      empty.textContent = "Hier kannst du z. B. die Buchseite, ein Foto der Aufgabe oder ein PDF ablegen – mit der Kamera, aus deinen Bildern oder Dateien.";
+      empty.textContent = "Buchseite, Foto oder PDF – wie eine Seite in der Leiste links.";
       sec.appendChild(empty);
     }
     return sec;
