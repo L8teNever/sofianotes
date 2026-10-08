@@ -15693,6 +15693,9 @@
     let marksOn = false;
     let authorsTimer = null;
     function personColor(pid) {
+      // feste Farbe der Person (einmal zufaellig vergeben, ueberall gleich)
+      const known = PEOPLE.find((p) => p.id === pid);
+      if (known && known.color) return known.color;
       const ids = PEOPLE.map((p) => p.id).sort();
       const i = ids.indexOf(pid);
       if (i >= 0) return COLORS[i % COLORS.length];

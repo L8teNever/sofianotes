@@ -13,6 +13,7 @@ admin can add further people afterwards.
 """
 import asyncio
 import json
+import random
 import sqlite3
 import time
 import uuid
@@ -209,6 +210,9 @@ def _init_sync() -> None:
         _conn.execute("ALTER TABLE people ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     if "sofia_email" not in people_cols:
         _conn.execute("ALTER TABLE people ADD COLUMN sofia_email TEXT")
+    if "color" not in people_cols:
+        # feste Farbe pro Person (Cursor im Blatt, Versionsverlauf)
+        _conn.execute("ALTER TABLE people ADD COLUMN color TEXT")
     placement_cols = {row[1] for row in _conn.execute("PRAGMA table_info(placements)").fetchall()}
     if "starred" not in placement_cols:
         _conn.execute("ALTER TABLE placements ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
@@ -1132,11 +1136,47 @@ def _star_folder_sync(person_id: str, folder_id: str, starred: bool) -> bool:
     return cur.rowcount > 0
 
 
+# Farben, die eine Person einmal zufaellig bekommt und dann fuer immer behaelt
+PERSON_COLORS = [
+    "#1a73e8", "#e8710a", "#188038", "#a142f4", "#d93025", "#12b5cb",
+    "#e52592", "#f9ab00", "#3949ab", "#00897b", "#8d6e63", "#7cb342",
+]
+
+
+def _ensure_colors_sync() -> None:
+    """Wer noch keine Farbe hat, bekommt zufaellig eine (moeglichst noch freie)."""
+    rows = _conn.execute("SELECT id, color FROM people").fetchall()
+    used = {r[1] for r in rows if r[1]}
+    changed = False
+    for pid, color in rows:
+        if color:
+            continue
+        free = [c for c in PERSON_COLORS if c not in used] or PERSON_COLORS
+        c = random.choice(free)
+        used.add(c)
+        _conn.execute("UPDATE people SET color = ? WHERE id = ?", (c, pid))
+        changed = True
+    if changed:
+        _conn.commit()
+
+
+def _person_color_sync(person_id: str) -> str | None:
+    _ensure_colors_sync()
+    row = _conn.execute("SELECT color FROM people WHERE id = ?", (person_id,)).fetchone()
+    return row[0] if row else None
+
+
+async def person_color(person_id: str) -> str | None:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _person_color_sync, person_id)
+
+
 def _people_sync() -> list[dict[str, Any]]:
+    _ensure_colors_sync()
     rows = _conn.execute(
-        "SELECT id, name, is_admin, sofia_user_id FROM people WHERE active = 1 ORDER BY created_at ASC, rowid ASC"
+        "SELECT id, name, is_admin, sofia_user_id, color FROM people WHERE active = 1 ORDER BY created_at ASC, rowid ASC"
     ).fetchall()
-    return [{"id": r[0], "name": r[1], "isAdmin": bool(r[2]), "fromSofia": r[3] is not None} for r in rows]
+    return [{"id": r[0], "name": r[1], "isAdmin": bool(r[2]), "fromSofia": r[3] is not None, "color": r[4]} for r in rows]
 
 
 def _people_admin_sync() -> list[dict[str, Any]]:

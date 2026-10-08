@@ -936,7 +936,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     client = manager.connect(websocket)
     client.person_id = person
     client.board_id = board_id
-    client.color = color_for(person) or client.color
+    client.color = (await db.person_color(person)) or color_for(person) or client.color
 
     strokes = await db.load_all(board_id)
     board = await db.get_board(board_id)
