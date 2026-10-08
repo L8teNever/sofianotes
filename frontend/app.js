@@ -9359,23 +9359,76 @@
       }).promise;
       const jpeg = await fitJpegBlob(c, 2200);
       c.width = c.height = 0;
-      out.push({ mediaId: await uploadJpeg(jpeg, { wait: true }), ratio: base.height / base.width, w: jpeg.w, h: jpeg.h });
+      out.push({
+        mediaId: await uploadJpeg(jpeg, { wait: true }),
+        ratio: base.height / base.width,
+        w: jpeg.w,
+        h: jpeg.h,
+        ptW: base.width,
+        ptH: base.height,
+      });
     }
     return out;
   }
+  // DIN A4 in PDF-Punkten (72 dpi). Letter/Legal/A5/A3 liegen nah an Heft-Formaten.
+  function pdfPageIsPaper(ptW, ptH) {
+    const a = Math.min(ptW, ptH);
+    const b = Math.max(ptW, ptH);
+    const r = b / Math.max(a, 1);
+    const mm = (mmv) => (mmv * 72) / 25.4;
+    const near = (x, y) => Math.abs(x - y) / y <= 0.07;
+    const named = [
+      [mm(210), mm(297)],
+      [mm(148), mm(210)],
+      [mm(297), mm(420)],
+      [8.5 * 72, 11 * 72],
+      [8.5 * 72, 14 * 72],
+      [11 * 72, 17 * 72],
+    ];
+    if (named.some(([s, l]) => near(a, s) && near(b, l))) return true;
+    return r >= 1.22 && r <= 1.55 && a >= 360 && a <= 980 && b <= 1300;
+  }
+  function classifyPdfDoc(pages) {
+    const list = pages || [];
+    if (!list.length) return "notebook";
+    const paper = list.filter((p) => pdfPageIsPaper(p.ptW, p.ptH)).length;
+    if (paper === list.length) return "notebook";
+    if (paper === 0) return "board";
+    return paper >= list.length / 2 ? "notebook" : "board";
+  }
+  function notebookSizeFromPdf(ptW, ptH, ratio) {
+    let w = Number(ptW);
+    let h = Number(ptH);
+    if (!(w > 0 && h > 0)) {
+      const r = Number(ratio) || A4_H / A4_W;
+      w = A4_W;
+      h = A4_W * r;
+    }
+    const landscape = w > h;
+    const longRatio = Math.max(w, h) / Math.max(Math.min(w, h), 1);
+    const closeA4 = Math.abs(longRatio - A4_H / A4_W) <= 0.06;
+    if (closeA4) return landscape ? { w: A4_H, h: A4_W } : { w: A4_W, h: A4_H };
+    if (landscape) return { w: A4_H, h: Math.max(200, Math.round(A4_H * (h / w))) };
+    return { w: A4_W, h: Math.max(200, Math.round(A4_W * (h / w))) };
+  }
   function notebookPagesFromPdfImages(imgs) {
-    return (imgs || []).map((im) => ({
-      id: "p" + uuid().slice(0, 12),
-      paper: "blank",
-      mediaId: im.mediaId,
-      w: A4_W,
-      h: Math.round(A4_W * (im.ratio || 1.414)),
-    }));
+    return (imgs || []).map((im) => {
+      const sz = notebookSizeFromPdf(im.ptW, im.ptH, im.ratio);
+      return {
+        id: "p" + uuid().slice(0, 12),
+        paper: "blank",
+        mediaId: im.mediaId,
+        w: sz.w,
+        h: sz.h,
+      };
+    });
   }
   window.sofiaPdfToImages = renderPdfToImages;
   window.sofiaPdfToNotebookPages = async function (file, onProgress) {
     return notebookPagesFromPdfImages(await renderPdfToImages(file, 2000, onProgress));
   };
+  window.sofiaClassifyPdfDoc = classifyPdfDoc;
+  window.sofiaNotebookSizeFromPdf = notebookSizeFromPdf;
 
   async function importPdfFile(file, origin) {
     if (window.ensurePdf) await window.ensurePdf().catch(() => null);
@@ -14329,11 +14382,54 @@
     }
     return id;
   }
+  async function gnImportAsBoard(imgs, title, folderId) {
+    const res = await api("/api/boards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, folderId: folderId || null }),
+    });
+    const boardId = res && res.board && res.board.id;
+    if (!boardId) throw new Error("board");
+    let y = 64;
+    const x = 64;
+    for (const im of imgs) {
+      const maxW = 1600;
+      const iw = im.w || 1000;
+      const ih = im.h || Math.round(iw * (im.ratio || 1));
+      const fit = Math.min(1, maxW / Math.max(iw, 1));
+      const dw = Math.max(80, iw * fit);
+      const dh = Math.max(80, ih * fit);
+      const stroke = {
+        id: uuid(),
+        tool: "image",
+        color: "#000000",
+        size: 1,
+        points: [
+          { x, y, p: 1 },
+          { x: x + dw, y: y + dh, p: 1 },
+        ],
+        extra: { mediaId: im.mediaId, crop: { l: 0, t: 0, r: 1, b: 1 }, nw: iw, nh: ih, name: title },
+      };
+      await api("/api/boards/" + encodeURIComponent(boardId) + "/strokes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stroke }),
+      });
+      y += dh + 48;
+    }
+    return imgs.length;
+  }
   async function gnImportPdf(file, title, folderId) {
-    const pages = await window.sofiaPdfToNotebookPages(file, (i, n) => {
+    const imgs = await renderPdfToImages(file, 2000, (i, n) => {
       gnSetStatus("„" + title + "“: Seite " + i + " von " + n);
     });
-    if (!pages.length) throw new Error("empty pdf");
+    if (!imgs.length) throw new Error("empty pdf");
+    const kind = classifyPdfDoc(imgs);
+    if (kind === "board") {
+      const n = await gnImportAsBoard(imgs, title, folderId);
+      return { kind: "board", pages: n };
+    }
+    const pages = notebookPagesFromPdfImages(imgs);
     await api("/api/boards", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -14343,7 +14439,7 @@
         notebook: { layout: "vertical", template: { paper: "blank" }, pages },
       }),
     });
-    return pages.length;
+    return { kind: "notebook", pages: pages.length };
   }
   async function gnRunImport() {
     if (!gnPending) return;
@@ -14359,6 +14455,8 @@
     let done = 0;
     let failed = 0;
     let pagesDone = 0;
+    let notebooks = 0;
+    let boards = 0;
     const jobs = [];
     for (const t of gnPending.tops) {
       const choice = map["top:" + t.name];
@@ -14389,7 +14487,10 @@
             segs.pop();
             for (const dir of segs) folderId = await gnEnsureFolder(dir, folderId, cache);
           }
-          pagesDone += await gnImportPdf(job.pdf.file, gnPdfTitle(fileName), folderId);
+          const got = await gnImportPdf(job.pdf.file, gnPdfTitle(fileName), folderId);
+          pagesDone += got.pages || 0;
+          if (got.kind === "board") boards += 1;
+          else notebooks += 1;
           done += 1;
         } catch (err) {
           failed += 1;
@@ -14397,9 +14498,13 @@
         }
       }
       await refreshLibrary();
+      const parts = [];
+      if (notebooks) parts.push(notebooks + (notebooks === 1 ? " Notizbuch" : " Notizbücher"));
+      if (boards) parts.push(boards + (boards === 1 ? " Blatt" : " Blätter"));
+      if (!parts.length && done) parts.push(done === 1 ? "1 Dokument" : done + " Dokumente");
       const msg =
-        done +
-        (done === 1 ? " Notizbuch importiert" : " Notizbücher importiert") +
+        (parts.join(" · ") || "Nichts") +
+        " importiert" +
         (pagesDone ? " · " + pagesDone + (pagesDone === 1 ? " Seite" : " Seiten") : "") +
         (failed ? " · " + failed + " fehlgeschlagen" : "");
       gnPending = null;
@@ -15125,7 +15230,7 @@
       try {
         const imgs = await fileToPageImages(file, 2000);
         if (!imgs.length) return true;
-        const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        const pages = notebookPagesFromPdfImages(imgs).map((p) => ({ ...p, id: newId() }));
         addPages(currentPage(), pages);
         showToast(pages.length + (pages.length === 1 ? " Seite" : " Seiten") + " eingefügt");
       } catch (err) {
@@ -15896,7 +16001,7 @@
         showToast("Wird hinzugefügt…");
         const imgs = await fileToPageImages(file, 2000);
         if (!imgs.length) return;
-        const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
+        const pages = notebookPagesFromPdfImages(imgs).map((p) => ({ ...p, id: newId() }));
         addPages(currentPage(), pages);
       } catch (err) {
         showToast("Hinzufügen hat nicht geklappt");
