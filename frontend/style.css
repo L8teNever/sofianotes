@@ -279,24 +279,30 @@ button {
 }
 
 #status {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted);
+  height: 34px;
+  padding: 0 12px 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: #fde7e4;
+  color: #b3261e;
+  font: 600 12.5px/1 'Google Sans', 'Inter', sans-serif;
+  letter-spacing: 0.01em;
+  cursor: pointer;
   flex: 0 0 auto;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s, transform 0.12s;
 }
-#status .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #c0392b;
-}
-#status.offline .dot { background: #80868b; }
-#status.offline #status-text { color: #5f6368; }
-#status.sync .dot { background: #f9ab00; }
-#status.sync #status-text { color: #b06000; }
+#status:hover { background: #f9d6d1; }
+#status:active { transform: scale(0.96); }
+#status .status-ico { font-size: 18px; color: inherit; }
+#status.trying { background: #e8def8; color: #4f378b; cursor: default; }
+#status.trying .status-ico { animation: status-spin 0.9s linear infinite; }
+#status.sync { background: #fff4d6; color: #8a5300; }
+@keyframes status-spin { to { transform: rotate(-360deg); } }
 #status.hidden { display: none; }
 
 /* ---- undo/zoom dock ---- */
@@ -2815,6 +2821,7 @@ body.view-narrow #canvas-filename { max-width: 96px; }
 }
 #top-filename-bar.tb-vertical #canvas-filename,
 #top-filename-bar.tb-vertical #status-text { display: none; }
+#top-filename-bar.tb-vertical #status { padding: 0; width: 34px; justify-content: center; }
 #top-filename-bar.tb-vertical .bar-divider { width: 18px; height: 1px; }
 #top-filename-bar.tb-vertical .mode-switch { flex-direction: column; }
 #top-filename-bar.free-drag {
@@ -3687,3 +3694,26 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 .pick-crumb { border: none; background: none; padding: 6px 10px; border-radius: 999px; font: 600 14px 'Google Sans', 'Inter', sans-serif; color: #6750a4; cursor: pointer; }
 .pick-crumb.active { background: #eaddff; color: #21005d; }
 .pick-sep { font-size: 18px; color: #79747e; }
+
+/* ---- ▾ Weitere Werkzeuge: gruppiert, im Stil der anderen Menues ---- */
+#tb-more-menu.tb-more-menu { width: 272px; min-width: 0; padding: 8px; border-radius: 20px; box-sizing: border-box; }
+.tbm-head { font: 700 11px/1 'Google Sans', 'Inter', sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: #6750a4; padding: 10px 8px 6px; }
+.tbm-head:first-child { padding-top: 4px; }
+.tbm-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 0 0 2px; }
+.tbm-tile, .tbm-row { border: 0; background: none; cursor: pointer; color: #1c1b1f; -webkit-tap-highlight-color: transparent; transition: background 0.15s, transform 0.12s; }
+.tbm-tile:active, .tbm-row:active { transform: scale(0.96); }
+.tbm-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 2px; border-radius: 14px; font: 600 11.5px/1.1 'Google Sans', 'Inter', sans-serif; }
+.tbm-tile:hover, .tbm-row:hover { background: rgba(103, 80, 164, 0.08); }
+.tbm-ico { width: 40px; height: 40px; border-radius: 12px; background: #f3edf7; color: #6750a4; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; transition: background 0.15s, color 0.15s; }
+.tbm-ico .material-symbols-rounded { font-size: 22px; color: inherit; }
+.tbm-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 5px 8px 5px 5px; border-radius: 14px; font: 600 14px/1 'Google Sans', 'Inter', sans-serif; text-align: left; }
+.tbm-row .tbm-ico { width: 36px; height: 36px; border-radius: 11px; }
+.tbm-row .tbm-ico .material-symbols-rounded { font-size: 20px; }
+.tbm-tile.active .tbm-ico, .tbm-row.active .tbm-ico { background: #0b57d0; color: #fff; }
+.tbm-tile.active { color: #0b57d0; }
+.tbm-view { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin-bottom: 4px; border: 0; border-radius: 14px; background: #d3e3fd; color: #0b57d0; cursor: pointer; text-align: left; -webkit-tap-highlight-color: transparent; }
+.tbm-view .material-symbols-rounded { font-size: 22px; color: inherit; }
+.tbm-view b { display: block; font: 700 14px/1.2 'Google Sans', 'Inter', sans-serif; }
+.tbm-view small { display: block; font: 500 12px/1.3 'Google Sans', 'Inter', sans-serif; color: #3a5a9c; }
+.tbm-view:hover { background: #c4d8fb; }
+#tb-more-menu.tb-more-menu { max-height: calc(100vh - 90px); overflow-y: auto; }

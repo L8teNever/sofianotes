@@ -970,7 +970,10 @@
     if (img) return img;
     img = new Image();
     img.decoding = "async";
-    img.onload = () => requestRedraw();
+    img.onload = () => {
+      requestRedraw();
+      if (window.sofiaThumbMedia) window.sofiaThumbMedia(mediaId);
+    };
     img.src = "/api/media/" + encodeURIComponent(mediaId);
     let tries = 0;
     img.onerror = () => {
@@ -2777,46 +2780,85 @@
     } catch (err) {}
     applyTopBarItems();
   });
-  // Ausgeblendete Knoepfe stehen unter dem ▾ ganz am Ende der Kopfleiste
+  // Ausgeblendete Knoepfe stehen unter dem ▾ ganz am Ende der Kopfleiste. In der
+  // Schau-Ansicht zeigt das ▾ alle Werkzeuge der Leiste; ein Tipp beendet die
+  // Schau-Ansicht und nimmt das Werkzeug.
   function renderHiddenMenu() {
     const box = document.getElementById("tb-more-menu");
     if (!box) return;
     box.innerHTML = "";
-    const add = (icon, label, run) => {
+    box.classList.add("tb-more-menu");
+    const all = viewOnly;
+    const want = (key) => all || topBarHidden.includes(key);
+    const hwOk = !document.getElementById("btn-hw-panel").classList.contains("hidden");
+    const isOn = (sel) => !all && !!document.querySelector(sel)?.classList.contains("active");
+    const run = (sel) => () => {
+      if (viewOnly) document.getElementById("btn-view-only")?.click();
+      document.querySelector(sel)?.click();
+    };
+    let count = 0;
+    const head = (text) => {
+      const h = document.createElement("div");
+      h.className = "tbm-head";
+      h.textContent = text;
+      box.appendChild(h);
+    };
+    const item = (parent, cls, icon, label, sel, active) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "lib-add-opt";
-      b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
-      b.children[0].textContent = icon;
-      b.children[1].textContent = label;
+      b.className = cls + (active ? " active" : "");
+      b.innerHTML = '<span class="tbm-ico"><span class="material-symbols-rounded"></span></span><span class="tbm-label"></span>';
+      b.querySelector(".material-symbols-rounded").textContent = icon;
+      b.querySelector(".tbm-label").textContent = label;
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         box.classList.add("hidden");
-        run();
+        run(sel)();
       });
-      box.appendChild(b);
+      parent.appendChild(b);
+      count++;
     };
-    const click = (sel) => () => document.querySelector(sel)?.click();
-    for (const key of topBarHidden) {
-      if (key === "modes") {
-        add("ink_pen", "Stift", click('.mode-btn[data-mode="pen"]'));
-        add("ink_eraser", "Radierer", click('.mode-btn[data-mode="eraser"]'));
-        add("text_fields", "Text", click('.mode-btn[data-mode="text"]'));
-        add("lasso_select", "Lasso", click('.mode-btn[data-mode="lasso"]'));
-      } else if (key === "ruler") add("straighten", "Lineal an/aus", click("#btn-ruler"));
-      else if (key === "zoom") add("zoom_in_map", "Zoom-Fenster", click("#btn-zoom-window"));
-      else if (key === "calc") add("calculate", "Rechner", click("#btn-calc"));
-      else if (key === "hw" && !document.getElementById("btn-hw-panel").classList.contains("hidden")) add("assignment", "Aufgabe", click("#btn-hw-panel"));
-      else if (key === "insert") {
-        add("table", "Tabelle einfügen", click("#insert-table"));
-        add("add_photo_alternate", "Bild einfügen", click("#insert-image"));
-        add("description", "PDF / Datei einfügen", click("#insert-pdf"));
+    if (all) {
+      const note = document.createElement("button");
+      note.type = "button";
+      note.className = "tbm-view";
+      note.innerHTML = '<span class="material-symbols-rounded">edit</span><span><b>Schau-Ansicht</b><small>Antippen zum Bearbeiten</small></span>';
+      note.addEventListener("click", (e) => {
+        e.stopPropagation();
+        box.classList.add("hidden");
+        document.getElementById("btn-view-only")?.click();
+      });
+      box.appendChild(note);
+    }
+    if (want("modes")) {
+      head("Werkzeug");
+      const row = document.createElement("div");
+      row.className = "tbm-tiles";
+      box.appendChild(row);
+      for (const [mode, icon, label] of [["pen", "ink_pen", "Stift"], ["eraser", "ink_eraser", "Radierer"], ["text", "text_fields", "Text"], ["lasso", "lasso_select", "Lasso"]]) {
+        const sel = '.mode-btn[data-mode="' + mode + '"]';
+        item(row, "tbm-tile", icon, label, sel, isOn(sel));
       }
     }
-    // ▾ nur zeigen, wenn wirklich etwas ausgeblendet ist
+    const helpers = [];
+    if (want("ruler")) helpers.push(["straighten", "Lineal", "#btn-ruler"]);
+    if (want("zoom")) helpers.push(["zoom_in_map", "Zoom-Fenster", "#btn-zoom-window"]);
+    if (want("calc")) helpers.push(["calculate", "Rechner", "#btn-calc"]);
+    if (want("hw") && hwOk) helpers.push(["assignment", "Aufgabe", "#btn-hw-panel"]);
+    if (helpers.length) {
+      head("Hilfen");
+      for (const [icon, label, sel] of helpers) item(box, "tbm-row", icon, label, sel, isOn(sel));
+    }
+    if (want("insert")) {
+      head("Einfügen");
+      item(box, "tbm-row", "table", "Tabelle", "#insert-table", false);
+      item(box, "tbm-row", "add_photo_alternate", "Bild", "#insert-image", false);
+      item(box, "tbm-row", "description", "PDF / Datei", "#insert-pdf", false);
+    }
+    // ▾ nur zeigen, wenn wirklich etwas darunter liegt
     const more = document.getElementById("tb-more-wrap");
-    if (more) more.classList.toggle("tb-off", !box.children.length);
-    if (!box.children.length) box.classList.add("hidden");
+    if (more) more.classList.toggle("tb-off", !count);
+    if (!count) box.classList.add("hidden");
   }
   document.getElementById("btn-tb-more")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2985,13 +3027,69 @@
     }
   }
 
+  let reconnecting = false; // Offline-Knopf angetippt: Versuch laeuft
   function setConnState(mode) {
+    if (reconnecting && mode === "offline") return; // Ergebnis zeigt der Knopf selbst
     statusEl.classList.toggle("connected", mode === "live");
     statusEl.classList.toggle("offline", mode === "offline");
     statusEl.classList.toggle("sync", mode === "sync");
+    statusEl.classList.remove("trying");
     statusEl.classList.toggle("hidden", mode !== "offline");
     statusTextEl.textContent = mode === "live" ? "Live" : mode === "sync" ? "Sync…" : "Offline";
+    const ico = statusEl.querySelector(".status-ico");
+    if (ico) ico.textContent = "cloud_off";
+    if (typeof layoutTopBar === "function" && statusEl.dataset.mode !== mode) {
+      statusEl.dataset.mode = mode;
+      try {
+        layoutTopBar();
+      } catch (err) {}
+    }
   }
+  // Offline antippen: sofort neu versuchen und Bescheid geben, ob es geklappt hat
+  statusEl.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (reconnecting) return;
+    reconnecting = true;
+    statusEl.classList.add("trying");
+    statusTextEl.textContent = "Verbinde…";
+    const ico = statusEl.querySelector(".status-ico");
+    if (ico) ico.textContent = "sync";
+    const t0 = Date.now();
+    let ok = false;
+    try {
+      reconnectDelay = 1000;
+      if (await probeOnline()) {
+        await flushOutbox();
+        if (currentBoardId) {
+          wantWs = true;
+          if (ws && ws.readyState !== WebSocket.OPEN) {
+            ws.onclose = null;
+            try {
+              ws.close();
+            } catch (err) {}
+            ws = null;
+          }
+          connectWS();
+          // kurz auf die Live-Verbindung warten
+          for (let k = 0; k < 40 && !(ws && ws.readyState === WebSocket.OPEN); k++) await new Promise((r) => setTimeout(r, 100));
+          ok = !!(ws && ws.readyState === WebSocket.OPEN);
+        } else ok = true;
+      }
+    } catch (err) {
+      ok = false;
+    }
+    // Drehung mindestens kurz zeigen, damit man sieht, dass etwas passiert
+    const rest = 600 - (Date.now() - t0);
+    if (rest > 0) await new Promise((r) => setTimeout(r, rest));
+    reconnecting = false;
+    if (ok) {
+      setConnState("live");
+      showToast("Wieder verbunden – alles wird abgeglichen");
+    } else {
+      setConnState("offline");
+      showToast(navigator.onLine === false ? "Noch offline: kein Internet auf dem Gerät" : "Server gerade nicht erreichbar – versuche es gleich nochmal");
+    }
+  });
 
   function setConnected(connected) {
     setConnState(connected ? "live" : "offline");
@@ -3018,20 +3116,67 @@
     if (window.requestIdleCallback) requestIdleCallback(() => saveBoardNow(), { timeout: 2000 });
     else saveBoardNow();
   }
-  function saveBoardNow() {
+  // Sichern als JSON-Text, in kleinen Haeppchen in Ruhepausen gebaut - so ruckelt nichts,
+  // auch bei Notizbuechern mit tausenden Strichen. Beim Verlassen der App alles auf einmal.
+  const saveJobs = new Map(); // Blatt -> laufende Nummer (neuere Sicherung ersetzt aeltere)
+  function saveBoardNow(sync) {
     clearTimeout(saveBoardTimer);
     saveBoardTimer = null;
     const bid = saveBoardFor;
     saveBoardFor = null;
     if (!bid || bid !== currentBoardId || !window.SofiaOffline) return;
-    // IndexedDB kopiert selbst - kein eigenes tiefes Kopieren aller Striche noetig
-    const list = [];
-    for (const s of boardStrokes.values()) list.push(serializeStroke(s));
-    SofiaOffline.setStrokes(bid, list).catch(() => {});
+    // Stand jetzt festhalten - laeuft auch weiter, wenn man das Blatt schon verlassen hat
+    const all = Array.from(boardStrokes.values());
+    const job = (saveJobs.get(bid) || 0) + 1;
+    saveJobs.set(bid, job);
+    const parts = [];
+    let i = 0;
+    // Punkte kompakt: [x, y, p, x, y, p, ...] auf 2 Stellen gerundet (nur wenn ein Punkt
+    // nichts anderes traegt, z.B. Text) - spart viel Platz und Zeit
+    const r2 = (v) => Math.round(v * 100) / 100;
+    const pack = (st) => {
+      const o = serializeStroke(st);
+      const pts = o.points || [];
+      const q = new Array(pts.length * 3);
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k];
+        for (const key in p) if (key !== "x" && key !== "y" && key !== "p") return JSON.stringify(o);
+        q[k * 3] = r2(p.x);
+        q[k * 3 + 1] = r2(p.y);
+        q[k * 3 + 2] = p.p == null ? -1 : r2(p.p);
+      }
+      const c = { id: o.id, tool: o.tool, color: o.color, size: o.size, q };
+      if (o.extra) c.extra = o.extra;
+      return JSON.stringify(c);
+    };
+    if (sync === true) {
+      SofiaOffline.setStrokes(bid, "[" + all.map(pack).join(",") + "]").catch(() => {});
+      return;
+    }
+    const step = (deadline) => {
+      if (saveJobs.get(bid) !== job) return;
+      const t0 = performance.now();
+      const budget = deadline && deadline.timeRemaining ? () => deadline.timeRemaining() > 1 && performance.now() - t0 < 8 : () => performance.now() - t0 < 6;
+      while (i < all.length && budget()) {
+        const end = Math.min(all.length, i + 100);
+        for (; i < end; i++) parts.push(pack(all[i]));
+      }
+      if (i < all.length) {
+        if (window.requestIdleCallback) requestIdleCallback(step, { timeout: 500 });
+        else setTimeout(step, 16);
+        return;
+      }
+      // als Blob: der Browser legt die Daten ab, ohne den Bildschirm aufzuhalten
+      const chunks = ["["];
+      for (let k = 0; k < parts.length; k++) chunks.push(k ? "," + parts[k] : parts[k]);
+      chunks.push("]");
+      SofiaOffline.setStrokes(bid, new Blob(chunks, { type: "application/json" })).catch(() => {});
+    };
+    step(null);
   }
   // App wird verlassen/versteckt: sofort sichern
-  window.addEventListener("pagehide", () => saveBoardFor && saveBoardNow());
-  document.addEventListener("visibilitychange", () => document.hidden && saveBoardFor && saveBoardNow());
+  window.addEventListener("pagehide", () => saveBoardFor && saveBoardNow(true));
+  document.addEventListener("visibilitychange", () => document.hidden && saveBoardFor && saveBoardNow(true));
 
   function applyStrokeList(list) {
     boardStrokes.clear();
@@ -14098,10 +14243,77 @@
     addPop.addEventListener("pointerdown", (e) => e.stopPropagation());
 
     // Vorschaubild einer Seite: Hintergrund + alles, was auf der Seite liegt
-    function renderThumb(cv, r) {
+    // Vorschaubilder: Striche einmal nach Seiten sortiert, Bilder im Speicher behalten
+    // (Schluessel: Blatt + Seite, gueltig solange sich die Seite nicht geaendert hat).
+    // Sichtbare Seiten zuerst, in kleinen Haeppchen pro Frame, Striche vereinfacht.
+    const thumbCache = new Map(); // boardId:pageId -> { sig, cv }
+    let thumbBuckets = null; // [{ list, sig }] je Seite
+    let thumbQueue = [];
+    let thumbRun = 0;
+    const thumbWaitMedia = new Map(); // mediaId -> Set(index)
+    function bucketStrokes(rects) {
+      const out = rects.map(() => ({ list: [], sig: 0 }));
+      for (const st of boardStrokes.values()) {
+        const b = st.bbox;
+        if (!b) continue;
+        for (let i = 0; i < rects.length; i++) {
+          const r = rects[i];
+          if (b.maxX < r.x || b.minX > r.x + r.w || b.maxY < r.y || b.minY > r.y + r.h) continue;
+          const o = out[i];
+          o.list.push(st);
+          const n = (st.points && st.points.length) || 0;
+          o.sig = (o.sig * 31 + Math.round(b.minX * 3 + b.minY * 7 + b.maxX * 11 + b.maxY * 13) + n * 17 + (st.color || "").length + (st.layer || 0) * 5) % 2147483647;
+        }
+      }
+      return out;
+    }
+    function pageSig(r, i) {
+      const pg = r.page;
+      const bk = thumbBuckets && thumbBuckets[i];
+      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0].join("|");
+    }
+    function thumbKey(r, i) {
+      return (currentBoardId || "") + ":" + (r.id || "i" + i);
+    }
+    // schnelle, vereinfachte Linie fuer die kleine Vorschau
+    function drawThumbStroke(c, st, k) {
+      const t = st.tool;
+      if (t === "table" || t === "text" || t === "image" || isBoxText(st) || (st.extra && st.extra.shape)) return drawStroke(st, c);
+      const pts = st.points;
+      if (!pts || !pts.length) return;
+      c.globalAlpha = t === "marker" ? 0.38 : 1;
+      c.strokeStyle = st.color || "#000";
+      c.lineWidth = Math.max((st.size || 2) * (t === "marker" ? 1 : 0.9), 0.8 / k);
+      c.beginPath();
+      c.moveTo(pts[0].x, pts[0].y);
+      const minD = 1.2 / k;
+      let lx = pts[0].x;
+      let ly = pts[0].y;
+      for (let j = 1; j < pts.length; j++) {
+        const p = pts[j];
+        if (j < pts.length - 1 && Math.abs(p.x - lx) + Math.abs(p.y - ly) < minD) continue;
+        c.lineTo(p.x, p.y);
+        lx = p.x;
+        ly = p.y;
+      }
+      if (pts.length === 1) c.lineTo(lx + 0.1, ly);
+      c.stroke();
+      c.globalAlpha = 1;
+    }
+    function waitMedia(id, i) {
+      if (!id) return;
+      let set = thumbWaitMedia.get(id);
+      if (!set) thumbWaitMedia.set(id, (set = new Set()));
+      set.add(i);
+    }
+    const mediaReady = (id) => {
+      const im = id && ensureMedia(id);
+      return !!(im && im.complete && im.naturalWidth);
+    };
+    function renderThumb(cv, r, i) {
       const W = cv.clientWidth || 120;
       const k = W / r.w;
-      const d = Math.max(1, window.devicePixelRatio || 1);
+      const d = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
       cv.width = Math.round(W * d);
       cv.height = Math.round(r.h * k * d);
       cv.style.height = r.h * k + "px";
@@ -14110,22 +14322,89 @@
       c.fillStyle = "#fff";
       c.fillRect(0, 0, W, r.h * k);
       c.setTransform(k * d, 0, 0, k * d, -r.x * k * d, -r.y * k * d);
-      const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
-      if (img && img.complete && img.naturalWidth) drawPageMedia(c, img, r);
-      else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r, c, k);
+      let complete = true;
+      if (r.page.mediaId) {
+        if (mediaReady(r.page.mediaId)) drawPageMedia(c, ensureMedia(r.page.mediaId), r);
+        else {
+          complete = false;
+          waitMedia(r.page.mediaId, i);
+        }
+      } else drawPagePattern(r.page.paper || "graph", r, c, k);
       c.save();
       c.beginPath();
       c.rect(r.x, r.y, r.w, r.h);
       c.clip();
-      for (const st of boardStrokes.values()) {
-        const b = st.bbox;
-        if (!b || b.maxX < r.x || b.minX > r.x + r.w || b.maxY < r.y || b.minY > r.y + r.h) continue;
+      c.lineCap = "round";
+      c.lineJoin = "round";
+      const bk = thumbBuckets && thumbBuckets[i];
+      const list = bk ? bk.list : Array.from(boardStrokes.values());
+      for (const st of list) {
+        if (st.tool === "image") {
+          const mid = st.extra && st.extra.mediaId;
+          if (!mediaReady(mid)) {
+            complete = false;
+            waitMedia(mid, i);
+          }
+        }
         try {
-          drawStroke(st, c, st.tool === "marker" ? { alpha: 0.38 } : undefined);
+          drawThumbStroke(c, st, k);
         } catch (err) {}
       }
       c.restore();
+      // fertiges Bild merken (nur wenn alle Bilder schon da waren)
+      if (complete && i != null) {
+        const keep = document.createElement("canvas");
+        keep.width = cv.width;
+        keep.height = cv.height;
+        keep.getContext("2d").drawImage(cv, 0, 0);
+        thumbCache.set(thumbKey(r, i), { sig: pageSig(r, i), cv: keep, w: W });
+        if (thumbCache.size > 400) thumbCache.delete(thumbCache.keys().next().value);
+      }
     }
+    // Vorschau aus dem Speicher zeigen, falls noch gueltig
+    function showCachedThumb(cv, r, i) {
+      const hit = thumbCache.get(thumbKey(r, i));
+      const W = cv.clientWidth || 120;
+      if (!hit || hit.sig !== pageSig(r, i) || Math.abs(hit.w - W) > 1) return false;
+      cv.width = hit.cv.width;
+      cv.height = hit.cv.height;
+      cv.style.height = (r.h * W) / r.w + "px";
+      cv.getContext("2d").drawImage(hit.cv, 0, 0);
+      return true;
+    }
+    function queueThumbs(indices) {
+      for (const i of indices) if (!thumbQueue.includes(i)) thumbQueue.push(i);
+      if (!thumbRun) thumbRun = requestAnimationFrame(pumpThumbs);
+    }
+    function pumpThumbs() {
+      thumbRun = 0;
+      if (!panelOpen || !notebook) return (thumbQueue = []);
+      const rects = pageRects(notebook);
+      // sichtbare Seiten nach vorne
+      const view = grid.getBoundingClientRect();
+      thumbQueue.sort((a, b) => vis(a) - vis(b));
+      function vis(i) {
+        const el = grid.querySelector('.page-thumb[data-index="' + i + '"]');
+        if (!el) return 1e9;
+        const r = el.getBoundingClientRect();
+        if (r.bottom >= view.top && r.top <= view.bottom) return 0;
+        return 1 + Math.abs(r.top - view.top);
+      }
+      const t0 = performance.now();
+      while (thumbQueue.length && performance.now() - t0 < 10) {
+        const i = thumbQueue.shift();
+        const cv = grid.querySelector('.page-thumb[data-index="' + i + '"] canvas');
+        if (cv && rects[i]) renderThumb(cv, rects[i], i);
+      }
+      if (thumbQueue.length) thumbRun = requestAnimationFrame(pumpThumbs);
+    }
+    // Bild fertig geladen: betroffene Vorschauen nachzeichnen
+    window.sofiaThumbMedia = (id) => {
+      const set = thumbWaitMedia.get(id);
+      if (!set) return;
+      thumbWaitMedia.delete(id);
+      if (panelOpen) queueThumbs(Array.from(set));
+    };
     // Lange druecken: Seite wird ausgewaehlt und haengt am Finger; loslassen = neue Stelle
     let thumbDrag = null; // {from, cell, ghost, to, timer, x0, y0, active, done}
     function startThumbHold(e, i, cell) {
@@ -14222,6 +14501,9 @@
       renderedSig = JSON.stringify(notebook.pages) + notebook.layout;
       const rects = pageRects(notebook);
       const cur = currentPage();
+      thumbBuckets = bucketStrokes(rects);
+      thumbQueue = [];
+      const todo = [];
       grid.innerHTML = "";
       rects.forEach((r, i) => {
         const cell = document.createElement("div");
@@ -14249,7 +14531,7 @@
           pageMenu(i, e.currentTarget);
         });
         grid.appendChild(cell);
-        requestAnimationFrame(() => renderThumb(cv, r));
+        todo.push([cv, r, i]);
       });
       const add = document.createElement("button");
       add.type = "button";
@@ -14264,6 +14546,10 @@
       addCell.className = "page-thumb";
       addCell.appendChild(add);
       grid.appendChild(addCell);
+      // erst nach dem Einfuegen (Breite bekannt): Gespeichertes sofort, Rest nach und nach
+      const miss = [];
+      for (const [cv, r, i] of todo) if (!showCachedThumb(cv, r, i)) miss.push(i);
+      queueThumbs(miss);
     }
     // nach Aenderungen die Vorschaubilder kurz verzoegert neu zeichnen
     // Nur bei geaenderten Seiten alles neu, sonst nur das Bild der aktuellen Seite (schnell)
@@ -14278,10 +14564,15 @@
       thumbTimer = setTimeout(() => {
         if (!panelOpen || !notebook) return;
         if (JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) return renderPanel();
-        const i = currentPage();
-        const cv = grid.querySelector('.page-thumb[data-index="' + i + '"] canvas');
-        const r = pageRects(notebook)[i];
-        if (cv && r) renderThumb(cv, r);
+        // nur Seiten mit Aenderungen neu zeichnen
+        const rects = pageRects(notebook);
+        thumbBuckets = bucketStrokes(rects);
+        const changed = [];
+        rects.forEach((r, i) => {
+          const hit = thumbCache.get(thumbKey(r, i));
+          if (!hit || hit.sig !== pageSig(r, i)) changed.push(i);
+        });
+        queueThumbs(changed);
       }, 900);
     };
 

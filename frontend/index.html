@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_fix_high,auto_stories,backspace,brush,calculate,celebration,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,close_fullscreen,cloud_done,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,document_scanner,download,drag_indicator,drive_file_move,edit,expand_more,fit_screen,flip_to_back,flip_to_front,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,layers,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,restart_alt,rotate_right,save,school,send,settings,shapes,share,splitscreen,square_foot,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,timer,touch_app,tune,undo,upload_file,vertical_split,view_agenda,view_column,view_sidebar,visibility,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_photo_alternate,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_fix_high,auto_stories,backspace,brush,calculate,celebration,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,close,close_fullscreen,cloud_done,cloud_off,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,delete,delete_sweep,description,dock_to_left,dock_to_right,document_scanner,download,drag_indicator,drive_file_move,edit,expand_more,fit_screen,flip_to_back,flip_to_front,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,history,home,image,inbox,ink_eraser,ink_highlighter,ink_pen,keyboard_return,lasso_select,layers,more_horiz,more_vert,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,reorder,restart_alt,rotate_right,save,school,send,settings,shapes,share,splitscreen,square_foot,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,timer,touch_app,tune,undo,upload_file,vertical_split,view_agenda,view_column,view_sidebar,visibility,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js" defer></script>
 <link rel="stylesheet" href="style.css?v=__BUILD__" />
@@ -189,10 +189,6 @@
         <span class="material-symbols-rounded">download</span>
         Exportieren …
       </button>
-      <button type="button" id="canvas-menu-rotate" class="lib-add-opt hidden">
-        <span class="material-symbols-rounded">rotate_right</span>
-        Diese Seite drehen
-      </button>
       <button type="button" id="canvas-menu-history" class="lib-add-opt">
         <span class="material-symbols-rounded">history</span>
         Versionsverlauf
@@ -212,7 +208,7 @@
   </button>
   <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" autocomplete="off" autocorrect="off" spellcheck="false" name="board-title-input" />
   <div class="bar-divider"></div>
-  <div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
+  <button type="button" id="status" class="hidden" title="Offline – antippen, um neu zu verbinden"><span class="material-symbols-rounded status-ico">cloud_off</span><span id="status-text">Offline</span></button>
   <div class="bar-divider"></div>
   <!-- Modus: bestimmt, was die Werkzeugleiste unten zeigt -->
   <div id="mode-switch" class="mode-switch" role="tablist" aria-label="Modus">

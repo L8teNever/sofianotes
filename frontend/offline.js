@@ -48,7 +48,38 @@
     const db = await openDb();
     return new Promise((resolve, reject) => {
       const req = db.transaction("strokes").objectStore("strokes").get(boardId);
-      req.onsuccess = () => resolve(req.result || []);
+      req.onsuccess = async () => {
+        let v = req.result;
+        if (v && typeof Blob !== "undefined" && v instanceof Blob) {
+          try {
+            v = await v.text();
+          } catch (err) {
+            return resolve([]);
+          }
+        }
+        // neu: als JSON-Text gespeichert (viel schneller zu sichern als Millionen Objekte)
+        if (typeof v === "string") {
+          try {
+            const list = JSON.parse(v);
+            for (const st of list) {
+              if (!st.q) continue;
+              const q = st.q;
+              const pts = new Array(q.length / 3);
+              for (let k = 0; k < pts.length; k++) {
+                const pt = { x: q[k * 3], y: q[k * 3 + 1] };
+                if (q[k * 3 + 2] !== -1) pt.p = q[k * 3 + 2];
+                pts[k] = pt;
+              }
+              st.points = pts;
+              delete st.q;
+            }
+            return resolve(list);
+          } catch (err) {
+            return resolve([]);
+          }
+        }
+        resolve(v || []);
+      };
       req.onerror = () => reject(req.error);
     });
   }
