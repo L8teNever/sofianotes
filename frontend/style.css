@@ -3612,3 +3612,4 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 /* ---- Einstellungs-Knopf ganz rechts oben (oeffnet das bisherige ⋯-Menue) ---- */
 #top-menu-bar { left: auto; right: calc(var(--safe-right) + var(--view-right)); top: var(--safe-top); bottom: auto; }
 #top-menu-bar .canvas-menu-wrap { display: flex; }
+#set-topbar-reset.hidden { display: none; }

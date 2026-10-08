@@ -24,10 +24,14 @@
   const PREF_KEYS = [
     "sofianotes-prefs",
     "sofianotes-colors",
+    "sofianotes-colors-marker",
+    "sofianotes-toolcolors",
     "sofianotes-dock",
     "sofianotes-undo-corner",
     "sofianotes-topbar-pos",
     "sofianotes-topbar-hidden",
+    "sofianotes-topbar-default",
+    "sofianotes-topbar-subjects",
     "sofianotes-rulerbar-pos",
     "sofianotes-zoom-rows",
     "sofianotes-zoom-step",
@@ -1691,6 +1695,7 @@
     }
     currentTool = tool;
     if (tool === "pen" || tool === "marker") lastInkTool = lastInkToolPref = tool;
+    if (window.__sofiaSwitchPalette) window.__sofiaSwitchPalette(tool);
     savePrefs();
     syncModeFromTool(tool);
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
@@ -1752,19 +1757,47 @@
   // auf eine Farbe: aendern, verschieben, entfernen.
   const DEFAULT_COLORS = ["#1E1F22", "#1A73E8", "#EA4335", "#34A853"];
   const COLOR_NAMES = { "#1E1F22": "Schwarz", "#1A73E8": "Blau", "#EA4335": "Rot", "#34A853": "Grün", "#FBBC04": "Gelb" };
-  let palette = { base: DEFAULT_COLORS.slice(), custom: [] };
+  // Textmarker hat eigene, helle Farben (Gelb, Gruen, Blau, Rosa) - getrennt vom Stift
+  const MARKER_COLORS = ["#FFE45C", "#8FE3A0", "#8CC8FF", "#FFA3CB"];
+  Object.assign(COLOR_NAMES, { "#FFE45C": "Gelb", "#8FE3A0": "Hellgrün", "#8CC8FF": "Hellblau", "#FFA3CB": "Rosa" });
+  function loadPalette(key, defaults) {
+    const p = { base: defaults.slice(), custom: [] };
+    try {
+      const raw = JSON.parse(localStorage.getItem(key) || "null");
+      if (raw && Array.isArray(raw.base) && raw.base.length === defaults.length) p.base = raw.base.map(normColor);
+      if (raw && Array.isArray(raw.custom)) p.custom = raw.custom.map(normColor).slice(0, 40);
+    } catch (err) {}
+    return p;
+  }
+  const palettes = { pen: loadPalette("sofianotes-colors", DEFAULT_COLORS), marker: loadPalette("sofianotes-colors-marker", MARKER_COLORS) };
+  let paletteKind = "pen";
+  let palette = palettes.pen;
+  // zuletzt benutzte Farbe je Werkzeug
+  let toolColors = { pen: null, marker: MARKER_COLORS[0] };
   try {
-    const raw = JSON.parse(localStorage.getItem("sofianotes-colors") || "null");
-    if (raw && Array.isArray(raw.base) && raw.base.length === DEFAULT_COLORS.length) palette.base = raw.base.map(normColor);
-    if (raw && Array.isArray(raw.custom)) palette.custom = raw.custom.map(normColor).slice(0, 40);
+    toolColors = Object.assign(toolColors, JSON.parse(localStorage.getItem("sofianotes-toolcolors") || "{}"));
   } catch (err) {}
+  // beim Wechsel Stift <-> Textmarker: eigene Farbleiste und eigene zuletzt benutzte Farbe
+  function switchPaletteFor(tool) {
+    const kind = tool === "marker" ? "marker" : tool === "pen" ? "pen" : null;
+    if (!kind || kind === paletteKind) return;
+    toolColors[paletteKind] = normColor(currentColor);
+    paletteKind = kind;
+    palette = palettes[kind];
+    currentColor = toolColors[kind] || palette.base[0];
+    try {
+      localStorage.setItem("sofianotes-toolcolors", JSON.stringify(toolColors));
+    } catch (err) {}
+    renderSwatches();
+  }
+  window.__sofiaSwitchPalette = switchPaletteFor;
   function normColor(c) {
     const m = /^#?([0-9a-f]{6})$/i.exec(String(c || "").trim());
     return m ? "#" + m[1].toUpperCase() : "#1E1F22";
   }
   function savePalette() {
     try {
-      localStorage.setItem("sofianotes-colors", JSON.stringify(palette));
+      localStorage.setItem(paletteKind === "marker" ? "sofianotes-colors-marker" : "sofianotes-colors", JSON.stringify(palette));
     } catch (err) {}
   }
   const swatchBaseEl = document.getElementById("swatch-base");
@@ -2595,15 +2628,62 @@
     { key: "insert", label: "Einfügen", icon: "add_box", sel: ".insert-menu-wrap" },
     { key: "view", label: "Schau-Ansicht", icon: "visibility", sel: "#btn-view-only" },
   ];
-  let topBarHidden = (() => {
+  // Welche Werkzeuge oben stehen und welche unter dem ▾ am Ende der Leiste liegen.
+  // Standard fuer alle Faecher (Rechner und Lineal unter ▾) - ausser in Faechern wie Mathe
+  // oder Physik, wo man sie braucht. Jedes Fach laesst sich eigens einstellen.
+  const readJSON = (k, d) => {
     try {
-      const v = JSON.parse(lsGetRaw("sofianotes-topbar-hidden") || "[]");
-      return Array.isArray(v) ? v : [];
+      const v = JSON.parse(lsGetRaw(k) || "null");
+      return v == null ? d : v;
     } catch (err) {
-      return [];
+      return d;
     }
-  })();
+  };
+  const MATH_SUBJECT = /mathe|physik|chemie|technik|informatik|naturwiss|\bnwt\b|elektro|statik|\bbbf\b/i;
+  let tbDefault = readJSON("sofianotes-topbar-default", null);
+  if (!Array.isArray(tbDefault)) {
+    // einmalig uebernehmen: bisherige Auswahl + Rechner und Lineal unter ▾
+    const old = readJSON("sofianotes-topbar-hidden", []);
+    tbDefault = Array.from(new Set([...(Array.isArray(old) ? old : []), "calc", "ruler"]));
+    try {
+      localStorage.setItem("sofianotes-topbar-default", JSON.stringify(tbDefault));
+    } catch (err) {}
+  }
+  let tbSubjects = readJSON("sofianotes-topbar-subjects", {});
+  if (!tbSubjects || typeof tbSubjects !== "object") tbSubjects = {};
+  let tbScope = "subject"; // was die Einstellungen gerade bearbeiten: "subject" oder "all"
+  // Fach des offenen Blatts = oberster Ordner, in dem es liegt
+  function currentSubject() {
+    let all = [];
+    let id = null;
+    try {
+      // beim Start sind Bibliothek/Ordner noch nicht angelegt
+      all = (libraryCache && libraryCache.allFolders) || [];
+      id = currentFolderId;
+    } catch (err) {
+      return null;
+    }
+    let top = null;
+    const seen = new Set();
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      const f = all.find((x) => x.id === id);
+      if (!f) break;
+      top = f;
+      id = f.parentId;
+    }
+    return top ? { key: top.id, name: top.name || "" } : null;
+  }
+  function effectiveHidden() {
+    const subj = currentSubject();
+    if (subj && Array.isArray(tbSubjects[subj.key])) return tbSubjects[subj.key];
+    if (subj && MATH_SUBJECT.test(subj.name)) return tbDefault.filter((k) => k !== "calc" && k !== "ruler");
+    return tbDefault;
+  }
+  let topBarHidden = effectiveHidden();
+  window.sofiaApplyTopBar = () => applyTopBarItems();
   function applyTopBarItems() {
+    topBarHidden = effectiveHidden();
     for (const it of TOPBAR_ITEMS) {
       const el = document.querySelector(it.sel);
       if (el) el.classList.toggle("tb-off", topBarHidden.includes(it.key));
@@ -2631,11 +2711,16 @@
   function renderTopBarSettings() {
     const box = document.getElementById("set-topbar-items");
     if (!box) return;
+    renderTopBarScope();
     box.innerHTML = "";
+    const subj = currentSubject();
+    // im Bereich "alle Faecher" die Standard-Auswahl zeigen, sonst die des Fachs
+    const shown = tbScope === "all" || !subj ? tbDefault : topBarHidden;
     for (const it of TOPBAR_ITEMS) {
+      if (it.key === "view") continue; // sitzt jetzt in der Rueckgaengig-Leiste
       const b = document.createElement("button");
       b.type = "button";
-      const on = !topBarHidden.includes(it.key);
+      const on = !shown.includes(it.key);
       b.className = "set-check" + (on ? " active" : "");
       b.innerHTML = '<span class="material-symbols-rounded"></span><span></span><span class="material-symbols-rounded set-check-box"></span>';
       b.children[0].textContent = it.icon;
@@ -2643,18 +2728,55 @@
       b.children[2].textContent = on ? "check_box" : "check_box_outline_blank";
       b.addEventListener("click", (e) => {
         e.stopPropagation();
-        topBarHidden = on ? [...topBarHidden, it.key] : topBarHidden.filter((k) => k !== it.key);
+        const next = on ? [...shown, it.key] : shown.filter((k) => k !== it.key);
+        const subj = currentSubject();
         try {
-          localStorage.setItem("sofianotes-topbar-hidden", JSON.stringify(topBarHidden));
+          if (tbScope === "subject" && subj) {
+            tbSubjects[subj.key] = next;
+            localStorage.setItem("sofianotes-topbar-subjects", JSON.stringify(tbSubjects));
+          } else {
+            tbDefault = next;
+            localStorage.setItem("sofianotes-topbar-default", JSON.stringify(tbDefault));
+          }
         } catch (err) {}
         applyTopBarItems();
       });
       box.appendChild(b);
     }
   }
-  // Ausgeblendete Knoepfe stehen im ⋯-Menue unter Teilen/Herunterladen/Einstellungen
+  // Auswahl: fuer dieses Fach oder fuer alle Faecher einstellen
+  function renderTopBarScope() {
+    const seg = document.getElementById("set-topbar-scope");
+    if (!seg) return;
+    const subj = currentSubject();
+    const scope = subj ? tbScope : "all";
+    seg.classList.toggle("hidden", !subj);
+    const sb = seg.querySelector('[data-scope="subject"]');
+    if (sb) sb.textContent = subj ? "Fach: " + subj.name : "Dieses Fach";
+    seg.querySelectorAll("[data-scope]").forEach((b) => b.classList.toggle("active", b.dataset.scope === scope));
+    const reset = document.getElementById("set-topbar-reset");
+    if (reset) reset.classList.toggle("hidden", !(subj && scope === "subject" && Array.isArray(tbSubjects[subj.key])));
+  }
+  document.querySelectorAll("#set-topbar-scope [data-scope]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      tbScope = b.dataset.scope;
+      renderTopBarSettings();
+    })
+  );
+  document.getElementById("set-topbar-reset")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const subj = currentSubject();
+    if (!subj) return;
+    delete tbSubjects[subj.key];
+    try {
+      localStorage.setItem("sofianotes-topbar-subjects", JSON.stringify(tbSubjects));
+    } catch (err) {}
+    applyTopBarItems();
+  });
+  // Ausgeblendete Knoepfe stehen unter dem ▾ ganz am Ende der Kopfleiste
   function renderHiddenMenu() {
-    const box = document.getElementById("canvas-menu-hidden");
+    const box = document.getElementById("tb-more-menu");
     if (!box) return;
     box.innerHTML = "";
     const add = (icon, label, run) => {
@@ -2666,7 +2788,7 @@
       b.children[1].textContent = label;
       b.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (typeof closeCanvasMenus === "function") closeCanvasMenus();
+        box.classList.add("hidden");
         run();
       });
       box.appendChild(b);
@@ -2681,7 +2803,6 @@
       } else if (key === "ruler") add("straighten", "Lineal an/aus", click("#btn-ruler"));
       else if (key === "zoom") add("zoom_in_map", "Zoom-Fenster", click("#btn-zoom-window"));
       else if (key === "calc") add("calculate", "Rechner", click("#btn-calc"));
-      else if (key === "view") add("visibility", viewOnly ? "Schau-Ansicht beenden" : "Schau-Ansicht", click("#btn-view-only"));
       else if (key === "hw" && !document.getElementById("btn-hw-panel").classList.contains("hidden")) add("assignment", "Aufgabe", click("#btn-hw-panel"));
       else if (key === "insert") {
         add("table", "Tabelle einfügen", click("#insert-table"));
@@ -2689,8 +2810,22 @@
         add("description", "PDF / Datei einfügen", click("#insert-pdf"));
       }
     }
-    box.classList.toggle("hidden", !box.children.length);
+    // ▾ nur zeigen, wenn wirklich etwas ausgeblendet ist
+    const more = document.getElementById("tb-more-wrap");
+    if (more) more.classList.toggle("tb-off", !box.children.length);
+    if (!box.children.length) box.classList.add("hidden");
   }
+  document.getElementById("btn-tb-more")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const box = document.getElementById("tb-more-menu");
+    if (!box) return;
+    renderHiddenMenu();
+    box.classList.toggle("hidden");
+  });
+  document.addEventListener("pointerdown", (e) => {
+    const box = document.getElementById("tb-more-menu");
+    if (box && !box.classList.contains("hidden") && !e.target.closest("#tb-more-menu") && !e.target.closest("#btn-tb-more")) box.classList.add("hidden");
+  }, true);
   document.querySelectorAll("#set-topbar-pos [data-pos]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2755,8 +2890,16 @@
     if (typeof p.finger === "boolean") fingerDrawEnabled = p.finger;
     shapeToggleEl.classList.toggle("active", shapeRecognitionEnabled);
     fingerDrawToggleEl.classList.toggle("active", fingerDrawEnabled);
+    if (p.tool === "marker") {
+      // zuletzt mit dem Textmarker gearbeitet: dessen Farbleiste und Farbe
+      toolColors.marker = toolColors.marker || currentColor;
+      paletteKind = "marker";
+      palette = palettes.marker;
+      currentColor = toolColors.marker;
+      renderSwatches();
+      setTool("marker");
+    } else if (toolColors.pen) currentColor = toolColors.pen;
     markActiveSwatch();
-    if (p.tool === "marker") setTool("marker");
   })();
 
   const savedDock = localStorage.getItem("sofianotes-dock") || "bottom";
@@ -6261,7 +6404,8 @@
     if (!zoomWin || !stroke || !stroke.points || !stroke.points.length) return;
     const b = makeBBox(stroke.points);
     // an (oder ueber) der rechten Randlinie: wie am Zeilenende -> naechste Zeile links
-    const atMargin = b.maxX >= zoomWin.right - zoomWin.w * 0.06 && b.minX < zoomWin.right + zoomWin.w * 0.1;
+    // frueher anbieten: schon kurz vor der Randlinie (nicht erst, wenn man darueber ist)
+    const atMargin = b.maxX >= zoomWin.right - zoomWin.w * 0.2 && b.minX < zoomWin.right + zoomWin.w * 0.5;
     if (atMargin) {
       zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
       requestRedraw();
@@ -6270,7 +6414,7 @@
     if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
     const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
     // die Fortsetzung soll nicht ueber die Randlinie hinausragen
-    if (nx > zoomWin.right - zoomWin.w * 0.15) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
+    if (nx > zoomWin.right - zoomWin.w * 0.3) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
     else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
     requestRedraw();
   }
@@ -6355,6 +6499,15 @@
 
   function drawZoomPane() {
     if (!zoomWin || !zctx) return;
+    // schon waehrend des Schreibens: naehert sich der Strich der Randlinie, die naechste
+    // Zeile gleich anzeigen (nicht erst nach dem Absetzen)
+    if (currentStroke && !currentStroke.eraser && currentStroke.points && currentStroke.points.length) {
+      const lp = currentStroke.points[currentStroke.points.length - 1];
+      const nextY = snapZoomY(zoomWin.y + zoomLineStep());
+      if (lp.x >= zoomWin.right - zoomWin.w * 0.2 && lp.y >= zoomWin.y - zoomBoxH() * 0.5 && lp.y <= zoomWin.y + zoomBoxH() * 1.5 && !(zoomNext && zoomNext.y === nextY && zoomNext.x === zoomWin.left)) {
+        zoomNext = { x: zoomWin.left, y: nextY };
+      }
+    }
     layoutZoomPane();
     zoomFitRows();
     const d = Math.max(1, window.devicePixelRatio || 1);
@@ -11716,6 +11869,8 @@
   });
 
   function renderLibrary() {
+    // Ordner bekannt -> Werkzeuge des Fachs koennen jetzt stimmen
+    setTimeout(() => window.sofiaApplyTopBar && window.sofiaApplyTopBar(), 0);
     if (!libraryCache) return;
     const crumbs = document.getElementById("library-crumbs");
     const eyebrow = document.getElementById("library-person");
@@ -12191,6 +12346,7 @@
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
     restoreUndo(id);
     viewRestoreFor = id;
+    setTimeout(() => applyTopBarItems(), 0);
     if (!opts || opts.homework === undefined) syncHomeworkPanel(null);
     else syncHomeworkPanel({ id, sofiaHomeworkId: opts.homework.id }, opts.homework);
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
@@ -13291,7 +13447,6 @@
       return;
     }
     canvasShareSubmenu.classList.add("hidden");
-    renderHiddenMenu();
     canvasMenu.classList.toggle("hidden");
   });
   document.getElementById("canvas-menu-download")?.addEventListener("click", () => {
@@ -14391,7 +14546,7 @@
     window.sofiaPagesUi = () => {
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
       pagesBtn.classList.toggle("hidden", !show);
-      document.getElementById("canvas-menu-rotate")?.classList.toggle("hidden", !show);
+      document.getElementById("canvas-menu-rotate")?.classList.add("hidden");
       if (!show) {
         addBig.classList.add("hidden");
         closeMenu();
@@ -15054,6 +15209,7 @@
       ["canvas-menu", "btn-canvas-menu"],
       ["insert-menu", "btn-insert"],
       ["split-menu", "btn-split"],
+      ["tb-more-menu", "btn-tb-more"],
       ["canvas-share-submenu", null],
     ];
     function place(menu, btn) {
