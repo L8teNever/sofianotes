@@ -26,6 +26,16 @@ class ClientState:
     in_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
+def color_for(person_id: str | None) -> str | None:
+    """Feste Farbe pro Person (gleich auf allen Geraeten und bei jedem Oeffnen)."""
+    if not person_id:
+        return None
+    h = 0
+    for ch in str(person_id):
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return PRESENCE_PALETTE[h % len(PRESENCE_PALETTE)]
+
+
 class ConnectionManager:
     def __init__(self) -> None:
         self._clients: dict[WebSocket, ClientState] = {}

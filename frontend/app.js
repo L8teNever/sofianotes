@@ -3333,6 +3333,7 @@
         p.y = msg.y;
         p.tool = msg.tool;
         p.size = msg.size;
+        if (msg.person) p.person = msg.person;
         p.lastSeen = performance.now();
         requestRedraw();
         break;
@@ -3398,13 +3399,15 @@
   // ---- presence (other users' live cursor + active tool) ---------------
   const presence = new Map(); // clientId -> {el,color,x,y,tool,size,lastSeen}
   const PRESENCE_TIMEOUT_MS = 4000;
-  const TOOL_LABELS = { pen: "✏️ Stift", marker: "🖍️ Marker", eraser: "🧹 Radierer", select: "👆 Auswahl" };
+  // Werkzeug als Symbol (statt Emoji), dazu der Name der Person in ihrer festen Farbe
+  const TOOL_ICONS = { pen: "ink_pen", marker: "ink_highlighter", eraser: "ink_eraser", select: "lasso_select", text: "text_fields" };
 
   function ensurePresence(id, color) {
     let p = presence.get(id);
     if (!p) {
       const el = document.createElement("div");
       el.className = "presence-label";
+      el.innerHTML = '<span class="material-symbols-rounded"></span><span class="presence-name"></span>';
       document.body.appendChild(el);
       p = { el, color: color || "#888", x: 0, y: 0, tool: "pen", size: 4, lastSeen: performance.now() };
       presence.set(id, p);
@@ -3430,7 +3433,14 @@
       p.el.style.left = s.x + "px";
       p.el.style.top = s.y - 14 + "px";
       p.el.style.background = p.color;
-      p.el.textContent = (p.label || TOOL_LABELS[p.tool] || p.tool);
+      // helle Personenfarbe -> dunkle Schrift, sonst weiss (immer gut lesbar)
+      const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(p.color || "");
+      const lum = m ? (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255 : 0;
+      p.el.style.color = lum > 0.62 ? "#1c1b1f" : "#fff";
+      const ico = TOOL_ICONS[p.tool] || "ink_pen";
+      const name = (p.person && personName(p.person)) || p.label || "Jemand";
+      if (p.el.firstChild.textContent !== ico) p.el.firstChild.textContent = ico;
+      if (p.el.lastChild.textContent !== name) p.el.lastChild.textContent = name;
     }
   }
 
@@ -3460,7 +3470,7 @@
       return;
     }
     people.forEach(([id, p], i) => {
-      p.label = "Person " + (i + 1);
+      p.label = (p.person && personName(p.person)) || "Person " + (i + 1);
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "zoom-person";

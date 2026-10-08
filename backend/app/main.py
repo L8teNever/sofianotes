@@ -14,7 +14,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from . import board_file, clientlog, cloudflare_ocr, db, files, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
-from .ws_manager import ConnectionManager
+from .ws_manager import ConnectionManager, color_for
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 BUILD_TS = str(int(time.time()))
@@ -936,6 +936,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     client = manager.connect(websocket)
     client.person_id = person
     client.board_id = board_id
+    client.color = color_for(person) or client.color
 
     strokes = await db.load_all(board_id)
     board = await db.get_board(board_id)
@@ -968,6 +969,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "type": "cursor",
                         "id": client.id,
                         "color": client.color,
+                        "person": client.person_id,
                         "x": msg.get("x"),
                         "y": msg.get("y"),
                         "tool": msg.get("tool"),
