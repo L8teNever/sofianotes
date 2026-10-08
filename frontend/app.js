@@ -1672,6 +1672,7 @@
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
+    if (typeof closeTextColorPop === "function") closeTextColorPop();
   }
 
   function hexToRgba(hex, alpha) {
@@ -1869,6 +1870,107 @@
     renderToolPopover();
     savePrefs();
   }
+  const textColorBtn = document.getElementById("btn-text-color");
+  const textColorFlag = textColorBtn && textColorBtn.querySelector(".text-color-flag");
+  const textColorPop = document.getElementById("text-color-pop");
+  const textColorPopSwatches = document.getElementById("text-color-pop-swatches");
+  function syncTextColorFlag() {
+    if (textColorFlag) textColorFlag.style.background = normColor(currentColor);
+    if (textColorPop) {
+      textColorPop.querySelectorAll(".swatch").forEach((b) => {
+        b.classList.toggle("active", b.dataset.color === normColor(currentColor));
+      });
+    }
+  }
+  function closeTextColorPop() {
+    if (!textColorPop || textColorPop.classList.contains("hidden")) return;
+    textColorPop.classList.add("hidden");
+    if (textColorBtn) {
+      textColorBtn.setAttribute("aria-expanded", "false");
+      textColorBtn.classList.remove("active-pop");
+    }
+  }
+  function positionTextColorPop() {
+    if (!textColorPop || !textColorBtn) return;
+    const r = textColorBtn.getBoundingClientRect();
+    const mw = textColorPop.offsetWidth;
+    const mh = textColorPop.offsetHeight;
+    const dock = currentDock();
+    const vertical = toolbarEl.classList.contains("orient-vertical") || dock === "left" || dock === "right";
+    let left;
+    let top;
+    if (vertical && dock === "right") {
+      left = r.left - mw - 10;
+      top = r.top + r.height / 2 - mh / 2;
+    } else if (vertical) {
+      left = r.right + 10;
+      top = r.top + r.height / 2 - mh / 2;
+    } else if (dock === "top") {
+      left = r.left + r.width / 2 - mw / 2;
+      top = r.bottom + 10;
+    } else {
+      left = r.left + r.width / 2 - mw / 2;
+      top = r.top - mh - 10;
+    }
+    textColorPop.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, left)) + "px";
+    textColorPop.style.top = Math.max(8, Math.min(window.innerHeight - mh - 8, top)) + "px";
+  }
+  function renderTextColorPop() {
+    if (!textColorPopSwatches) return;
+    textColorPopSwatches.textContent = "";
+    palette.base.concat(palette.custom).forEach((c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "swatch";
+      b.dataset.color = c;
+      b.style.background = c;
+      b.title = COLOR_NAMES[c] || c;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        pickColor(c);
+        closeTextColorPop();
+      });
+      textColorPopSwatches.appendChild(b);
+    });
+    syncTextColorFlag();
+  }
+  function openTextColorPop() {
+    if (!textColorPop || !textColorBtn) return;
+    if (!textColorPop.classList.contains("hidden")) return closeTextColorPop();
+    hidePopovers();
+    renderTextColorPop();
+    textColorPop.classList.remove("hidden");
+    textColorBtn.setAttribute("aria-expanded", "true");
+    textColorBtn.classList.add("active-pop");
+    positionTextColorPop();
+  }
+  if (textColorBtn) {
+    textColorBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    textColorBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openTextColorPop();
+    });
+  }
+  if (textColorPop) {
+    textColorPop.addEventListener("pointerdown", (e) => e.stopPropagation());
+    const popInput = document.getElementById("text-color-pop-input");
+    popInput?.addEventListener("input", (e) => pickColor(e.target.value));
+    popInput?.addEventListener("change", (e) => {
+      const c = normColor(e.target.value);
+      if (!palette.base.includes(c) && !palette.custom.includes(c)) {
+        palette.custom.push(c);
+        savePalette();
+        renderSwatches();
+      }
+      pickColor(c);
+      closeTextColorPop();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (textColorPop.classList.contains("hidden")) return;
+      if (e.target.closest("#text-color-pop") || e.target.closest("#btn-text-color")) return;
+      closeTextColorPop();
+    }, true);
+  }
   function markActiveSwatch() {
     let found = null;
     toolbarEl.querySelectorAll("#swatches-container .swatch").forEach((b) => {
@@ -1882,6 +1984,7 @@
         swatchCustomEl.scrollLeft = l - swatchCustomEl.clientWidth / 2;
       }
     }
+    syncTextColorFlag();
   }
   function makeSwatch(color, group, index) {
     const b = document.createElement("button");
@@ -2472,7 +2575,7 @@
   const HOLD_MOVE_CANCEL_PX = 14;
   const CHROME_DRAG_PX = 8;
   function isDockInteractiveTarget(target) {
-    return !!(target && target.closest && target.closest("button, input, textarea, a, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .zoom-wrap"));
+    return !!(target && target.closest && target.closest("button, input, textarea, a, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .text-color-pop, .zoom-wrap"));
   }
 
   function hideGuides() {
@@ -2588,7 +2691,7 @@
 
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu")) return;
+    if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .text-color-pop, .text-color-btn")) return;
     if (kind !== "topbar") e.preventDefault();
     const el = kind === "dock" ? toolbarEl : kind === "topbar" ? topBar : undoDock;
     const fromChrome = !isDockInteractiveTarget(e.target);

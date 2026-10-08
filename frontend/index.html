@@ -350,6 +350,10 @@
       <button type="button" class="tool-btn fmt-btn" data-cmd="italic" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
       <button type="button" class="tool-btn fmt-btn" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
       <button type="button" class="tool-btn fmt-btn" data-cmd="underline" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
+      <span class="mode-sep"></span>
+      <button type="button" id="btn-text-color" class="tool-btn text-color-btn" title="Textfarbe" aria-haspopup="true" aria-expanded="false">
+        <span class="text-color-flag" aria-hidden="true"></span>
+      </button>
     </div>
     <div class="mode-group" data-modes="text">
       <span class="mode-sep"></span>
@@ -387,8 +391,8 @@
     </div>
   </div>
 
-  <div class="dock-divider" data-modes="pen text lasso"></div>
-  <div id="swatches-container" data-modes="pen text lasso">
+  <div class="dock-divider" data-modes="pen lasso"></div>
+  <div id="swatches-container" data-modes="pen lasso">
     <div id="swatch-base" class="swatch-group"></div>
     <div id="swatch-custom" class="swatch-group swatch-scroll"></div>
     <label class="custom-color" title="Neue Farbe hinzufügen">
@@ -1040,6 +1044,15 @@
         <button type="button" id="td-ok" class="td-btn primary">Einfügen</button>
       </div>
     </div>
+  </div>
+  <div id="text-color-pop" class="text-color-pop hidden" role="menu" aria-label="Textfarbe">
+    <div class="text-color-pop-title">Farbe</div>
+    <div id="text-color-pop-swatches" class="text-color-pop-swatches"></div>
+    <label class="text-color-pop-add" title="Neue Farbe hinzufügen">
+      <input id="text-color-pop-input" type="color" value="#8b5cf6" />
+      <span class="material-symbols-rounded">add</span>
+      Neue Farbe
+    </label>
   </div>
   <div id="swatch-menu" class="swatch-menu hidden" role="menu">
     <label class="swatch-menu-btn" title="Farbe ändern">
