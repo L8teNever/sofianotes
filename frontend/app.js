@@ -37,6 +37,8 @@
     "sofianotes-zoom-step",
     "sofianotes-zoom-chrome",
     "sofianotes-zoom-inner-bar",
+    "sofianotes-object-dash",
+    "sofianotes-object-arrow",
     "sofianotes-zoompane-pos",
     "sofianotes-math",
     "sofianotes-eraser-return",
@@ -932,17 +934,55 @@
     c.lineTo(last.x, last.y);
   }
 
-  function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth) {
+  function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth, dash) {
     c.save();
     c.globalAlpha = alpha;
     c.strokeStyle = color;
     c.lineCap = "round";
     c.lineJoin = "round";
     c.miterLimit = 2;
+    if (dash) {
+      const on = Math.max(10, size * 2.8);
+      const off = Math.max(7, size * 1.8);
+      c.setLineDash([on, off]);
+    }
     if (smooth && !looksLikePolygon(pts)) traceMidpointPath(c, pts);
     else traceStraightPath(c, pts);
     c.lineWidth = constantWidth ? size : avgPressureWidth(pts, size);
     c.stroke();
+    c.restore();
+  }
+
+  function paintArrowHead(c, from, to, size) {
+    const ang = Math.atan2(to.y - from.y, to.x - from.x);
+    const len = Math.max(14, size * 3.4);
+    const leftAng = ang + Math.PI * 0.82;
+    const rightAng = ang - Math.PI * 0.82;
+    const L = { x: to.x + Math.cos(leftAng) * len, y: to.y + Math.sin(leftAng) * len };
+    const R = { x: to.x + Math.cos(rightAng) * len, y: to.y + Math.sin(rightAng) * len };
+    const neck = { x: to.x - Math.cos(ang) * len * 0.28, y: to.y - Math.sin(ang) * len * 0.28 };
+    c.beginPath();
+    c.moveTo(L.x, L.y);
+    c.quadraticCurveTo(neck.x, neck.y, to.x, to.y);
+    c.quadraticCurveTo(neck.x, neck.y, R.x, R.y);
+    c.stroke();
+  }
+
+  function drawArrowHeads(c, stroke, alpha) {
+    const pts = stroke.points;
+    if (!pts || pts.length < 2) return;
+    const a = pts[0];
+    const b = pts[pts.length - 1];
+    const heads = (stroke.extra && stroke.extra.arrowHeads) || "end";
+    c.save();
+    c.globalAlpha = alpha == null ? 1 : alpha;
+    c.strokeStyle = stroke.color;
+    c.lineWidth = stroke.size;
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.setLineDash([]);
+    if (heads === "end" || heads === "both") paintArrowHead(c, a, b, stroke.size);
+    if (heads === "start" || heads === "both") paintArrowHead(c, b, a, stroke.size);
     c.restore();
   }
 
@@ -992,17 +1032,20 @@
       return;
     }
     const taggedShape = stroke.extra && stroke.extra.shape;
+    const dash = !!(stroke.extra && stroke.extra.dash);
     if (
       taggedShape === "rectangle" ||
       taggedShape === "triangle" ||
       taggedShape === "line" ||
+      taggedShape === "arrow" ||
       looksLikePolygon(pts)
     ) {
-      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false);
+      drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, false, dash);
+      if (taggedShape === "arrow") drawArrowHeads(c, stroke, alpha);
       return;
     }
     // feste Breite, glatte Kurve — Druckstaerke aendert die Dicke nicht
-    drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true);
+    drawPolylineStroke(c, pts, stroke.size, stroke.color, alpha, true, true, dash);
   }
 
   const mediaImages = new Map();
@@ -1534,6 +1577,11 @@
 
   // ---- toolbar ------------------------------------------------------
   let currentTool = "pen"; // pen | marker | eraser | select
+  let objectKind = null; // null | rect | line | circle | triangle | arrow
+  let objectDash = lsGetRaw("sofianotes-object-dash") === "1";
+  let objectArrowHeads = ["end", "start", "both"].includes(lsGetRaw("sofianotes-object-arrow"))
+    ? lsGetRaw("sofianotes-object-arrow")
+    : "end";
   let currentColor = "#1E1F22";
   let penSize = 6;
   let markerSize = 24;
@@ -1672,6 +1720,7 @@
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
+    document.getElementById("objects-menu")?.classList.add("hidden");
     if (typeof closeTextColorPop === "function") closeTextColorPop();
   }
 
@@ -2841,6 +2890,7 @@
     { key: "status", label: "Verbindung", icon: "wifi", sel: "#status" },
     { key: "modes", label: "Modus-Knöpfe", icon: "ink_pen", sel: "#mode-switch" },
     { key: "ruler", label: "Lineal", icon: "straighten", sel: "#btn-ruler" },
+    { key: "objects", label: "Objekte", icon: "shapes", sel: ".objects-menu-wrap" },
     { key: "zoom", label: "Zoom-Fenster", icon: "zoom_in_map", sel: "#btn-zoom-window" },
     { key: "calc", label: "Rechner", icon: "calculate", sel: "#btn-calc" },
     { key: "hw", label: "Aufgabe", icon: "assignment", sel: "#btn-hw-panel" },
@@ -3059,6 +3109,7 @@
     }
     const helpers = [];
     if (want("ruler")) helpers.push(["straighten", "Lineal", "#btn-ruler"]);
+    if (want("objects")) helpers.push(["shapes", "Objekte", "#btn-objects"]);
     if (want("zoom")) helpers.push(["zoom_in_map", "Zoom-Fenster", "#btn-zoom-window"]);
     if (want("calc")) helpers.push(["calculate", "Rechner", "#btn-calc"]);
     if (want("hw") && hwOk) helpers.push(["assignment", "Aufgabe", "#btn-hw-panel"]);
@@ -4886,6 +4937,7 @@
   function inferShape(stroke) {
     if (!stroke || stroke.tool === "image" || stroke.tool === "text" || stroke.tool === "table") return null;
     const tagged = stroke.extra && stroke.extra.shape;
+    if (tagged === "arrow") return "arrow";
     if (tagged) return tagged;
     const pts = stroke.points || [];
     if (pts.length === 2) return "line";
@@ -4946,7 +4998,7 @@
       }
       return best;
     }
-    if (shape === "line") {
+    if (shape === "line" || shape === "arrow") {
       const a = pts[0];
       const b = pts[pts.length - 1];
       const da = Math.hypot(a.x - grab.x, a.y - grab.y);
@@ -4990,10 +5042,12 @@
         const f = d / (g.grabR || 1);
         s.points = makeEllipsePoints(g.cx, g.cy, Math.max(8, g.rx * f), Math.max(8, g.ry * f), p, 96);
       }
-    } else if (s.shape === "line") {
+    } else if (s.shape === "line" || s.shape === "arrow") {
       const pts = (s.shapeBase || s.points).map((pt) => ({ x: pt.x, y: pt.y, p: pt.p }));
       const i = (s.shapeHandle && s.shapeHandle.i) || pts.length - 1;
-      pts[i] = { x: wx, y: wy, p };
+      const other = pts[i ? 0 : pts.length - 1];
+      const snapped = s.shape === "arrow" ? snapCardinalFrom(other, world) : world;
+      pts[i] = { x: snapped.x, y: snapped.y, p };
       s.points = pts;
     } else if (s.shape === "triangle") {
       const g = s.shapeGeom;
@@ -5034,7 +5088,7 @@
         .slice(0, 3)
         .map((c, i) => ({ kind: "corner", corner: i, i, x: c.x, y: c.y }));
     }
-    if (shape === "line" && pts.length >= 2) {
+    if ((shape === "line" || shape === "arrow") && pts.length >= 2) {
       const last = pts.length - 1;
       return [
         { kind: "end", i: 0, x: pts[0].x, y: pts[0].y },
@@ -8068,6 +8122,7 @@
 
   function setMode(mode) {
     if (textEdit) commitTextEditor();
+    if (mode !== "pen") setObjectKind(null);
     // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Text aufheben
     if (mode !== "lasso" && selection.ids.size) clearSelection();
     modeSyncing = true;
@@ -8097,6 +8152,7 @@
     else if (tool === "eraser") mode = "eraser";
     else if (tool === "text") mode = "text";
     else if (tool === "select") mode = "lasso";
+    if (tool !== "pen" && tool !== "marker") setObjectKind(null);
     if (mode !== currentMode) showMode(mode);
   }
 
@@ -9531,7 +9587,60 @@
   });
   document.addEventListener("pointerdown", (e) => {
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
+    const objMenu = document.getElementById("objects-menu");
+    if (objMenu && !objMenu.classList.contains("hidden") && !e.target.closest(".objects-menu-wrap") && !e.target.closest("#objects-menu")) objMenu.classList.add("hidden");
   }, true);
+
+  const objectsMenu = document.getElementById("objects-menu");
+  const objectsBtn = document.getElementById("btn-objects");
+  function syncObjectsMenu() {
+    document.getElementById("btn-objects")?.classList.toggle("active", !!objectKind);
+    document.querySelectorAll("#objects-menu .lib-add-opt[data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
+    document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => b.classList.toggle("active", (b.dataset.dash === "1") === objectDash));
+    document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => b.classList.toggle("active", b.dataset.heads === objectArrowHeads));
+  }
+  function setObjectKind(kind) {
+    objectKind = kind || null;
+    if (objectKind && currentTool !== "pen" && currentTool !== "marker") setTool("pen");
+    syncObjectsMenu();
+  }
+  objectsBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const wasOpen = !!(objectsMenu && !objectsMenu.classList.contains("hidden"));
+    hidePopovers();
+    if (!objectsMenu) return;
+    objectsMenu.classList.toggle("hidden", wasOpen);
+    syncObjectsMenu();
+  });
+  objectsMenu?.querySelectorAll(".lib-add-opt[data-obj]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const kind = b.dataset.obj;
+      setObjectKind(objectKind === kind ? null : kind);
+      objectsMenu.classList.add("hidden");
+    });
+  });
+  document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      objectDash = b.dataset.dash === "1";
+      try {
+        localStorage.setItem("sofianotes-object-dash", objectDash ? "1" : "0");
+      } catch (err) {}
+      syncObjectsMenu();
+    });
+  });
+  document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      objectArrowHeads = b.dataset.heads;
+      try {
+        localStorage.setItem("sofianotes-object-arrow", objectArrowHeads);
+      } catch (err) {}
+      syncObjectsMenu();
+    });
+  });
+  syncObjectsMenu();
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
     if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) e.preventDefault();
@@ -9710,6 +9819,80 @@
     return e.pressure > 0 ? e.pressure : 0.5;
   }
 
+  function snapCardinalFrom(a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (Math.abs(dx) >= Math.abs(dy)) return { x: b.x, y: a.y };
+    return { x: a.x, y: b.y };
+  }
+
+  function fitObjectShape(kind, a, b, pressure) {
+    const p = pressure == null ? 0.5 : pressure;
+    const minX = Math.min(a.x, b.x);
+    const maxX = Math.max(a.x, b.x);
+    const minY = Math.min(a.y, b.y);
+    const maxY = Math.max(a.y, b.y);
+    const w = Math.max(2, maxX - minX);
+    const h = Math.max(2, maxY - minY);
+    if (kind === "rect") {
+      return {
+        type: "rectangle",
+        points: [
+          { x: minX, y: minY, p },
+          { x: maxX, y: minY, p },
+          { x: maxX, y: maxY, p },
+          { x: minX, y: maxY, p },
+          { x: minX, y: minY, p },
+        ],
+      };
+    }
+    if (kind === "circle") {
+      const side = Math.max(w, h);
+      const sx = b.x >= a.x ? 1 : -1;
+      const sy = b.y >= a.y ? 1 : -1;
+      const cx = a.x + (sx * side) / 2;
+      const cy = a.y + (sy * side) / 2;
+      const r = side / 2;
+      return { type: "circle", points: makeEllipsePoints(cx, cy, r, r, p, 96) };
+    }
+    if (kind === "triangle") {
+      return {
+        type: "triangle",
+        points: [
+          { x: (minX + maxX) / 2, y: minY, p },
+          { x: maxX, y: maxY, p },
+          { x: minX, y: maxY, p },
+          { x: (minX + maxX) / 2, y: minY, p },
+        ],
+      };
+    }
+    const end = snapCardinalFrom(a, b);
+    return {
+      type: kind === "arrow" ? "arrow" : "line",
+      points: [
+        { x: a.x, y: a.y, p },
+        { x: end.x, y: end.y, p },
+      ],
+    };
+  }
+
+  function applyObjectPreview(wx, wy, pressure) {
+    const s = currentStroke;
+    if (!s || !s.objectKind) return;
+    const origin = s.objectOrigin || s.points[0];
+    const built = fitObjectShape(s.objectKind, origin, { x: wx, y: wy }, pressure);
+    s.points = built.points;
+    s.unsent = [];
+    s.shape = built.type;
+    s.extra = Object.assign({}, s.extra || {}, {
+      shape: built.type,
+      dash: objectDash || undefined,
+      arrowHeads: s.objectKind === "arrow" ? objectArrowHeads : undefined,
+    });
+    wsSend({ type: "stroke_replace", strokeId: s.id, points: s.points, extra: s.extra });
+    requestRedraw();
+  }
+
   function startStroke(pointerId, pointerType, wx, wy, pressure) {
     clearSelection();
     const id = uuid();
@@ -9727,13 +9910,26 @@
       pointerType,
       locked: false,
     };
-    wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points });
-    if (isHoldSnapTool(tool)) armHoldTimer();
+    if (objectKind) {
+      currentStroke.objectKind = objectKind;
+      currentStroke.objectOrigin = { x: wx, y: wy };
+      currentStroke.extra = {
+        shape: objectKind === "arrow" ? "arrow" : objectKind === "rect" ? "rectangle" : objectKind === "circle" ? "circle" : objectKind === "triangle" ? "triangle" : "line",
+        dash: objectDash || undefined,
+        arrowHeads: objectKind === "arrow" ? objectArrowHeads : undefined,
+      };
+    }
+    wsSend({ type: "stroke_start", strokeId: id, tool, color: currentColor, size, points: currentStroke.points, extra: currentStroke.extra || null });
+    if (isHoldSnapTool(tool) && !objectKind) armHoldTimer();
     requestRedraw();
   }
 
   function extendStroke(wx, wy, pressure) {
     if (!currentStroke) return;
+    if (currentStroke.objectKind) {
+      applyObjectPreview(wx, wy, pressure);
+      return;
+    }
     if (currentStroke.locked) {
       reshapeLockedStroke(wx, wy);
       return;
@@ -9901,7 +10097,7 @@
     clearHoldTimer();
     // Durchstreichen loescht - aber nicht bei Lineal-Strichen (die sind immer gerade und
     // laufen oft absichtlich an anderer Tinte entlang)
-    if (currentStroke.tool === "pen" && !currentStroke.locked && !currentStroke.rulerEdge) {
+    if (currentStroke.tool === "pen" && !currentStroke.locked && !currentStroke.rulerEdge && !currentStroke.objectKind) {
       const struck = findStruckStrokes(currentStroke.points);
       if (struck.length > 0) {
         wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
@@ -9919,6 +10115,17 @@
         requestRedraw();
         return;
       }
+    }
+    if (currentStroke.objectKind) {
+      const o = currentStroke.objectOrigin || currentStroke.points[0];
+      const last = currentStroke.points[currentStroke.points.length - 1];
+      if (!last || Math.hypot(last.x - o.x, last.y - o.y) < 8) {
+        wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
+        currentStroke = null;
+        requestRedraw();
+        return;
+      }
+      currentStroke.locked = true;
     }
     if (currentStroke.unsent.length > 0) {
       wsSend({ type: "stroke_points", strokeId: currentStroke.id, points: currentStroke.unsent });
@@ -11589,15 +11796,20 @@
       }
       container.appendChild(grid);
     }
-    for (const a of files) {
-      const l = document.createElement("a");
-      l.className = "hw-file";
-      l.href = a.url;
-      l.target = "_blank";
-      l.rel = "noopener";
-      l.innerHTML = '<span class="material-symbols-rounded">attach_file</span><span></span>';
-      l.lastChild.textContent = a.name || "Datei";
-      container.appendChild(l);
+    if (files.length) {
+      const fileGrid = document.createElement("div");
+      fileGrid.className = "hw-images";
+      for (const a of files) {
+        const l = document.createElement("a");
+        l.className = "hw-file";
+        l.href = a.url;
+        l.target = "_blank";
+        l.rel = "noopener";
+        l.innerHTML = '<span class="material-symbols-rounded">attach_file</span><span></span>';
+        l.lastChild.textContent = a.name || "Datei";
+        fileGrid.appendChild(l);
+      }
+      container.appendChild(fileGrid);
     }
   }
   function renderHwDetail(hw) {
@@ -16788,6 +17000,7 @@
     const pairs = [
       ["canvas-menu", "btn-canvas-menu"],
       ["insert-menu", "btn-insert"],
+      ["objects-menu", "btn-objects"],
       ["split-menu", "btn-split"],
       ["tb-more-menu", "btn-tb-more"],
       ["canvas-share-submenu", null],
