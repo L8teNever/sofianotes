@@ -781,6 +781,9 @@ async def upsert_stroke(board_id: str, request: Request, me: dict = Depends(get_
     role = await db.board_role(me["id"], board_id) or "edit"
     if not await _writable_ids(role, me["id"], [str(stroke["id"])]):
         raise HTTPException(status_code=403, detail="read only")
+    allowed = await db.filter_owner_protected(board_id, me["id"], [str(stroke["id"])])
+    if not allowed:
+        return {"ok": True, "skipped": True}
     stroke["board_id"] = board_id
     await db.insert_stroke(stroke, me["id"])
     return {"ok": True}
@@ -794,6 +797,7 @@ async def erase_board_strokes(board_id: str, request: Request, me: dict = Depend
     stroke_ids = [s for s in body.get("strokeIds", []) if s]
     role = await db.board_role(me["id"], board_id) or "edit"
     stroke_ids = await _writable_ids(role, me["id"], stroke_ids)
+    stroke_ids = await db.filter_owner_protected(board_id, me["id"], stroke_ids)
     if stroke_ids:
         await db.delete_strokes(stroke_ids, me["id"])
     return {"ok": True}
