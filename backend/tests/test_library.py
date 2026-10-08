@@ -87,6 +87,33 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(run(db.can_access("simon", a["id"])))
         self.assertFalse(run(db.can_access("franz", a["id"])))
 
+    def test_owner_strokes_protected_from_guest(self):
+        s = run(db.create_board("simon", "Geteilt", None))
+        bid = s["id"]
+        run(db.share_board("simon", bid, "franz", "edit"))
+        stroke = {
+            "id": "own1",
+            "tool": "pen",
+            "color": "#000",
+            "size": 4,
+            "points": [{"x": 1, "y": 1}],
+            "board_id": bid,
+        }
+        run(db.insert_stroke(dict(stroke), "simon"))
+        guest = {
+            "id": "g1",
+            "tool": "pen",
+            "color": "#0f0",
+            "size": 3,
+            "points": [{"x": 2, "y": 2}],
+            "board_id": bid,
+        }
+        run(db.insert_stroke(dict(guest), "franz"))
+        kept = run(db.filter_owner_protected(bid, "franz", ["own1", "g1", "new"]))
+        self.assertEqual(kept, ["g1", "new"])
+        as_owner = run(db.filter_owner_protected(bid, "simon", ["own1", "g1"]))
+        self.assertEqual(as_owner, ["own1", "g1"])
+
     def test_client_ids_and_upsert(self):
         bid = "11111111-1111-4111-8111-111111111111"
         board = run(db.create_board("simon", "Offline", None, bid))

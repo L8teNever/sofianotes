@@ -387,6 +387,21 @@ async def stroke_owners(stroke_ids: list[str]) -> dict[str, str | None]:
         return await asyncio.get_event_loop().run_in_executor(None, _stroke_owners_sync, stroke_ids)
 
 
+def _filter_owner_protected_sync(board_id: str, person_id: str, ids: list[str]) -> list[str]:
+    """Striche, die ein Nicht-Besitzer per REST noch aendern darf (nicht vom Blatt-Admin)."""
+    row = _conn.execute("SELECT owner_id FROM boards WHERE id = ?", (board_id,)).fetchone()
+    if not row or not person_id or row[0] == person_id:
+        return list(ids)
+    owner_id = row[0]
+    authored = _stroke_owners_sync(ids)
+    return [i for i in ids if authored.get(i) != owner_id]
+
+
+async def filter_owner_protected(board_id: str, person_id: str, ids: list[str]) -> list[str]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _filter_owner_protected_sync, board_id, person_id, ids)
+
+
 SHARE_ROLES = ("edit", "add", "view")
 
 

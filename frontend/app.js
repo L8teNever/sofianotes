@@ -2383,6 +2383,10 @@
   const DOCK_HOLD_MS = 380;
   const SNAP_PX = 88;
   const HOLD_MOVE_CANCEL_PX = 14;
+  const CHROME_DRAG_PX = 8;
+  function isDockInteractiveTarget(target) {
+    return !!(target && target.closest && target.closest("button, input, textarea, a, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .zoom-wrap"));
+  }
 
   function hideGuides() {
     Object.values(guides).forEach((el) => el.classList.remove("visible", "hot"));
@@ -2481,16 +2485,31 @@
 
   let dockDrag = null;
 
+  function beginLiveDockDrag() {
+    if (!dockDrag || dockDrag.live) return;
+    hidePopovers();
+    const r = liftDock(dockDrag.el, dockDrag.kind);
+    dockDrag.live = true;
+    dockDrag.grabDX = dockDrag.lastX - r.left;
+    dockDrag.grabDY = dockDrag.lastY - r.top;
+    try {
+      dockDrag.el.setPointerCapture(dockDrag.pointerId);
+    } catch (err) {}
+    moveDockDrag(dockDrag.lastX, dockDrag.lastY);
+  }
+
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu")) return;
     if (kind !== "topbar") e.preventDefault();
     const el = kind === "dock" ? toolbarEl : kind === "topbar" ? topBar : undoDock;
+    const fromChrome = !isDockInteractiveTarget(e.target);
     dockDrag = {
       kind,
       el,
       pointerId: e.pointerId,
       live: false,
+      fromChrome,
       startX: e.clientX,
       startY: e.clientY,
       lastX: e.clientX,
@@ -2498,18 +2517,7 @@
       grabDX: 0,
       grabDY: 0,
       snap: null,
-      timer: setTimeout(() => {
-        if (!dockDrag || dockDrag.live) return;
-        hidePopovers();
-        const r = liftDock(el, kind);
-        dockDrag.live = true;
-        dockDrag.grabDX = dockDrag.lastX - r.left;
-        dockDrag.grabDY = dockDrag.lastY - r.top;
-        try {
-          el.setPointerCapture(dockDrag.pointerId);
-        } catch (err) {}
-        moveDockDrag(dockDrag.lastX, dockDrag.lastY);
-      }, DOCK_HOLD_MS),
+      timer: setTimeout(() => beginLiveDockDrag(), DOCK_HOLD_MS),
     };
   }
 
@@ -2585,6 +2593,13 @@
     dockDrag.lastY = e.clientY;
     if (!dockDrag.live) {
       const moved = Math.hypot(e.clientX - dockDrag.startX, e.clientY - dockDrag.startY);
+      if (dockDrag.fromChrome) {
+        if (moved > CHROME_DRAG_PX) {
+          clearTimeout(dockDrag.timer);
+          beginLiveDockDrag();
+        }
+        return;
+      }
       if (moved > HOLD_MOVE_CANCEL_PX) {
         clearTimeout(dockDrag.timer);
         dockDrag = null;
@@ -2703,6 +2718,7 @@
       const el = document.querySelector(it.sel);
       if (el) el.classList.toggle("tb-off", topBarHidden.includes(it.key));
     }
+    if (statusEl && !statusEl.classList.contains("hidden")) statusEl.classList.remove("tb-off");
     // doppelte/haengende Trennstriche ausblenden
     let prevVisible = null;
     const kids = Array.from(topBar.children);
@@ -3027,32 +3043,61 @@
     // Blatt wird gerade erst angelegt: Striche bleiben lokal und gehen danach gesammelt raus
     if (creatingBoard && creatingBoard.id === currentBoardId) return;
     if (!currentBoardId || !currentPersonId) return;
+    // Gaeste im geteilten Blatt: offline nur lokal, nichts in die Warteschlange
+    if (myRole !== "owner") return;
     if (obj.type === "stroke_end" && currentStroke) {
-      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: serializeStroke(currentStroke) });
+      const stroke = serializeStroke(currentStroke);
+      if (!stroke.author) stroke.author = currentPersonId;
+      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke, role: "owner" });
     } else if (obj.type === "stroke_move" && obj.stroke) {
-      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: obj.stroke });
+      enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: currentBoardId, stroke: obj.stroke, role: "owner" });
     } else if (obj.type === "erase" && obj.strokeIds) {
-      enqueueOp({ type: "stroke_erase", personId: currentPersonId, boardId: currentBoardId, strokeIds: obj.strokeIds });
+      enqueueOp({ type: "stroke_erase", personId: currentPersonId, boardId: currentBoardId, strokeIds: obj.strokeIds, role: "owner" });
     }
   }
 
   let reconnecting = false; // Offline-Knopf angetippt: Versuch laeuft
   function setConnState(mode) {
     if (reconnecting && mode === "offline") return; // Ergebnis zeigt der Knopf selbst
+    const prevMode = statusEl.dataset.mode;
     statusEl.classList.toggle("connected", mode === "live");
     statusEl.classList.toggle("offline", mode === "offline");
     statusEl.classList.toggle("sync", mode === "sync");
     statusEl.classList.remove("trying");
-    statusEl.classList.toggle("hidden", mode !== "offline");
-    statusTextEl.textContent = mode === "live" ? "Live" : mode === "sync" ? "Sync…" : "Offline";
+    statusEl.classList.toggle("hidden", mode !== "offline" && mode !== "sync");
+    const guest = myRole && myRole !== "owner";
+    if (mode === "sync") {
+      statusTextEl.textContent = "Sync…";
+      statusEl.title = "Änderungen werden abgeglichen";
+    } else if (mode === "offline") {
+      statusTextEl.textContent = "Offline";
+      statusEl.title = guest
+        ? "Offline – Suche und Änderungen bleiben nur auf diesem Gerät und gehen nicht ins geteilte Blatt"
+        : "Offline – du kannst weiterarbeiten. Antippen, um neu zu verbinden; danach wird abgeglichen.";
+    } else {
+      statusTextEl.textContent = "Live";
+      statusEl.title = "Verbunden";
+    }
+    if (mode === "offline" && prevMode !== "offline" && guest && currentBoardId && typeof navigator !== "undefined" && navigator.onLine === false) {
+      showToast("Offline: Suche bleibt lokal – Änderungen am geteilten Blatt werden nicht übernommen");
+    }
     const ico = statusEl.querySelector(".status-ico");
-    if (ico) ico.textContent = "cloud_off";
-    if (typeof layoutTopBar === "function" && statusEl.dataset.mode !== mode) {
+    if (ico) ico.textContent = mode === "sync" ? "sync" : "cloud_off";
+    if (typeof applyTopBarItems === "function" && statusEl.dataset.mode !== mode) {
+      statusEl.dataset.mode = mode;
+      try {
+        applyTopBarItems();
+      } catch (err) {
+        try {
+          layoutTopBar();
+        } catch (e2) {}
+      }
+    } else if (typeof layoutTopBar === "function" && statusEl.dataset.mode !== mode) {
       statusEl.dataset.mode = mode;
       try {
         layoutTopBar();
       } catch (err) {}
-    }
+    } else statusEl.dataset.mode = mode;
   }
   // Offline antippen: sofort neu versuchen und Bescheid geben, ob es geklappt hat
   statusEl.addEventListener("click", async (e) => {
@@ -3210,7 +3255,18 @@
     }
   }
 
+  function shouldFlushOp(op) {
+    if (!op) return false;
+    // Suche/Filter nie mitsenden; Gaeste-Striche aufs geteilte Blatt nicht uebernehmen
+    if (op.type === "search" || op.type === "filter" || op.type === "view") return false;
+    if (op.type === "stroke_put" || op.type === "stroke_erase" || op.type === "notebook_patch") {
+      if (op.role && op.role !== "owner") return false;
+    }
+    return true;
+  }
+
   async function enqueueOp(op) {
+    if (!op.ts) op.ts = Date.now();
     if (window.SofiaOffline) await SofiaOffline.enqueue(op);
   }
 
@@ -3219,8 +3275,14 @@
     const entries = await SofiaOffline.outboxEntries();
     if (!entries.length) return true;
     setConnState("sync");
+    const rank = (op) => (op && op.role === "owner" ? 1 : 0);
+    entries.sort((a, b) => rank(a.op) - rank(b.op) || (a.op.ts || 0) - (b.op.ts || 0));
     for (const item of entries) {
       try {
+        if (!shouldFlushOp(item.op)) {
+          await SofiaOffline.outboxDelete(item.key);
+          continue;
+        }
         await sendQueuedOp(item.op);
         await SofiaOffline.outboxDelete(item.key);
       } catch (err) {
@@ -3327,6 +3389,15 @@
         { method: "DELETE" }
       );
       if (!r.ok) throw opErr(r, "unshare");
+      return;
+    }
+    if (op.type === "notebook_patch") {
+      const r = await fetch("/api/boards/" + encodeURIComponent(op.boardId), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ notebook: op.notebook }),
+      });
+      if (!r.ok) throw opErr(r, "notebook");
       return;
     }
     if (op.type === "stroke_put") {
@@ -6445,7 +6516,7 @@
 
   function layoutZoomPane() {
     if (!zoomPaneEl) return;
-    const h = Math.round(Math.max(170, Math.min(320, window.innerHeight * 0.3)));
+    const h = Math.round(Math.max(214, Math.min(368, window.innerHeight * 0.3 + 48)));
     const { minTop, maxTop } = zoomPaneBounds(h);
     zoomPaneEl.style.bottom = "auto";
     zoomPaneEl.style.top = Math.round(minTop + (maxTop - minTop) * zoomPaneFrac) + "px";
@@ -6901,46 +6972,42 @@
     act("btn-zw-out", () => setRows(zoomWin.rows + 0.5));
     act("btn-zw-close", closeZoomWindow);
 
-    // Griff: Schreibflaeche nach oben/unten ziehen (Finger, Stift oder Maus)
-    const grip = document.getElementById("btn-zw-move");
-    if (grip) {
-      grip.addEventListener("pointerdown", (e) => {
-        if (!zoomWin) return;
-        e.preventDefault();
-        e.stopPropagation();
-        try {
-          grip.setPointerCapture(e.pointerId);
-        } catch (err) {
-          // egal
-        }
-        const r = zoomPaneEl.getBoundingClientRect();
-        zoomPaneDrag = { pointerId: e.pointerId, offset: e.clientY - r.top, h: r.height };
-        zoomPaneEl.classList.add("moving");
-      });
-      grip.addEventListener("pointermove", (e) => {
-        if (!zoomPaneDrag || zoomPaneDrag.pointerId !== e.pointerId) return;
-        const { minTop, maxTop } = zoomPaneBounds(zoomPaneDrag.h);
-        const top = Math.max(minTop, Math.min(maxTop, e.clientY - zoomPaneDrag.offset));
-        zoomPaneFrac = maxTop > minTop ? (top - minTop) / (maxTop - minTop) : 1;
-        requestRedraw();
-      });
-      const endDrag = (e) => {
-        if (!zoomPaneDrag || zoomPaneDrag.pointerId !== e.pointerId) return;
-        zoomPaneDrag = null;
-        zoomPaneEl.classList.remove("moving");
-        // nahe oben/unten/Mitte einrasten
-        for (const snap of [0, 0.5, 1]) if (Math.abs(zoomPaneFrac - snap) < 0.08) zoomPaneFrac = snap;
-        try {
-          localStorage.setItem("sofianotes-zoompane-pos", String(zoomPaneFrac));
-        } catch (err) {
-          // privater Modus o.ae.
-        }
-        keepZoomBoxVisible();
-        requestRedraw();
-      };
-      grip.addEventListener("pointerup", endDrag);
-      grip.addEventListener("pointercancel", endDrag);
-    }
+    // Leiste/Rahmen ziehen (kein 6-Punkt-Griff): nicht auf der Schreibflaeche, nicht auf Knoepfen
+    const endZoomPaneDrag = (e) => {
+      if (!zoomPaneDrag || zoomPaneDrag.pointerId !== e.pointerId) return;
+      zoomPaneDrag = null;
+      zoomPaneEl.classList.remove("moving");
+      for (const snap of [0, 0.5, 1]) if (Math.abs(zoomPaneFrac - snap) < 0.08) zoomPaneFrac = snap;
+      try {
+        localStorage.setItem("sofianotes-zoompane-pos", String(zoomPaneFrac));
+      } catch (err) {
+        // privater Modus o.ae.
+      }
+      keepZoomBoxVisible();
+      requestRedraw();
+    };
+    zoomPaneEl.addEventListener("pointerdown", (e) => {
+      if (!zoomWin) return;
+      if (e.target.closest("canvas, button")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        zoomPaneEl.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      const r = zoomPaneEl.getBoundingClientRect();
+      zoomPaneDrag = { pointerId: e.pointerId, offset: e.clientY - r.top, h: r.height };
+      zoomPaneEl.classList.add("moving");
+    });
+    zoomPaneEl.addEventListener("pointermove", (e) => {
+      if (!zoomPaneDrag || zoomPaneDrag.pointerId !== e.pointerId) return;
+      e.preventDefault();
+      const { minTop, maxTop } = zoomPaneBounds(zoomPaneDrag.h);
+      const top = Math.max(minTop, Math.min(maxTop, e.clientY - zoomPaneDrag.offset));
+      zoomPaneFrac = maxTop > minTop ? (top - minTop) / (maxTop - minTop) : 1;
+      requestRedraw();
+    });
+    zoomPaneEl.addEventListener("pointerup", endZoomPaneDrag);
+    zoomPaneEl.addEventListener("pointercancel", endZoomPaneDrag);
   }
   if (zoomWinBtn) zoomWinBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -12486,21 +12553,30 @@
     tool: currentTool,
     split: typeof splitOn === "function" ? !!splitOn() : false,
   }));
-  // Ansicht pro Blatt merken (Seite, Zoom, Ausschnitt) und beim naechsten Oeffnen dorthin
+  // Ansicht pro Person+Blatt merken (Seite, Zoom, Ausschnitt) und beim naechsten Oeffnen dorthin
   let viewRestoreFor = null;
+  function viewStorageKey(bid) {
+    return "sofianotes-view:" + (currentPersonId || "anon") + ":" + bid;
+  }
   function saveView(bid) {
     if (!bid || historyView) return;
     try {
       const v = { s: scale, x: offsetX, y: offsetY, w: window.innerWidth, h: window.innerHeight, l: viewLeft };
       if (notebook && window.sofiaCurrentPage) v.page = window.sofiaCurrentPage();
-      localStorage.setItem("sofianotes-view:" + bid, JSON.stringify(v));
+      const raw = JSON.stringify(v);
+      localStorage.setItem(viewStorageKey(bid), raw);
     } catch (err) {}
   }
   function restoreView(bid) {
     let v = null;
     try {
-      v = JSON.parse(lsGetRaw("sofianotes-view:" + bid) || "null");
+      v = JSON.parse(lsGetRaw(viewStorageKey(bid)) || "null");
     } catch (err) {}
+    if (!v) {
+      try {
+        v = JSON.parse(lsGetRaw("sofianotes-view:" + bid) || "null");
+      } catch (err) {}
+    }
     if (!v || !Number.isFinite(v.s)) return false;
     const sameScreen = Math.abs(v.w - window.innerWidth) < 4 && Math.abs(v.h - window.innerHeight) < 4 && Math.abs((v.l || 0) - viewLeft) < 4;
     if (notebook && Number.isFinite(v.page) && (!sameScreen || v.page >= notebook.pages.length)) {
@@ -14039,7 +14115,7 @@
         const st = boardStrokes.get(id);
         if (!st) continue;
         if (bid === currentBoardId) wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
-        else if (currentPersonId) enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: bid, stroke: serializeStroke(st) });
+        else if (currentPersonId && myRole === "owner") enqueueOp({ type: "stroke_put", personId: currentPersonId, boardId: bid, stroke: serializeStroke(st), role: "owner" });
       }
       if (moveQueue.size) moveTimer = setTimeout(() => flushStrokeMoves(false), 16);
       else moveQueueBoard = null;
@@ -14101,7 +14177,9 @@
           body: JSON.stringify({ notebook: nb }),
         });
       } catch (err) {
-        showToast("Seiten speichern hat nicht geklappt");
+        if (myRole === "owner" && currentPersonId) {
+          enqueueOp({ type: "notebook_patch", personId: currentPersonId, boardId: bid, notebook: nb, role: "owner" });
+        } else showToast("Seiten speichern hat nicht geklappt");
       }
       nbInFlight = false;
       if (nbQueued) pushNotebook();
