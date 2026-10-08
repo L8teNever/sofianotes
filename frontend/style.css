@@ -3532,3 +3532,23 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
 .top-back-btn:hover, .top-back-btn:active { background: rgba(103, 80, 164, 0.1); }
 .top-back-btn .material-symbols-rounded { font-size: 30px; font-weight: 600; }
 .top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--view-left) + var(--back-shift, 0px)); }
+
+/* Seiten-Leiste als schwebende Karte (Material): Abstand zum Rand, runde Ecken, Schatten, kommt von links */
+.pages-panel {
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: calc(env(safe-area-inset-left, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  padding-top: 0;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 28px;
+  background: #f7f2fa;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  animation: pages-in 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+.pages-head { padding: 16px 14px 10px 16px; }
+.pages-grid { padding-bottom: 16px; }
+@keyframes pages-in {
+  from { transform: translateX(calc(-100% - 24px)); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
+}

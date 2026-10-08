@@ -13435,12 +13435,12 @@
     // Menue einer Seite (▾ unter dem Vorschaubild)
     function pageMenu(i, anchor) {
       const pg = notebook.pages[i];
-      const items = [{ head: "Seite " + (i + 1) + " – Hintergrund" }];
+      // Drehen ganz oben, damit es schnell zu finden ist
+      const items = [{ head: "Seite " + (i + 1) }, { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) }, { head: "Hintergrund" }];
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
       for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBgSafe(i, { paper: "blank", mediaId: u.mediaId }) });
       items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
       items.push({ head: "Seite" });
-      items.push({ icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) });
       items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
       items.push({ icon: "content_copy", label: "Neue Seite davor", run: () => addPages(i - 1, [templatePage()]) });
       items.push({ icon: "delete", label: "Seite löschen", danger: true, run: () => deletePage(i) });
@@ -13483,7 +13483,8 @@
       panel.classList.toggle("hidden", !panelOpen);
       pagesBtn.classList.toggle("active", panelOpen);
       pagesInsetLeft = panelOpen ? Math.min(PANEL_W, Math.round(window.innerWidth * 0.4)) : 0;
-      panel.style.width = pagesInsetLeft + "px";
+      // schwebende Karte mit Abstand zum Rand: Breite = Platz minus Rand
+      panel.style.width = Math.max(0, pagesInsetLeft - 14) + "px";
       setViewInsets(requestedInsets[0], requestedInsets[1]);
       try {
         localStorage.setItem("sofianotes-pages-panel", panelOpen ? "1" : "0");
@@ -13644,13 +13645,9 @@
         cell.appendChild(cv);
         const foot = document.createElement("div");
         foot.className = "page-thumb-foot";
-        foot.innerHTML = '<span></span><span class="page-thumb-acts"><button type="button" class="page-thumb-rot hw-panel-btn" title="Seite drehen"><span class="material-symbols-rounded">rotate_right</span></button><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite"><span class="material-symbols-rounded">expand_more</span></button></span>';
+        foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite: drehen, Hintergrund, löschen …"><span class="material-symbols-rounded">expand_more</span></button>';
         foot.firstChild.textContent = i + 1;
         cell.appendChild(foot);
-        foot.querySelector(".page-thumb-rot").addEventListener("click", (e) => {
-          e.stopPropagation();
-          rotatePage(i);
-        });
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
           if (thumbDrag && thumbDrag.done) return;
