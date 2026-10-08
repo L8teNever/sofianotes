@@ -3668,3 +3668,5 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 .split-grip { width: 6px; height: 64px; border: none; border-radius: 999px; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14); transition: height 0.2s, background 0.2s; }
 .split-divider:hover .split-grip, .split-divider:active .split-grip { height: 96px; background: #eaddff; }
 .split-active { height: 4px; background: #6750a4; border-radius: 0 0 4px 4px; }
+/* Rueckgaengig-Pille in der Ecke oben rechts: links neben dem Einstellungs-Knopf, nicht darunter */
+#undo-redo-dock.corner-top-right { right: calc(var(--safe-right) + var(--view-right) + var(--menu-shift, 0px)); }

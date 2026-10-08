@@ -593,6 +593,9 @@
     const sideW = sideOn && !vertical ? side.offsetWidth + 8 : 0;
     // kleine Leiste sitzt ganz links am Rand; die Rueckgaengig-Pille in derselben Ecke rueckt daneben
     const atBottom0 = bar.classList.contains("tb-bottom");
+    // Rueckgaengig-Pille oben rechts rueckt neben den Einstellungs-Knopf
+    const mb0 = document.getElementById("top-menu-bar");
+    document.documentElement.style.setProperty("--menu-shift", mb0 && mb0.offsetWidth ? mb0.offsetWidth + 8 + "px" : "0px");
     // ganz links davor: der Zurueck-Pfeil (bei senkrechter Kopfleiste immer oben)
     const back = document.getElementById("top-back-bar");
     const backBottom = atBottom0 && !vertical;
