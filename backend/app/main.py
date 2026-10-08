@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
-from . import board_file, cloudflare_ocr, db, files, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
+from . import board_file, clientlog, cloudflare_ocr, db, files, goodnotes_export, media, shape_learning, sofia_sync, spellcheck
 from .auth import get_current_person, get_current_person_ws, require_admin
 from .version import get_version_info, inject_build
 from .ws_manager import ConnectionManager
@@ -62,6 +62,19 @@ async def on_startup() -> None:
 @app.get("/api/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@app.post("/api/log")
+async def client_log(request: Request, me: dict = Depends(get_current_person)) -> dict:
+    """Fehlermeldung vom Geraet (wann, was, wo, welche Version, letzte Bedienschritte)."""
+    body = await _json_body(request)
+    ok = clientlog.add(me["id"], me.get("name") or me["id"], body if isinstance(body, dict) else {})
+    return {"ok": ok}
+
+
+@app.get("/api/admin/log")
+async def admin_log(limit: int = 100, _: dict = Depends(require_admin)) -> dict:
+    return {"entries": clientlog.recent(max(1, min(500, limit)))}
 
 
 @app.get("/api/version")

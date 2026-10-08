@@ -379,6 +379,102 @@
   const MIN_MOVE_WORLD = 0.35; // kleine Stiftbewegungen zaehlen mit, sonst wirken Kurven eckig
   const GAP_FILL_WORLD = 3.5; // grosse Luecken zwischen Samples mit Zwischenpunkten fuellen
 
+  // ---- Fehlerprotokoll: Fehler + die letzten Bedienschritte gehen automatisch an den Server ----
+  // Gemeldet wird: wann, was, wo (Blatt/Ordner/Seite), welche App-Version, Geraet und
+  // die letzten ~30 Schritte (Antippen von Knoepfen, Anlegen, Speichern ...).
+  const sofiaLog = (() => {
+    const crumbs = [];
+    const sent = new Map(); // message -> zuletzt gesendet
+    let version = null;
+    let ctx = () => ({});
+    const hhmmss = () => new Date().toTimeString().slice(0, 8);
+    function action(text) {
+      crumbs.push(hhmmss() + " " + String(text).slice(0, 120));
+      if (crumbs.length > 40) crumbs.shift();
+    }
+    function load() {
+      if (version) return;
+      version = {};
+      fetch("/api/version").then((r) => r.json()).then((v) => (version = v || {}), () => {});
+    }
+    async function send(entry) {
+      try {
+        const r = await fetch("/api/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry), keepalive: true });
+        if (!r.ok) throw new Error("log");
+        return true;
+      } catch (err) {
+        // kein Netz: spaeter nachholen (hoechstens 20 Eintraege)
+        try {
+          const q = JSON.parse(localStorage.getItem("sofianotes-logq") || "[]");
+          q.push(entry);
+          localStorage.setItem("sofianotes-logq", JSON.stringify(q.slice(-20)));
+        } catch (e) {}
+        return false;
+      }
+    }
+    async function flushQueue() {
+      let q = [];
+      try {
+        q = JSON.parse(localStorage.getItem("sofianotes-logq") || "[]");
+        localStorage.removeItem("sofianotes-logq");
+      } catch (err) {}
+      for (const e of q) await send(e);
+    }
+    function report(kind, message, stack, extra) {
+      try {
+        message = String(message || "").slice(0, 500);
+        if (!message) return;
+        const now = Date.now();
+        if (sent.has(message) && now - sent.get(message) < 60000) return; // gleiche Meldung nicht dauernd
+        sent.set(message, now);
+        if (sent.size > 50) sent.delete(sent.keys().next().value);
+        send({
+          clientAt: new Date().toString().slice(0, 33),
+          kind,
+          message,
+          stack: stack ? String(stack) : "",
+          where: Object.assign({ url: location.pathname + location.search }, ctx(), extra || {}),
+          version: version || {},
+          ua: navigator.userAgent,
+          online: navigator.onLine,
+          actions: crumbs.slice(),
+        });
+      } catch (err) {}
+    }
+    window.addEventListener("error", (e) => {
+      if (e.target && e.target !== window && e.target.tagName) return; // fehlende Bilder usw. nicht
+      report("error", e.message, e.error && e.error.stack, { file: String(e.filename || "").split("/").pop() + ":" + e.lineno });
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      const r = e.reason;
+      report("promise", (r && r.message) || String(r), r && r.stack);
+    });
+    // Bedienschritte: jedes Antippen eines Knopfs (Beschriftung/ID), ohne Inhalte
+    document.addEventListener(
+      "click",
+      (e) => {
+        const b = e.target && e.target.closest && e.target.closest("button, [role=button], .lib-card, .set-nav, label");
+        if (!b) return;
+        const name = b.id || b.title || b.getAttribute("aria-label") || (b.textContent || "").trim().slice(0, 30) || b.className;
+        action("tap " + String(name).slice(0, 60));
+      },
+      true
+    );
+    window.addEventListener("online", flushQueue);
+    setTimeout(() => {
+      load();
+      if (navigator.onLine) flushQueue();
+    }, 3000);
+    return {
+      action,
+      report,
+      setContext(fn) {
+        ctx = fn;
+      },
+    };
+  })();
+  window.sofiaLog = sofiaLog;
+
   const uuid = () =>
     (crypto.randomUUID && crypto.randomUUID()) ||
     "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -10099,10 +10195,21 @@
 
   // ---- boot ------------------------------------------------------
   function api(path, opts) {
-    return fetch(path, opts).then((r) => {
-      if (!r.ok) throw new Error(String(r.status));
-      return r.json();
-    });
+    const method = (opts && opts.method) || "GET";
+    return fetch(path, opts).then(
+      (r) => {
+        if (!r.ok) {
+          sofiaLog.report("api", method + " " + path.split("?")[0].replace(/[0-9a-f-]{20,}/g, "…") + " -> " + r.status, "");
+          throw new Error(String(r.status));
+        }
+        return r.json();
+      },
+      (err) => {
+        // kein Netz ist normal und wird nicht gemeldet
+        if (navigator.onLine) sofiaLog.report("api", method + " " + path.split("?")[0].replace(/[0-9a-f-]{20,}/g, "…") + " -> " + ((err && err.message) || "Netzwerkfehler"), "");
+        throw err;
+      }
+    );
   }
 
   function syncWhoChip() {
@@ -11957,6 +12064,16 @@
 
   // Rueckgaengig/Wiederholen bleibt pro Blatt erhalten - auch nach Verlassen und
   // Wiederoeffnen (im Speicher) und nach Neustart der App (lokal im Geraet).
+  sofiaLog.setContext(() => ({
+    board: currentBoardId || "",
+    folder: currentFolderId || "",
+    library: !libraryBackdrop.classList.contains("hidden"),
+    notebook: !!notebook,
+    page: notebook && window.sofiaCurrentPage ? window.sofiaCurrentPage() + 1 : undefined,
+    person: currentPersonId || "",
+    tool: currentTool,
+    split: typeof splitOn === "function" ? !!splitOn() : false,
+  }));
   const undoHistory = new Map(); // boardId -> {undo, redo}
   function stashUndo(bid) {
     if (!bid) return;
@@ -11979,6 +12096,7 @@
   document.addEventListener("visibilitychange", () => document.hidden && currentBoardId && stashUndo(currentBoardId));
 
   async function openBoard(id, title, opts) {
+    sofiaLog.action("Blatt öffnen " + String(id).slice(0, 8) + (opts && opts.creating ? " (neu)" : ""));
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     if (window.sofiaHistoryClose && id !== currentBoardId) window.sofiaHistoryClose();
     // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
@@ -12236,6 +12354,7 @@
   // Die ID entsteht hier, der Server uebernimmt sie. Klappt das Anlegen nicht (kein Netz),
   // geht es in die Warteschlange und wird nachgeholt.
   async function createBoardInstant(title, notebookData) {
+    sofiaLog.action("anlegen: " + (notebookData ? "Notizbuch" : "Blatt") + " in Ordner " + (currentFolderId || "-"));
     const id = uuid();
     const folderId = currentFolderId;
     const entry = { id, ownerId: currentPersonId, title, folderId, shared: false, sharedWith: [], notebook: !!notebookData, updatedAt: Date.now() / 1000 };
@@ -12248,6 +12367,7 @@
     if (notebookData) body.notebook = notebookData;
     const promise = api("/api/boards", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     creatingBoard = { id, promise };
+    promise.catch((err) => sofiaLog.report("anlegen", "Blatt anlegen fehlgeschlagen: " + ((err && err.message) || err), "", { folder: folderId || "", notebook: !!notebookData }));
     if (notebookData) {
       notebook = JSON.parse(JSON.stringify(notebookData));
       notebookBoardId = id;
@@ -12279,6 +12399,7 @@
 
   // Notizbuch mit A4-Seiten (Papier der ersten Seite = Standard fuer neue Blaetter)
   async function createNotebook() {
+    sofiaLog.action("neues Notizbuch in Ordner " + (currentFolderId || "-"));
     const res = await openNameSheet({ title: "Neues Notizbuch", label: "Titel", placeholder: "z. B. Deutsch Heft" });
     if (res === null) return;
     const title = res.value.trim() || "Notizbuch";
@@ -12288,6 +12409,7 @@
   }
 
   async function createBoard() {
+    sofiaLog.action("neues Blatt in Ordner " + (currentFolderId || "-"));
     const res = await openNameSheet({ title: "Neues Blatt", label: "Titel", placeholder: "z. B. Mathe Mitschrift" });
     if (res === null) return;
     createBoardInstant(res.value.trim() || "Unbenannte Skizze", null);

@@ -12,3 +12,4 @@ data/media/*
 !data/media/.gitkeep
 .env
 data/files/*
+data/client-log.jsonl
