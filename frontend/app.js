@@ -11921,12 +11921,32 @@
   (function trackVisualViewport() {
     const vv = window.visualViewport;
     if (!vv) return;
+    // Nur solange wirklich getippt wird (Tastatur offen) und die Seite nicht gezoomt ist, zaehlt
+    // die sichtbare Hoehe. Sonst volle Hoehe - iOS meldet das Schliessen der Tastatur nicht
+    // immer, dann blieben Dialoge sonst auf einen schmalen Streifen oben geschrumpft.
+    const typing = () => {
+      const a = document.activeElement;
+      return !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) && !/^(button|checkbox|radio|range|file|color)$/i.test(a.type || "");
+    };
     const upd = () => {
-      document.documentElement.style.setProperty("--vvh", vv.height + "px");
-      document.documentElement.style.setProperty("--vvt", vv.offsetTop + "px");
+      const useVv = typing() && (vv.scale || 1) < 1.05 && vv.height > 120;
+      document.documentElement.style.setProperty("--vvh", (useVv ? vv.height : window.innerHeight) + "px");
+      document.documentElement.style.setProperty("--vvt", (useVv ? vv.offsetTop : 0) + "px");
+    };
+    const later = () => {
+      upd();
+      setTimeout(upd, 350);
+      setTimeout(upd, 900);
     };
     vv.addEventListener("resize", upd);
     vv.addEventListener("scroll", upd);
+    window.addEventListener("resize", upd);
+    window.addEventListener("orientationchange", later);
+    document.addEventListener("focusin", later);
+    document.addEventListener("focusout", later);
+    document.addEventListener("visibilitychange", later);
+    // jedes Oeffnen eines Dialogs: Hoehe frisch nehmen
+    document.addEventListener("pointerdown", upd, true);
     upd();
   })();
 
