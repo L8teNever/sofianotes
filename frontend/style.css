@@ -2683,8 +2683,8 @@ button {
 }
 #toolbar.dock-left { left: calc(var(--safe-left) + var(--view-left)); }
 #toolbar.dock-right { right: calc(var(--safe-right) + var(--view-right)); }
-#undo-redo-dock.corner-top-left,
-#undo-redo-dock.corner-bottom-left { left: calc(var(--safe-left) + var(--view-left)); }
+#undo-redo-dock.corner-top-left { left: calc(var(--safe-left) + var(--view-left) + var(--side-shift-top, 0px)); }
+#undo-redo-dock.corner-bottom-left { left: calc(var(--safe-left) + var(--view-left) + var(--side-shift-bottom, 0px)); }
 #undo-redo-dock.corner-top-right,
 #undo-redo-dock.corner-bottom-right { right: calc(var(--safe-right) + var(--view-right)); }
 .zoom-pane {
@@ -3518,3 +3518,9 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
 #top-filename-bar:not(.tb-vertical):not(.free-drag),
 .top-side-bar:not(.tsb-vertical) { border-radius: 22px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); }
 .top-side-bar:not(.tsb-vertical) { padding: 6px; gap: 2px; }
+
+/* kleine Leiste ganz links am Rand; rueckt mit der Seiten-Leiste nach rechts */
+.top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--view-left)); top: var(--safe-top); }
+.top-side-bar.tsb-corner.tsb-bottom { top: auto; bottom: var(--safe-bottom); }
+/* Kopfleiste innen wie die anderen beiden Leisten */
+#top-filename-bar:not(.tb-vertical) { padding: 6px; gap: 4px; }

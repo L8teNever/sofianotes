@@ -480,6 +480,10 @@
     const sideOn = !!side && Array.from(side.children).some((c) => !c.classList.contains("hidden") && !c.classList.contains("tb-off"));
     if (side) side.classList.toggle("tsb-empty", !sideOn);
     const sideW = sideOn && !vertical ? side.offsetWidth + 8 : 0;
+    // kleine Leiste sitzt ganz links am Rand; die Rueckgaengig-Pille in derselben Ecke rueckt daneben
+    const atBottom0 = bar.classList.contains("tb-bottom");
+    document.documentElement.style.setProperty("--side-shift-top", sideW && !atBottom0 ? sideW + "px" : "0px");
+    document.documentElement.style.setProperty("--side-shift-bottom", sideW && atBottom0 ? sideW + "px" : "0px");
     if (vertical) {
       document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
       bar.style.maxWidth = "";
@@ -507,7 +511,10 @@
       if (u.left < (from + to) / 2) from = Math.max(from, u.right + 10);
       else to = Math.min(to, u.left - 10);
     }
-    from += sideW;
+    if (sideW) {
+      placeSideBar();
+      from = Math.max(from, side.getBoundingClientRect().right + 10);
+    }
     const avail = Math.max(200, to - from);
     // passt die Leiste nicht ganz, wird sie seitlich scrollbar (statt aus dem Bild zu laufen)
     bar.style.maxWidth = "none";
@@ -518,7 +525,7 @@
     const w = Math.min(natural, avail);
     // mittig ueber dem ganzen Bild, aber nie in den gesperrten Bereich
     const center = (viewLeft + window.innerWidth - viewRight) / 2;
-    let left = center - (w + sideW) / 2 + sideW;
+    let left = center - w / 2;
     left = Math.max(from, Math.min(to - w, left));
     bar.style.transform = "none";
     bar.style.left = Math.round(left) + "px";
@@ -541,10 +548,14 @@
       top = r.top - sh - 8;
       if (top < 4) top = r.bottom + 8;
     } else {
-      // immer links neben der Kopfleiste
-      left = Math.max(4, r.left - sw - 8);
-      top = r.top + (r.height - sh) / 2;
+      // ganz links am Rand (neben einer offenen Seiten-Leiste), oben bzw. unten wie die Kopfleiste
+      side.classList.toggle("tsb-bottom", bar.classList.contains("tb-bottom"));
+      side.classList.add("tsb-corner");
+      side.style.left = "";
+      side.style.top = "";
+      return;
     }
+    side.classList.remove("tsb-corner", "tsb-bottom");
     // nicht ueber die Rueckgaengig-Pille legen: dann auf die andere Seite der Kopfleiste
     const undo = document.getElementById("undo-redo-dock");
     const u = undo ? undo.getBoundingClientRect() : null;
@@ -574,6 +585,8 @@
     new MutationObserver(() => placeSideBar()).observe(bar, { attributes: true, attributeFilter: ["style", "class"] });
     new MutationObserver(again).observe(side, { attributes: true, subtree: true, attributeFilter: ["class"] });
     bar.addEventListener("transitionend", placeSideBar);
+    // Rueckgaengig-Pille gleitet beim Oeffnen der Seiten-Leiste: danach Kopfleiste neu ausrichten
+    document.getElementById("undo-redo-dock")?.addEventListener("transitionend", again);
   })();
   window.addEventListener("resize", () => layoutTopBar());
   window.addEventListener("resize", () => {
