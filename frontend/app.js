@@ -488,8 +488,10 @@
     if (back) back.classList.toggle("tbb-bottom", backBottom);
     const backW = back ? back.offsetWidth + 8 : 0;
     document.documentElement.style.setProperty("--back-shift", backW + "px");
-    document.documentElement.style.setProperty("--side-shift-top", (backBottom ? 0 : backW) + (sideW && !atBottom0 ? sideW : 0) + "px");
-    document.documentElement.style.setProperty("--side-shift-bottom", (backBottom ? backW : 0) + (sideW && atBottom0 ? sideW : 0) + "px");
+    // offene Seiten-Leiste: ⋯ und "Seiten ✕" liegen ueber ihr, die Rueckgaengig-Pille rueckt nicht nach
+    const overPanel = document.body.classList.contains("pages-open");
+    document.documentElement.style.setProperty("--side-shift-top", overPanel ? "0px" : (backBottom ? 0 : backW) + (sideW && !atBottom0 ? sideW : 0) + "px");
+    document.documentElement.style.setProperty("--side-shift-bottom", overPanel ? "0px" : (backBottom ? backW : 0) + (sideW && atBottom0 ? sideW : 0) + "px");
     if (vertical) {
       document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
       bar.style.maxWidth = "";
@@ -12569,6 +12571,8 @@
   // grosser Zurueck-Pfeil oben links: eine Ebene zurueck (vom Blatt in den Ordner)
   document.getElementById("btn-back")?.addEventListener("click", (e) => {
     e.stopPropagation();
+    // bei offener Seiten-Leiste ist der Knopf das ⋯-Menue des Notizbuchs
+    if (document.body.classList.contains("pages-open") && window.sofiaNotebookMenu) return window.sofiaNotebookMenu(e.currentTarget);
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     showLibrary();
   });
@@ -13483,8 +13487,12 @@
       panel.classList.toggle("hidden", !panelOpen);
       pagesBtn.classList.toggle("active", panelOpen);
       pagesInsetLeft = panelOpen ? Math.min(PANEL_W, Math.round(window.innerWidth * 0.4)) : 0;
-      // schwebende Karte mit Abstand zum Rand: Breite = Platz minus Rand
-      panel.style.width = Math.max(0, pagesInsetLeft - 14) + "px";
+      // von links angedockt; oben sitzen ueber ihr die Leisten (⋯ und "Seiten  ✕")
+      panel.style.width = pagesInsetLeft + "px";
+      document.body.classList.toggle("pages-open", panelOpen);
+      const backIco = document.querySelector("#btn-back .material-symbols-rounded");
+      if (backIco) backIco.textContent = panelOpen ? "more_horiz" : "arrow_back";
+      document.getElementById("btn-back")?.setAttribute("title", panelOpen ? "Notizbuch: Anordnung, Vorlagen …" : "Zurück");
       setViewInsets(requestedInsets[0], requestedInsets[1]);
       try {
         localStorage.setItem("sofianotes-pages-panel", panelOpen ? "1" : "0");
@@ -13498,6 +13506,14 @@
       setPanel(!panelOpen);
       fitPage(i);
     });
+    document.getElementById("btn-pages-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setPanel(false);
+    });
+    window.sofiaNotebookMenu = (anchor) => {
+      if (!menu.classList.contains("hidden")) return closeMenu();
+      notebookMenu(anchor);
+    };
     document.getElementById("pages-close").addEventListener("click", (e) => {
       e.stopPropagation();
       setPanel(false);

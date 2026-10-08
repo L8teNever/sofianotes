@@ -3555,3 +3555,26 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
 
 /* Zurueck-Pfeil: genau wie die Knoepfe der anderen Leisten (normale Groesse und Strichstaerke) */
 .top-back-bar { width: auto; display: flex; align-items: center; padding: 6px; overflow: visible; }
+
+/* ---- Seiten-Leiste: links angedockt, rechts rund; oben liegen die Leisten "⋯" und "Seiten ✕" ---- */
+html, body { background: #e8e6ed; }
+.pages-panel {
+  top: 0;
+  left: 0;
+  bottom: 0;
+  border: none;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 0 28px 28px 0;
+  padding-top: calc(var(--safe-top) + var(--bar-h) + 14px);
+  box-shadow: 4px 0 28px rgba(0, 0, 0, 0.12);
+}
+.pages-panel .pages-head { display: none; }
+.tsb-title, .tsb-close { display: none; }
+body.pages-open .tsb-title { display: block; font: 600 15px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; padding: 0 6px 0 10px; white-space: nowrap; }
+body.pages-open .tsb-close { display: flex; border-radius: 50%; background: #ece6f0; }
+body.pages-open .tsb-close:hover { background: #e2dbe8; }
+body.pages-open #btn-pages,
+body.pages-open #btn-split { display: none; }
+/* ueber der Seiten-Leiste: nicht mit ihr nach rechts ruecken */
+body.pages-open .top-back-bar { left: var(--safe-left); }
+body.pages-open .top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--back-shift, 0px)); }
