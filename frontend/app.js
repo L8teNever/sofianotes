@@ -9190,9 +9190,9 @@
     });
   // Schneller Weg: JPEG asynchron erzeugen, sofort lokal anzeigen, binaer hochladen.
   // Die ID ist sofort da; der Upload laeuft im Hintergrund (bei Fehler in die Warteschlange).
-  async function uploadJpeg(jpeg) {
+  async function uploadJpeg(jpeg, opts) {
     if (typeof jpeg === "string") return uploadJpegDataUrl(jpeg);
-    const blob = await new Promise((res) => jpeg.canvas.toBlob(res, "image/jpeg", 0.82));
+    const blob = jpeg.blob || (await new Promise((res) => jpeg.canvas.toBlob(res, "image/jpeg", 0.82)));
     if (!blob) return uploadJpegDataUrl(jpeg.dataUrl);
     const id = uuid();
     const img = new Image();
@@ -9201,15 +9201,23 @@
     img.src = URL.createObjectURL(blob);
     mediaImages.set(id, img);
     if (window.SofiaOffline) SofiaOffline.putMedia(id, blob).catch(() => {});
-    fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": "image/jpeg" }, body: blob })
+    const send = () =>
+      fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": "image/jpeg" }, body: blob });
+    const fallback = async () => {
+      try {
+        await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
+      } catch (err) {}
+    };
+    if (opts && opts.wait) {
+      const r = await send();
+      if (!r.ok) throw new Error(r.status === 413 ? "too_large" : "upload");
+      return id;
+    }
+    send()
       .then((r) => {
         if (!r.ok) throw new Error("upload");
       })
-      .catch(async () => {
-        try {
-          await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
-        } catch (err) {}
-      });
+      .catch(fallback);
     return id;
   }
 
@@ -9290,28 +9298,84 @@
     return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
   }
 
+  const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+  const MEDIA_JPEG_MAX = 3200000;
+  async function canvasToJpegBlob(canvas, quality) {
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+    if (!blob) throw new Error("jpeg");
+    return blob;
+  }
+  async function fitJpegBlob(source, maxEdge) {
+    let edge = maxEdge;
+    let quality = 0.86;
+    for (let i = 0; i < 8; i++) {
+      const jpeg = bitmapToJpeg(source, edge);
+      const blob = await canvasToJpegBlob(jpeg.canvas, quality);
+      if (blob.size <= MEDIA_JPEG_MAX) {
+        jpeg.blob = blob;
+        return jpeg;
+      }
+      quality = Math.max(0.5, quality - 0.08);
+      edge = Math.max(720, Math.round(edge * 0.82));
+    }
+    const jpeg = bitmapToJpeg(source, 900);
+    jpeg.blob = await canvasToJpegBlob(jpeg.canvas, 0.5);
+    return jpeg;
+  }
   async function renderPdfToImages(file, maxPages, onProgress) {
     if (window.ensurePdf) await window.ensurePdf().catch(() => null);
     if (!window.pdfjsLib) throw new Error("pdfjs");
-    const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-    const n = Math.min(pdf.numPages, maxPages || 200);
+    const pdfjsLib = window.pdfjsLib;
+    const pdf = await pdfjsLib.getDocument({
+      data: new Uint8Array(await file.arrayBuffer()),
+      cMapUrl: PDFJS_CDN + "cmaps/",
+      cMapPacked: true,
+      standardFontDataUrl: PDFJS_CDN + "standard_fonts/",
+      disableStream: true,
+      disableRange: true,
+    }).promise;
+    const cap = maxPages || 2000;
+    const n = Math.min(pdf.numPages, cap);
+    if (!n) throw new Error("empty pdf");
     const out = [];
+    const ann = (pdfjsLib.AnnotationMode && pdfjsLib.AnnotationMode.ENABLE) || 1;
     for (let i = 1; i <= n; i++) {
-      if (onProgress) onProgress(i, n);
+      if (onProgress) onProgress(i, pdf.numPages);
       const page = await pdf.getPage(i);
       const base = page.getViewport({ scale: 1 });
-      const vp = page.getViewport({ scale: Math.min(2.5, 2000 / Math.max(base.width, base.height)) });
+      const vp = page.getViewport({ scale: Math.min(2.6, 2200 / Math.max(base.width, base.height, 1)) });
       const c = document.createElement("canvas");
-      c.width = Math.round(vp.width);
-      c.height = Math.round(vp.height);
-      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-      const jpeg = bitmapToJpeg(c, 2000);
+      c.width = Math.max(1, Math.round(vp.width));
+      c.height = Math.max(1, Math.round(vp.height));
+      const c2d = c.getContext("2d", { alpha: false });
+      c2d.fillStyle = "#ffffff";
+      c2d.fillRect(0, 0, c.width, c.height);
+      await page.render({
+        canvasContext: c2d,
+        viewport: vp,
+        intent: "print",
+        annotationMode: ann,
+        background: "#ffffff",
+      }).promise;
+      const jpeg = await fitJpegBlob(c, 2200);
       c.width = c.height = 0;
-      out.push({ mediaId: await uploadJpeg(jpeg), ratio: base.height / base.width });
+      out.push({ mediaId: await uploadJpeg(jpeg, { wait: true }), ratio: base.height / base.width, w: jpeg.w, h: jpeg.h });
     }
     return out;
   }
+  function notebookPagesFromPdfImages(imgs) {
+    return (imgs || []).map((im) => ({
+      id: "p" + uuid().slice(0, 12),
+      paper: "blank",
+      mediaId: im.mediaId,
+      w: A4_W,
+      h: Math.round(A4_W * (im.ratio || 1.414)),
+    }));
+  }
   window.sofiaPdfToImages = renderPdfToImages;
+  window.sofiaPdfToNotebookPages = async function (file, onProgress) {
+    return notebookPagesFromPdfImages(await renderPdfToImages(file, 2000, onProgress));
+  };
 
   async function importPdfFile(file, origin) {
     if (window.ensurePdf) await window.ensurePdf().catch(() => null);
@@ -14266,17 +14330,10 @@
     return id;
   }
   async function gnImportPdf(file, title, folderId) {
-    const imgs = await renderPdfToImages(file, 200, (i, n) => {
+    const pages = await window.sofiaPdfToNotebookPages(file, (i, n) => {
       gnSetStatus("„" + title + "“: Seite " + i + " von " + n);
     });
-    if (!imgs.length) return;
-    const pages = imgs.map((im) => ({
-      id: "p" + uuid().slice(0, 12),
-      paper: "blank",
-      mediaId: im.mediaId,
-      w: A4_W,
-      h: Math.round(A4_W * im.ratio),
-    }));
+    if (!pages.length) throw new Error("empty pdf");
     await api("/api/boards", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -14286,6 +14343,7 @@
         notebook: { layout: "vertical", template: { paper: "blank" }, pages },
       }),
     });
+    return pages.length;
   }
   async function gnRunImport() {
     if (!gnPending) return;
@@ -14300,41 +14358,50 @@
     const cache = new Map();
     let done = 0;
     let failed = 0;
+    let pagesDone = 0;
+    const jobs = [];
+    for (const t of gnPending.tops) {
+      const choice = map["top:" + t.name];
+      if (!choice) continue;
+      jobs.push(...t.pdfs.map((pdf) => ({ top: t.name, choice, pdf, loose: false })));
+    }
+    const looseChoice = map.loose;
+    if (looseChoice && gnPending.loose.length) {
+      for (const e of gnPending.loose) jobs.push({ loose: true, choice: looseChoice, pdf: { file: e.file, rel: e.file.name, name: e.file.name } });
+    }
     try {
-      for (const t of gnPending.tops) {
-        const choice = map["top:" + t.name];
-        if (!choice) continue;
-        let parentId = choice === "new" ? await gnEnsureFolder(t.name, null, cache) : choice;
-        for (const pdf of t.pdfs) {
-          const segs = pdf.rel.split("/").filter(Boolean);
-          const fileName = segs.pop();
-          let folderId = parentId;
-          for (const dir of segs) folderId = await gnEnsureFolder(dir, folderId, cache);
-          try {
-            await gnImportPdf(pdf.file, gnPdfTitle(fileName), folderId);
-            done += 1;
-          } catch (err) {
-            failed += 1;
-            console.warn("gn import", fileName, err);
+      const parentByTop = new Map();
+      for (let j = 0; j < jobs.length; j++) {
+        const job = jobs[j];
+        const fileName = (job.pdf.rel || job.pdf.name || "").split("/").filter(Boolean).pop() || "Notizbuch";
+        gnSetStatus((j + 1) + "/" + jobs.length + " · „" + gnPdfTitle(fileName) + "“");
+        try {
+          let folderId = null;
+          if (job.loose) {
+            if (job.choice === "new") folderId = await gnEnsureFolder("Import", null, cache);
+            else if (job.choice !== "root") folderId = job.choice;
+          } else {
+            if (!parentByTop.has(job.top)) {
+              parentByTop.set(job.top, job.choice === "new" ? await gnEnsureFolder(job.top, null, cache) : job.choice);
+            }
+            folderId = parentByTop.get(job.top);
+            const segs = (job.pdf.rel || "").split("/").filter(Boolean);
+            segs.pop();
+            for (const dir of segs) folderId = await gnEnsureFolder(dir, folderId, cache);
           }
-        }
-      }
-      const looseChoice = map.loose;
-      if (looseChoice && gnPending.loose.length) {
-        let folderId = null;
-        if (looseChoice === "new") folderId = await gnEnsureFolder("Import", null, cache);
-        else if (looseChoice !== "root") folderId = looseChoice;
-        for (const e of gnPending.loose) {
-          try {
-            await gnImportPdf(e.file, gnPdfTitle(e.file.name), folderId);
-            done += 1;
-          } catch (err) {
-            failed += 1;
-          }
+          pagesDone += await gnImportPdf(job.pdf.file, gnPdfTitle(fileName), folderId);
+          done += 1;
+        } catch (err) {
+          failed += 1;
+          console.warn("gn import", fileName, err);
         }
       }
       await refreshLibrary();
-      const msg = done + (done === 1 ? " Notizbuch importiert" : " Notizbücher importiert") + (failed ? " · " + failed + " fehlgeschlagen" : "");
+      const msg =
+        done +
+        (done === 1 ? " Notizbuch importiert" : " Notizbücher importiert") +
+        (pagesDone ? " · " + pagesDone + (pagesDone === 1 ? " Seite" : " Seiten") : "") +
+        (failed ? " · " + failed + " fehlgeschlagen" : "");
       gnPending = null;
       document.getElementById("gn-import-pick")?.classList.remove("hidden");
       document.getElementById("gn-import-map")?.classList.add("hidden");
@@ -15047,7 +15114,7 @@
     async function fileToPageImages(file, maxPages) {
       const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name || "");
       if (isPdf) {
-        return renderPdfToImages(file, maxPages, (i, n) => showToast("PDF-Seite " + i + " von " + n + " …"));
+        return renderPdfToImages(file, maxPages || 2000, (i, n) => showToast("PDF-Seite " + i + " von " + n + " …"));
       }
       const jpeg = await scanImageToJpeg(file, 2000);
       return jpeg ? [{ mediaId: await uploadJpeg(jpeg), ratio: jpeg.h / jpeg.w }] : [];
@@ -15056,7 +15123,7 @@
     window.sofiaInsertPdfPages = async (file) => {
       if (!notebook) return false;
       try {
-        const imgs = await fileToPageImages(file, 200);
+        const imgs = await fileToPageImages(file, 2000);
         if (!imgs.length) return true;
         const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
         addPages(currentPage(), pages);
@@ -15827,7 +15894,7 @@
       if (!file) return;
       try {
         showToast("Wird hinzugefügt…");
-        const imgs = await fileToPageImages(file, 200);
+        const imgs = await fileToPageImages(file, 2000);
         if (!imgs.length) return;
         const pages = imgs.map((im) => ({ id: newId(), paper: "blank", mediaId: im.mediaId, w: A4_W, h: Math.round(A4_W * im.ratio) }));
         addPages(currentPage(), pages);
