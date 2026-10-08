@@ -18,16 +18,24 @@ def read_version() -> str:
     return "1.0.0"
 
 
+def _usable_commit(value: str | None) -> str:
+    s = str(value or "").strip()
+    if not s or s.lower() in ("main", "master", "head", "unknown"):
+        return ""
+    return s[:7]
+
+
 def get_git_commit() -> str:
-    env_commit = os.getenv("GIT_COMMIT") or os.getenv("GITHUB_SHA")
+    env_commit = _usable_commit(os.getenv("GIT_COMMIT") or os.getenv("GITHUB_SHA"))
     if env_commit:
-        return env_commit[:7]
+        return env_commit
 
     if VERSION_JSON.exists():
         try:
             data = json.loads(VERSION_JSON.read_text(encoding="utf-8"))
-            if data.get("commit"):
-                return str(data["commit"])[:7]
+            from_file = _usable_commit(data.get("commit"))
+            if from_file:
+                return from_file
         except Exception:
             pass
 

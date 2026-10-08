@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -9,13 +10,15 @@ RUN apt-get update \
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
-ARG GIT_COMMIT=main
-ENV GIT_COMMIT=$GIT_COMMIT
-
 COPY backend backend
 COPY frontend frontend
+COPY scripts/bake-version.py scripts/bake-version.py
 
-RUN printf '{"version":"1.0.0","commit":"%s"}\n' "$GIT_COMMIT" > backend/version.json
+# Keep semver from backend/version.json. Commit: GIT_COMMIT arg, else .git HEAD.
+ARG GIT_COMMIT=
+ENV GIT_COMMIT=$GIT_COMMIT
+RUN --mount=type=bind,source=.git,target=/app/.git,ro \
+    GIT_COMMIT="$GIT_COMMIT" python3 scripts/bake-version.py
 
 RUN mkdir -p data
 
