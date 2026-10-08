@@ -3578,3 +3578,9 @@ body.pages-open #btn-split { display: none; }
 /* ueber der Seiten-Leiste: nicht mit ihr nach rechts ruecken */
 body.pages-open .top-back-bar { left: var(--safe-left); }
 body.pages-open .top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--back-shift, 0px)); }
+/* "Seiten" ohne ✕; ✕ als eigener Knopf am rechten Rand der Seiten-Leiste */
+body.pages-open .tsb-title { padding: 0 12px; }
+.top-close-bar { display: none; }
+body.pages-open .top-close-bar { display: flex; left: calc(var(--view-left) - var(--bar-h) - 14px); }
+/* blauer Ordner-Knopf neben dem Dateinamen entfaellt (der Zurueck-Pfeil macht dasselbe) */
+#btn-open-library { display: none !important; }
