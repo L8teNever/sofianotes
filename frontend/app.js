@@ -60,8 +60,11 @@
     const proto = window.Storage && Storage.prototype;
     const origSet = proto.setItem;
     const origRemove = proto.removeItem;
-    const touched = (store, key) => {
+    const removed = new Set(); // ausdruecklich geloeschte Einstellungen (nur die gehen als "loeschen" raus)
+    const touched = (store, key, del) => {
       if (applying || store !== window.localStorage || !PREF_KEYS.includes(key)) return;
+      if (del) removed.add(key);
+      else removed.delete(key);
       meta.dirty = true;
       saveMeta();
       clearTimeout(pushTimer);
@@ -74,7 +77,7 @@
     };
     proto.removeItem = function (key) {
       origRemove.call(this, key);
-      touched(this, key);
+      touched(this, key, true);
     };
     function localPrefs() {
       const out = {};
@@ -90,10 +93,12 @@
         const r = await fetch("/api/me/prefs", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prefs: localPrefs() }),
+          // nur zusammenfuehren: was dieses Geraet nicht kennt, bleibt am Konto erhalten
+          body: JSON.stringify({ prefs: localPrefs(), removed: Array.from(removed), merge: true }),
         });
         if (!r.ok) throw new Error(r.status);
         const res = await r.json();
+        removed.clear();
         meta = { at: res.updatedAt || Date.now() / 1000, dirty: false };
         saveMeta();
       } catch (err) {
@@ -110,17 +115,23 @@
       } catch (err) {
         return false;
       }
-      if (meta.dirty || !res.updatedAt) {
+      // Ein Geraet, das noch nie abgeglichen hat (neu installiert, App neu zum Home-Bildschirm
+      // hinzugefuegt), uebernimmt die Einstellungen vom Konto - statt sie mit seinen
+      // Standardwerten zu ueberschreiben.
+      const fresh = !meta.at;
+      if (!res.updatedAt || (meta.dirty && !fresh)) {
         push();
         return false;
       }
-      if (res.updatedAt <= meta.at) return false;
+      if (!fresh && res.updatedAt <= meta.at) return false;
       const remote = res.prefs || {};
       let changed = false;
       applying = true;
       try {
         for (const k of PREF_KEYS) {
-          const v = Object.prototype.hasOwnProperty.call(remote, k) ? remote[k] : null;
+          // was das Konto nicht kennt, bleibt auf dem Geraet unveraendert
+          if (!Object.prototype.hasOwnProperty.call(remote, k)) continue;
+          const v = remote[k];
           if (localStorage.getItem(k) === v) continue;
           changed = true;
           if (v == null) localStorage.removeItem(k);
@@ -618,6 +629,12 @@
     if (sideW) {
       placeSideBar();
       from = Math.max(from, side.getBoundingClientRect().right + 10);
+    }
+    // rechts oben sitzt der Einstellungs-Knopf
+    const menuBar = document.getElementById("top-menu-bar");
+    if (menuBar && !atBottom) {
+      const mr = menuBar.getBoundingClientRect();
+      if (mr.width) to = Math.min(to, mr.left - 10);
     }
     const avail = Math.max(200, to - from);
     // passt die Leiste nicht ganz, wird sie seitlich scrollbar (statt aus dem Bild zu laufen)
@@ -3120,7 +3137,9 @@
           const firstOpen = !notebook || notebookBoardId !== msg.board.id;
           notebook = msg.board.notebook || null;
           notebookBoardId = msg.board.id;
-          if (notebook && firstOpen && window.sofiaFitPage && !window.sofiaSplitBg) window.sofiaFitPage(0);
+          // zuletzt angesehene Stelle wieder herstellen, sonst (Notizbuch) erste Seite
+          const restored = !window.sofiaSplitBg && window.sofiaRestoreView && window.sofiaRestoreView(msg.board.id);
+          if (!restored && notebook && firstOpen && window.sofiaFitPage && !window.sofiaSplitBg) window.sofiaFitPage(0);
         }
         boardStrokes.clear();
         for (const s of msg.strokes) {
@@ -6083,6 +6102,11 @@
     const { minTop, maxTop } = zoomPaneBounds(h);
     zoomPaneEl.style.bottom = "auto";
     zoomPaneEl.style.top = Math.round(minTop + (maxTop - minTop) * zoomPaneFrac) + "px";
+    // Stiftleiste links/rechts angedockt: Schreibflaeche daneben statt darunter
+    const dockSide = currentDock();
+    const tbr = toolbarEl.getBoundingClientRect();
+    zoomPaneEl.style.left = dockSide === "left" && tbr.width ? Math.round(tbr.right + 10) + "px" : "";
+    zoomPaneEl.style.right = dockSide === "right" && tbr.width ? Math.round(window.innerWidth - tbr.left + 10) + "px" : "";
     zoomPaneEl.style.height = h + "px";
     const r = zoomCanvas.getBoundingClientRect();
     const d = Math.max(1, window.devicePixelRatio || 1);
@@ -10233,6 +10257,7 @@
   }
 
   function showLibrary(opts) {
+    if (currentBoardId && libraryBackdrop.classList.contains("hidden")) saveView(currentBoardId);
     hideWho();
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     if (window.sofiaHistoryClose) window.sofiaHistoryClose();
@@ -12077,6 +12102,44 @@
     tool: currentTool,
     split: typeof splitOn === "function" ? !!splitOn() : false,
   }));
+  // Ansicht pro Blatt merken (Seite, Zoom, Ausschnitt) und beim naechsten Oeffnen dorthin
+  let viewRestoreFor = null;
+  function saveView(bid) {
+    if (!bid || historyView) return;
+    try {
+      const v = { s: scale, x: offsetX, y: offsetY, w: window.innerWidth, h: window.innerHeight, l: viewLeft };
+      if (notebook && window.sofiaCurrentPage) v.page = window.sofiaCurrentPage();
+      localStorage.setItem("sofianotes-view:" + bid, JSON.stringify(v));
+    } catch (err) {}
+  }
+  function restoreView(bid) {
+    let v = null;
+    try {
+      v = JSON.parse(lsGetRaw("sofianotes-view:" + bid) || "null");
+    } catch (err) {}
+    if (!v || !Number.isFinite(v.s)) return false;
+    const sameScreen = Math.abs(v.w - window.innerWidth) < 4 && Math.abs(v.h - window.innerHeight) < 4 && Math.abs((v.l || 0) - viewLeft) < 4;
+    if (notebook && Number.isFinite(v.page) && (!sameScreen || v.page >= notebook.pages.length)) {
+      if (!window.sofiaFitPage) return false;
+      window.sofiaFitPage(Math.min(v.page, notebook.pages.length - 1));
+      return true;
+    }
+    scale = v.s;
+    offsetX = v.x;
+    offsetY = v.y;
+    requestRedraw();
+    return true;
+  }
+  window.sofiaRestoreView = (bid) => {
+    if (viewRestoreFor !== bid) return false;
+    viewRestoreFor = null;
+    return restoreView(bid);
+  };
+  setInterval(() => {
+    if (currentBoardId && libraryBackdrop.classList.contains("hidden") && !document.hidden) saveView(currentBoardId);
+  }, 3000);
+  window.addEventListener("pagehide", () => currentBoardId && saveView(currentBoardId));
+  document.addEventListener("visibilitychange", () => document.hidden && currentBoardId && saveView(currentBoardId));
   const undoHistory = new Map(); // boardId -> {undo, redo}
   function stashUndo(bid) {
     if (!bid) return;
@@ -12112,6 +12175,7 @@
       if (saveBoardFor) saveBoardNow();
       if (window.sofiaFlushPageMoves) window.sofiaFlushPageMoves();
       stashUndo(currentBoardId);
+      if (libraryBackdrop.classList.contains("hidden")) saveView(currentBoardId);
       boardStrokes.clear();
       clearSelection();
       undoStack.length = 0;
@@ -12126,6 +12190,7 @@
     currentBoardId = id;
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
     restoreUndo(id);
+    viewRestoreFor = id;
     if (!opts || opts.homework === undefined) syncHomeworkPanel(null);
     else syncHomeworkPanel({ id, sofiaHomeworkId: opts.homework.id }, opts.homework);
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
@@ -15002,12 +15067,12 @@
       const H = window.innerHeight;
       let left;
       let top;
-      if (bar.classList.contains("tb-left") || bar.classList.contains("tb-right")) {
+      if (bar.contains(btn) && (bar.classList.contains("tb-left") || bar.classList.contains("tb-right"))) {
         left = bar.classList.contains("tb-left") ? bb.right + 10 : bb.left - 10 - m.width;
         top = b.top;
       } else {
         left = b.right - m.width;
-        top = bar.classList.contains("tb-bottom") ? b.top - 6 - m.height : b.bottom + 8;
+        top = bar.contains(btn) && bar.classList.contains("tb-bottom") ? b.top - 6 - m.height : b.bottom + 8;
       }
       menu.style.left = Math.round(Math.max(8, Math.min(W - m.width - 8, left))) + "px";
       menu.style.top = Math.round(Math.max(8, Math.min(H - m.height - 8, top))) + "px";

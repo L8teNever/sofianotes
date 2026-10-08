@@ -3608,3 +3608,7 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 @keyframes icon-swap { from { opacity: 0; transform: rotate(-90deg) scale(0.6); } to { opacity: 1; transform: none; } }
 .pages-panel.closing { animation: pages-out 0.24s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
 @keyframes pages-out { to { transform: translateX(calc(-100% - 24px)); opacity: 0.4; } }
+
+/* ---- Einstellungs-Knopf ganz rechts oben (oeffnet das bisherige ⋯-Menue) ---- */
+#top-menu-bar { left: auto; right: calc(var(--safe-right) + var(--view-right)); top: var(--safe-top); bottom: auto; }
+#top-menu-bar .canvas-menu-wrap { display: flex; }

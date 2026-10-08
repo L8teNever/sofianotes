@@ -338,6 +338,13 @@ async def set_my_prefs(request: Request, person: dict = Depends(get_current_pers
     if not isinstance(prefs, dict) or len(json.dumps(prefs)) > 200_000:
         raise HTTPException(status_code=400, detail="bad prefs")
     prefs = {str(k)[:80]: v for k, v in prefs.items() if isinstance(v, str)}
+    if body.get("merge"):
+        # zusammenfuehren: Einstellungen anderer Geraete bleiben, nur ausdruecklich geloeschte fallen weg
+        current = (await db.person_prefs(person["id"])).get("prefs") or {}
+        merged = {**current, **prefs}
+        for k in body.get("removed") or []:
+            merged.pop(str(k), None)
+        prefs = merged
     return await db.set_person_prefs(person["id"], prefs)
 
 
