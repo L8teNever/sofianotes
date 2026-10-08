@@ -6795,12 +6795,13 @@
 
   function applyZoomChrome() {
     if (!zoomPaneEl) return;
-    zoomPaneEl.classList.toggle("chrome-side", zoomChromeLayout === "side");
-    zoomPaneEl.classList.toggle("chrome-top", zoomChromeLayout !== "side");
-    if (toolbarEl.classList.contains("zoom-inner")) {
-      toolbarEl.classList.toggle("orient-vertical", zoomChromeLayout === "side");
-    }
-    document.getElementById("btn-zw-pen")?.classList.toggle("active", toolbarEl.classList.contains("zoom-inner"));
+    const inner = toolbarEl.classList.contains("zoom-inner");
+    // Mit Stiftleiste im Fenster immer eine Zeile oben — nicht daneben/darunter stapeln
+    const side = !inner && zoomChromeLayout === "side";
+    zoomPaneEl.classList.toggle("chrome-side", side);
+    zoomPaneEl.classList.toggle("chrome-top", !side);
+    if (inner) toolbarEl.classList.remove("orient-vertical");
+    document.getElementById("btn-zw-pen")?.classList.toggle("active", inner);
   }
   function attachZoomInnerBar() {
     if (!zoomInnerBarPref || !zoomWin || !zoomPaneEl || !toolbarEl) return;
@@ -6814,9 +6815,8 @@
         top: toolbarEl.style.top,
       };
     }
-    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging");
+    toolbarEl.classList.remove("dock-bottom", "dock-top", "dock-left", "dock-right", "free-drag", "dragging", "orient-vertical");
     toolbarEl.classList.add("zoom-inner");
-    toolbarEl.classList.toggle("orient-vertical", zoomChromeLayout === "side");
     toolbarEl.style.left = "";
     toolbarEl.style.top = "";
     toolbarEl.style.right = "";
@@ -6849,8 +6849,9 @@
   }
 
   function zoomPaneBounds(h) {
+    const inner = toolbarEl.classList.contains("zoom-inner");
     const tb = toolbarEl.getBoundingClientRect();
-    const dock = currentDock();
+    const dock = inner ? "" : currentDock();
     const tbPos = topBarPos();
     const topBarRect = topBar ? topBar.getBoundingClientRect() : { bottom: 0, top: window.innerHeight };
     const undoRect = undoDock ? undoDock.getBoundingClientRect() : { bottom: 0 };

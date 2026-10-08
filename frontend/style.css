@@ -1637,13 +1637,23 @@ button {
   flex-direction: column;
 }
 .zoom-pane.chrome-top .zoom-pane-chrome {
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
   width: 100%;
+  min-height: 44px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 .zoom-pane.chrome-top .zoom-pane-controls {
   flex-direction: row;
   flex-wrap: nowrap;
+  justify-content: flex-start;
+  padding: 2px 4px 2px 6px;
 }
+/* Eine Zeile: Zoom-Knöpfe + Stiftleiste, ohne zweite schwebende Pille */
 #toolbar.zoom-inner {
   position: relative;
   left: auto;
@@ -1654,8 +1664,16 @@ button {
   z-index: 1;
   max-width: none;
   max-height: none;
+  margin: 0;
+  padding: 0 4px 0 0;
+  background: transparent;
+  border: none;
   box-shadow: none;
-  margin: 0 4px 4px;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow: visible;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 #toolbar.zoom-inner:not(.orient-vertical) {
   height: var(--bar-h);
@@ -1669,6 +1687,14 @@ button {
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
+}
+.zoom-pane.chrome-top #toolbar.zoom-inner::before {
+  content: "";
+  width: 1px;
+  height: 22px;
+  background: #e0e3e6;
+  flex: 0 0 auto;
+  margin: 0 4px 0 2px;
 }
 #btn-zw-pen.active {
   background: #d3e3fd;
