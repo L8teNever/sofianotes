@@ -10207,7 +10207,9 @@
       },
       (err) => {
         // kein Netz ist normal und wird nicht gemeldet
-        if (navigator.onLine) sofiaLog.report("api", method + " " + path.split("?")[0].replace(/[0-9a-f-]{20,}/g, "…") + " -> " + ((err && err.message) || "Netzwerkfehler"), "");
+        // ... ebenso kurze Verbindungsabbrueche (z. B. waehrend der Server neu startet)
+        const netErr = /load failed|failed to fetch|networkerror|network connection/i.test(String(err && err.message));
+        if (navigator.onLine && !netErr) sofiaLog.report("api", method + " " + path.split("?")[0].replace(/[0-9a-f-]{20,}/g, "…") + " -> " + ((err && err.message) || "Netzwerkfehler"), "");
         throw err;
       }
     );
