@@ -11041,7 +11041,9 @@
     hwPanel.classList.toggle("docked", docked);
     hwPanel.classList.toggle("dock-left", docked && hwLayout.side === "left");
     hwPanel.classList.toggle("dock-right", docked && hwLayout.side !== "left");
-    document.getElementById("hw-panel-side").classList.toggle("hidden", !docked);
+    // Seite wechseln geht per Ziehen der Kopfzeile auf die andere Seite - kein eigener Knopf
+    document.getElementById("hw-panel-side").classList.add("hidden");
+    document.getElementById("hw-panel-min").classList.toggle("hidden", docked);
     const modeBtn = document.getElementById("hw-panel-mode");
     modeBtn.title = docked ? "Als schwebendes Fenster lösen" : "Als Seitenleiste andocken";
     modeBtn.firstElementChild.textContent = docked ? "picture_in_picture" : hwLayout.side === "left" ? "dock_to_left" : "dock_to_right";
@@ -11461,8 +11463,16 @@
       applyHwPanelState("open");
     } else if (hwDrag.kind === "move") {
       if (hwLayout.mode === "dock") {
-        // angedockte Leiste an der Kopfzeile ziehen: weit genug weg -> wieder schwebend
-        if (Math.abs(dx) > 60 || Math.abs(dy) > 60) {
+        // angedockte Leiste an der Kopfzeile ueber die Bildmitte ziehen -> andere Seite
+        const otherSide = hwLayout.side === "left" ? e.clientX > window.innerWidth * 0.6 : e.clientX < window.innerWidth * 0.4;
+        if (otherSide) {
+          setHwLayout({ side: hwLayout.side === "left" ? "right" : "left" });
+          hwDrag.sx = e.clientX;
+          hwDrag.sy = e.clientY;
+          return;
+        }
+        // nach unten weggezogen -> wieder schwebendes Fenster
+        if (dy > 90) {
           hwPanelGeo = { x: e.clientX - 140, y: Math.max(8, e.clientY - 20), w: (hwPanelGeo && hwPanelGeo.w) || 360, h: (hwPanelGeo && hwPanelGeo.h) || 480 };
           setHwLayout({ mode: "float" });
           hwDrag.r = hwPanel.getBoundingClientRect();

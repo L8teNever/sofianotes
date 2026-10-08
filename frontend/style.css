@@ -3613,3 +3613,58 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 #top-menu-bar { left: auto; right: calc(var(--safe-right) + var(--view-right)); top: var(--safe-top); bottom: auto; }
 #top-menu-bar .canvas-menu-wrap { display: flex; }
 #set-topbar-reset.hidden { display: none; }
+
+/* =====================================================================
+   Einheitlicher Stil fuer alle Seitenleisten und schwebenden Fenster
+   (wie die Seiten-Leiste: Karte, am Rand angedockt, eine Seite rund)
+   ===================================================================== */
+:root { --sheet-bg: #f7f2fa; --sheet-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06); }
+/* Versionsverlauf: rechts angedockt, links rund */
+.history-panel {
+  background: var(--sheet-bg);
+  border: none;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 28px 0 0 28px;
+  box-shadow: -4px 0 28px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  animation: sheet-in-right 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+.history-head { padding: calc(env(safe-area-inset-top, 0px) + 16px) 14px 8px 20px; }
+.history-toggle, .history-legend { background: #fff; }
+@keyframes sheet-in-right { from { transform: translateX(calc(100% + 24px)); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@keyframes sheet-in-left { from { transform: translateX(calc(-100% - 24px)); opacity: 0.4; } to { transform: none; opacity: 1; } }
+
+/* Aufgabe & Material als Seitenleiste */
+.hw-panel.docked {
+  background: var(--sheet-bg);
+  box-shadow: 0 0 28px rgba(0, 0, 0, 0.12);
+  border: none;
+}
+.hw-panel.docked.dock-left { border-radius: 0 28px 28px 0; border-right: 1px solid rgba(0, 0, 0, 0.06); animation: sheet-in-left 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.hw-panel.docked.dock-right { border-radius: 28px 0 0 28px; border-left: 1px solid rgba(0, 0, 0, 0.06); animation: sheet-in-right 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.hw-panel.docked .hw-panel-head { border-top: none; border-bottom: none; padding: calc(env(safe-area-inset-top, 0px) + 14px) 10px 8px 14px; cursor: grab; }
+.hw-panel.docked .hw-panel-grip { display: none; }
+/* schwebendes Fenster: wie die Karten (runder, weicher Schatten) */
+.hw-panel:not(.docked) { border-radius: 28px; border-top-width: 1px; box-shadow: var(--sheet-shadow); background: rgba(247, 242, 250, 0.97); }
+.hw-panel:not(.docked) .hw-panel-head { border-bottom: none; padding: 10px 8px 6px 12px; }
+.hw-panel:not(.docked) .hw-panel-head::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--subj, #6750a4); flex: 0 0 auto; margin-right: 2px; }
+.hw-panel:not(.docked) .hw-panel-grip { display: none; }
+
+/* ---- eigene, schmale Scrollleiste in allen Leisten ---- */
+.pages-grid, .history-list, .hw-panel-body, .set-body, .lib-list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(103, 80, 164, 0.35) transparent;
+}
+.pages-grid::-webkit-scrollbar, .history-list::-webkit-scrollbar, .hw-panel-body::-webkit-scrollbar { width: 6px; height: 6px; }
+.pages-grid::-webkit-scrollbar-track, .history-list::-webkit-scrollbar-track, .hw-panel-body::-webkit-scrollbar-track { background: transparent; margin: 14px 0; }
+.pages-grid::-webkit-scrollbar-thumb, .history-list::-webkit-scrollbar-thumb, .hw-panel-body::-webkit-scrollbar-thumb { background: rgba(103, 80, 164, 0.32); border-radius: 999px; }
+.pages-grid::-webkit-scrollbar-thumb:hover, .history-list::-webkit-scrollbar-thumb:hover, .hw-panel-body::-webkit-scrollbar-thumb:hover { background: rgba(103, 80, 164, 0.55); }
+.pages-grid::-webkit-scrollbar-button, .history-list::-webkit-scrollbar-button, .hw-panel-body::-webkit-scrollbar-button { display: none; height: 0; }
+.pages-grid { margin-right: 4px; }
+
+/* ---- geteilte Ansicht: Trenner im Stil der Leisten ---- */
+.split-divider { width: 16px; background: #e8e6ed; }
+.split-divider::before { display: none; }
+.split-grip { width: 6px; height: 64px; border: none; border-radius: 999px; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14); transition: height 0.2s, background 0.2s; }
+.split-divider:hover .split-grip, .split-divider:active .split-grip { height: 96px; background: #eaddff; }
+.split-active { height: 4px; background: #6750a4; border-radius: 0 0 4px 4px; }
