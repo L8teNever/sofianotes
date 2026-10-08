@@ -482,8 +482,14 @@
     const sideW = sideOn && !vertical ? side.offsetWidth + 8 : 0;
     // kleine Leiste sitzt ganz links am Rand; die Rueckgaengig-Pille in derselben Ecke rueckt daneben
     const atBottom0 = bar.classList.contains("tb-bottom");
-    document.documentElement.style.setProperty("--side-shift-top", sideW && !atBottom0 ? sideW + "px" : "0px");
-    document.documentElement.style.setProperty("--side-shift-bottom", sideW && atBottom0 ? sideW + "px" : "0px");
+    // ganz links davor: der Zurueck-Pfeil (bei senkrechter Kopfleiste immer oben)
+    const back = document.getElementById("top-back-bar");
+    const backBottom = atBottom0 && !vertical;
+    if (back) back.classList.toggle("tbb-bottom", backBottom);
+    const backW = back ? back.offsetWidth + 8 : 0;
+    document.documentElement.style.setProperty("--back-shift", backW + "px");
+    document.documentElement.style.setProperty("--side-shift-top", (backBottom ? 0 : backW) + (sideW && !atBottom0 ? sideW : 0) + "px");
+    document.documentElement.style.setProperty("--side-shift-bottom", (backBottom ? backW : 0) + (sideW && atBottom0 ? sideW : 0) + "px");
     if (vertical) {
       document.body.classList.toggle("view-narrow", !!(viewLeft || viewRight));
       bar.style.maxWidth = "";
@@ -12560,6 +12566,12 @@
   });
 
   document.getElementById("btn-open-library")?.addEventListener("click", () => showLibrary());
+  // grosser Zurueck-Pfeil oben links: eine Ebene zurueck (vom Blatt in den Ordner)
+  document.getElementById("btn-back")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (window.sofiaSplitClose) window.sofiaSplitClose();
+    showLibrary();
+  });
   document.getElementById("btn-library-close")?.addEventListener("click", () => hideLibrary());
   document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
   const libSearchRow = document.getElementById("lib-search-row");

@@ -3524,3 +3524,11 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
 .top-side-bar.tsb-corner.tsb-bottom { top: auto; bottom: var(--safe-bottom); }
 /* Kopfleiste innen wie die anderen beiden Leisten */
 #top-filename-bar:not(.tb-vertical) { padding: 6px; gap: 4px; }
+
+/* ---- grosser Zurueck-Pfeil ganz links ---- */
+.top-back-bar { position: fixed; top: var(--safe-top); left: calc(var(--safe-left) + var(--view-left)); z-index: 70; width: var(--bar-h); height: var(--bar-h); padding: 0; border-radius: 22px; background: var(--dock-bg); border: 1px solid var(--dock-border); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-sizing: border-box; overflow: hidden; }
+.top-back-bar.tbb-bottom { top: auto; bottom: var(--safe-bottom); }
+.top-back-btn { width: 100%; height: 100%; border: none; background: transparent; color: #1c1b1f; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 22px; }
+.top-back-btn:hover, .top-back-btn:active { background: rgba(103, 80, 164, 0.1); }
+.top-back-btn .material-symbols-rounded { font-size: 30px; font-weight: 600; }
+.top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--view-left) + var(--back-shift, 0px)); }
