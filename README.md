@@ -135,8 +135,14 @@ cp .env.example .env   # BIND_HOST/BIND_PORT fuer die eigene Umgebung anpassen
 ./deploy.sh
 ```
 
-`deploy.sh` macht nichts anderes als `git pull --ff-only && docker compose up
--d --build`. Der Container bindet laut `docker-compose.yml` an
+`deploy.sh` setzt `GIT_COMMIT` auf den Short-SHA von `HEAD` und macht
+`docker compose up -d --build`. Ein normales `docker compose build` (ohne
+`GIT_COMMIT` in der Umgebung) reicht ebenfalls: das Dockerfile liest
+`backend/version.json` (nicht mehr hart `1.0.0`) und den Short-SHA aus `.git`.
+`GIT_COMMIT=main` wird nicht mehr als Fallback gesetzt. `/api/version` zeigt
+danach die Version aus `version.json` und den echten Commit.
+
+Der Container bindet laut `docker-compose.yml` an
 `${BIND_HOST}:${BIND_PORT}` (Default lokal `127.0.0.1:8000`). Fuer einen
 produktiven Betrieb hinter einem eigenen Reverse Proxy oder Tunnel `BIND_HOST`
 und `BIND_PORT` in der eigenen, nicht eingecheckten `.env` entsprechend

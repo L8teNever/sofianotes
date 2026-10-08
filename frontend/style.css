@@ -2835,6 +2835,24 @@ button {
 }
 .hw-panel-btn .material-symbols-rounded { font-size: 26px; }
 .hw-panel-btn:hover { background: rgba(26, 115, 232, 0.08); }
+/* Material-/Aufgaben-Leiste: dieselben umrandeten Karten-Chips wie die Seiten-Leiste */
+#hw-panel .hw-panel-btn {
+  width: var(--bar-btn);
+  height: var(--bar-btn);
+  border-radius: 12px;
+  background: var(--dock-bg);
+  border: 1px solid var(--dock-border);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  color: #1c1b1f;
+}
+#hw-panel .hw-panel-btn .material-symbols-rounded { font-size: 22px; }
+#hw-panel .hw-panel-btn:hover { background: #f3edf7; }
+#hw-panel .page-thumb-foot .hw-panel-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
+#hw-panel .page-thumb-foot .hw-panel-btn .material-symbols-rounded { font-size: 18px; }
 .hw-panel-body {
   flex: 1;
   overflow-y: auto;
@@ -3199,10 +3217,11 @@ body.bars-stacked #toolbar.dock-right { right: calc(var(--safe-right) + var(--vi
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: none;
-  border-radius: 999px;
-  background: #eaddff;
-  color: #21005d;
+  border: 1px solid var(--dock-border);
+  border-radius: 12px;
+  background: var(--dock-bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  color: #1c1b1f;
   padding: 7px 12px 7px 10px;
   font: 600 13px/1 'Google Sans', 'Inter', sans-serif;
   cursor: pointer;
@@ -4009,8 +4028,12 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
   background: #f7f2fa;
   border-radius: 0;
 }
-.hw-viewer-bar { padding: 8px 6px; }
-.hw-viewer-bar .hw-panel-btn { width: 44px; height: 44px; }
+.hw-viewer-bar { padding: 8px 6px; gap: 6px; }
+.hw-panel-head { gap: 6px; }
+#hw-panel .hw-viewer-bar .hw-panel-btn {
+  width: var(--bar-btn);
+  height: var(--bar-btn);
+}
 .hw-dlg .set-head .icon-btn {
   width: 44px;
   height: 44px;
