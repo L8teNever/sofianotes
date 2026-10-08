@@ -209,6 +209,23 @@ def _avg_width(stroke: dict[str, Any]) -> float:
     return acc / len(pts)
 
 
+def draw_order(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Zeichenreihenfolge wie im Browser: Bilder unter Tabellen unter Marker unter Tinte/Text;
+    extra.layer ("back"/"front") hebt ein Teil aus seiner Gruppe heraus, extra.z ordnet
+    innerhalb einer Gruppe (sonst gilt die Reihenfolge des Anlegens)."""
+    group = {"image": 1, "table": 2, "marker": 3}
+
+    def key(item: tuple[int, dict[str, Any]]) -> tuple[int, float, int]:
+        i, st = item
+        ex = st.get("extra") or {}
+        layer = ex.get("layer")
+        g = 0 if layer == "back" else 4 if layer == "front" else group.get(str(st.get("tool")), 4)
+        z = ex.get("z")
+        return (g, float(z) if isinstance(z, (int, float)) else float(i), i)
+
+    return [st for _, st in sorted(enumerate(strokes), key=key)]
+
+
 def _render_strokes(c, strokes: list[dict[str, Any]], tx, ty, scale: float) -> None:
     """Zeichnet Striche, Bilder, Tabellen und Text mit der Abbildung tx/ty in den PDF-Canvas."""
     def _draw_image(stroke: dict[str, Any]) -> None:
@@ -290,13 +307,7 @@ def _render_strokes(c, strokes: list[dict[str, Any]], tx, ty, scale: float) -> N
             for i, line in enumerate(lines):
                 c.drawString(tx(xs[col] + pad), ty(ys[r] + pad + size * 0.95) - i * font_size * 1.3, line)
 
-    # Images under tables under marker under ink.
-    ordered = (
-        [s for s in strokes if s.get("tool") == "image"]
-        + [s for s in strokes if s.get("tool") == "table"]
-        + [s for s in strokes if s.get("tool") == "marker"]
-        + [s for s in strokes if s.get("tool") not in ("image", "table", "marker")]
-    )
+    ordered = draw_order(strokes)
     for stroke in ordered:
         pts = stroke.get("points") or []
         if not pts:

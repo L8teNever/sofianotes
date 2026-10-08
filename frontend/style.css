@@ -3584,3 +3584,4 @@ body.pages-open .tsb-title { padding: 0 12px; }
 body.pages-open .top-close-bar { display: flex; left: calc(var(--view-left) - var(--bar-h) - 14px); }
 /* blauer Ordner-Knopf neben dem Dateinamen entfaellt (der Zurueck-Pfeil macht dasselbe) */
 #btn-open-library { display: none !important; }
+.layer-menu { position: fixed; z-index: 1250; min-width: 230px; width: max-content; max-width: 300px; right: auto; bottom: auto; transform: none; }

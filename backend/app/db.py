@@ -325,9 +325,12 @@ def _insert_sync(stroke: dict[str, Any], person_id: str | None = None) -> None:
     if person_id:
         _, before = _stroke_json_sync(stroke["id"])
         _log_sync(board_id, stroke["id"], person_id, before, json.dumps(_clean_stroke(stroke)))
+    # Beim Aendern bleibt created_at (= Reihenfolge beim Laden) erhalten
     _conn.execute(
-        "INSERT OR REPLACE INTO strokes (id, tool, color, size, points, extra, created_at, board_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO strokes (id, tool, color, size, points, extra, created_at, board_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET tool = excluded.tool, color = excluded.color, size = excluded.size, "
+        "points = excluded.points, extra = excluded.extra, board_id = excluded.board_id",
         (
             stroke["id"],
             stroke["tool"],

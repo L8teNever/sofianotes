@@ -1261,28 +1261,57 @@
     const vy0 = Math.min(vw0.y, vw1.y) - pad;
     const vx1 = Math.max(vw0.x, vw1.x) + pad;
     const vy1 = Math.max(vw0.y, vw1.y) + pad;
-    const src = [];
+    // Ebenen: Bilder unter Tabellen unter Marker unter Tinte/Text. extra.layer hebt ein Teil
+    // aus seiner Gruppe ("back" ganz nach hinten, "front" zur Tinte), extra.z ordnet innerhalb
+    // der Gruppe - sonst gilt die Reihenfolge des Anlegens.
+    const back = [];
+    const imgs = [];
+    const tables = [];
+    const markers = [];
+    const main = [];
+    let ordered = false;
+    let idx = 0;
     for (const st of all.values()) {
+      const i = idx++;
       // nur Tinte aussortieren; Bilder, Text und Tabellen sind wenige und werden immer gezeichnet
       const b = st.tool === "pen" || st.tool === "marker" ? st.bbox : null;
       if (b && Number.isFinite(b.minX)) {
         const m = (st.size || 0) / 2;
         if (b.maxX + m < vx0 || b.minX - m > vx1 || b.maxY + m < vy0 || b.minY - m > vy1) continue;
       }
-      src.push(st);
+      const ex = st.extra;
+      const layer = ex && ex.layer;
+      if (ex && (layer || Number.isFinite(ex.z))) ordered = true;
+      st._ord = ex && Number.isFinite(ex.z) ? ex.z : i;
+      if (layer === "back") back.push(st);
+      else if (layer === "front") main.push(st);
+      else if (st.tool === "image") imgs.push(st);
+      else if (st.tool === "table") tables.push(st);
+      else if (st.tool === "marker") markers.push(st);
+      else main.push(st);
     }
+    if (ordered) {
+      const byZ = (a, b) => a._ord - b._ord;
+      back.sort(byZ);
+      imgs.sort(byZ);
+      tables.sort(byZ);
+      markers.sort(byZ);
+      main.sort(byZ);
+    }
+    const drawLoose = (st) => drawStroke(st, ctx, st.tool === "marker" ? { alpha: 0.38 } : undefined);
 
-    for (const stroke of src.values()) if (stroke.tool === "image") drawStroke(stroke);
+    for (const stroke of back) drawLoose(stroke);
+    for (const stroke of imgs) drawStroke(stroke);
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
     // Tabellen liegen wie Papier unter der Tinte, damit man direkt in die Zellen schreiben kann.
-    for (const stroke of src.values()) if (stroke.tool === "table") drawStroke(stroke);
+    for (const stroke of tables) drawStroke(stroke);
 
     // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
     // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
     syncMarkerLayer();
     markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
-    for (const stroke of src.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+    for (const stroke of markers) drawStroke(stroke, markerCtx, { alpha: 1 });
     for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
     if (live && currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
     ctx.save();
@@ -1292,7 +1321,7 @@
     ctx.restore();
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
 
-    for (const stroke of src.values()) if (stroke.tool !== "marker" && stroke.tool !== "image" && stroke.tool !== "table") drawStroke(stroke);
+    for (const stroke of main) drawLoose(stroke);
     drawHistoryGhosts();
     for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
     if (live && currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke);
@@ -2585,6 +2614,7 @@
       e.target.closest("#undo-redo-dock") ||
       e.target.closest("#top-filename-bar") ||
       e.target.closest(".bar-menu") ||
+      e.target.closest("#layer-menu") ||
       e.target.closest("#who-backdrop") ||
       e.target.closest("#library-backdrop") ||
       e.target.closest("#share-backdrop") ||
@@ -8160,6 +8190,8 @@
     if (copyBtn) copyBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (cutBtn) cutBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     document.getElementById("btn-sel-rotate")?.classList.toggle("hidden", cropping || !selection.ids.size);
+    document.getElementById("btn-sel-layer")?.classList.toggle("hidden", cropping || !selection.ids.size);
+    if (cropping || !selection.ids.size) document.getElementById("layer-menu")?.classList.add("hidden");
     const delBtn = document.getElementById("btn-sel-delete");
     if (delBtn) delBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
@@ -8447,6 +8479,101 @@
     e.preventDefault();
     importFiles(e.dataTransfer.files);
   });
+  // ---- Ebenen: Auswahl nach vorne / nach hinten ----
+  // Gezeichnet wird in Gruppen (Bilder < Tabellen < Marker < Tinte/Text). extra.z ordnet
+  // innerhalb der Gruppe; "In den Vordergrund" holt Bilder/Tabellen/Marker mit
+  // extra.layer = "front" auch ueber die Tinte.
+  const layerMenu = document.getElementById("layer-menu");
+  if (layerMenu) document.body.appendChild(layerMenu);
+  function drawGroup(st) {
+    const l = st.extra && st.extra.layer;
+    if (l === "front") return "main";
+    if (l === "back") return "back";
+    return st.tool === "image" ? "img" : st.tool === "table" ? "tbl" : st.tool === "marker" ? "mk" : "main";
+  }
+  function applyLayer(kind) {
+    const ids = Array.from(selection.ids).filter((id) => boardStrokes.has(id));
+    if (!ids.length) return;
+    const key = new Map();
+    let i = 0;
+    for (const st of boardStrokes.values()) {
+      key.set(st.id, st.extra && Number.isFinite(st.extra.z) ? st.extra.z : i);
+      i++;
+    }
+    const vals = Array.from(key.values());
+    const maxK = Math.max(...vals);
+    const minK = Math.min(...vals);
+    const sel = ids.map((id) => boardStrokes.get(id)).sort((a, b) => key.get(a.id) - key.get(b.id));
+    const selSet = new Set(ids);
+    const box = selection.bbox;
+    const overlaps = (st) => {
+      const b = st.bbox || strokeWorldBBox(st);
+      return !box || !(b.maxX < box.minX || b.minX > box.maxX || b.maxY < box.minY || b.minY > box.maxY);
+    };
+    const patches = new Map(); // id -> {z, layer}
+    if (kind === "front") {
+      sel.forEach((st, j) => patches.set(st.id, { z: maxK + 1 + j, layer: drawGroup({ tool: st.tool }) === "main" ? null : "front" }));
+    } else if (kind === "back") {
+      sel.forEach((st, j) => patches.set(st.id, { z: minK - sel.length + j, layer: null }));
+    } else {
+      // eine Ebene: am naechsten ueberlappenden Teil derselben Gruppe vorbei
+      const up = kind === "up";
+      const others = Array.from(boardStrokes.values()).filter((st) => !selSet.has(st.id) && overlaps(st));
+      for (const st of up ? sel.slice().reverse() : sel) {
+        const g = drawGroup(st);
+        const k = key.get(st.id);
+        const cand = others.filter((o) => drawGroup(o) === g && (up ? key.get(o.id) > k : key.get(o.id) < k));
+        if (!cand.length) continue;
+        const target = cand.reduce((a, b) => (up ? (key.get(b.id) < key.get(a.id) ? b : a) : key.get(b.id) > key.get(a.id) ? b : a));
+        const nz = key.get(target.id) + (up ? 0.5 : -0.5);
+        patches.set(st.id, { z: nz, layer: st.extra && st.extra.layer ? st.extra.layer : null });
+        key.set(st.id, nz);
+      }
+      if (!patches.size) {
+        showToast(up ? "Liegt schon ganz vorne" : "Liegt schon ganz hinten");
+        return;
+      }
+    }
+    const moves = [];
+    for (const [id, p] of patches) {
+      const st = boardStrokes.get(id);
+      const beforeExtra = st.extra ? JSON.parse(JSON.stringify(st.extra)) : {};
+      const next = Object.assign({}, st.extra || {});
+      next.z = p.z;
+      if (p.layer) next.layer = p.layer;
+      else delete next.layer;
+      st.extra = next;
+      wsSend({ type: "stroke_move", stroke: serializeStroke(st) });
+      const pts = st.points.map((q) => ({ ...q }));
+      moves.push({ id, before: pts, after: pts, beforeExtra, afterExtra: JSON.parse(JSON.stringify(next)), beforeSize: st.size, afterSize: st.size });
+    }
+    pushUndo({ type: "move", moves });
+    requestRedraw();
+  }
+  document.getElementById("btn-sel-layer")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!layerMenu) return;
+    if (!layerMenu.classList.contains("hidden")) return layerMenu.classList.add("hidden");
+    layerMenu.classList.remove("hidden");
+    const r = e.currentTarget.getBoundingClientRect();
+    const mw = layerMenu.offsetWidth;
+    const mh = layerMenu.offsetHeight;
+    let top = r.bottom + 8;
+    if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 8);
+    layerMenu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left + r.width / 2 - mw / 2)) + "px";
+    layerMenu.style.top = top + "px";
+  });
+  layerMenu?.querySelectorAll("[data-layer]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      layerMenu.classList.add("hidden");
+      applyLayer(b.dataset.layer);
+    })
+  );
+  document.addEventListener("pointerdown", (e) => {
+    if (layerMenu && !layerMenu.classList.contains("hidden") && !e.target.closest("#layer-menu") && !e.target.closest("#btn-sel-layer")) layerMenu.classList.add("hidden");
+  }, true);
+
   // Auswahl (z. B. ein schief eingefuegtes Bild) mit einem Tipp um 90 Grad drehen
   document.getElementById("btn-sel-rotate")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -11828,6 +11955,29 @@
   }, true);
   document.getElementById("library-backdrop")?.addEventListener("scroll", closeItemMenu, true);
 
+  // Rueckgaengig/Wiederholen bleibt pro Blatt erhalten - auch nach Verlassen und
+  // Wiederoeffnen (im Speicher) und nach Neustart der App (lokal im Geraet).
+  const undoHistory = new Map(); // boardId -> {undo, redo}
+  function stashUndo(bid) {
+    if (!bid) return;
+    const h = { undo: undoStack.slice(-MAX_UNDO), redo: redoStack.slice(-MAX_UNDO) };
+    undoHistory.set(bid, h);
+    if (window.SofiaOffline) SofiaOffline.setKv("undo:" + bid, h).catch(() => {});
+  }
+  function restoreUndo(bid) {
+    const fill = (h) => {
+      if (!h || currentBoardId !== bid || undoStack.length || redoStack.length) return;
+      undoStack.push(...(h.undo || []));
+      redoStack.push(...(h.redo || []));
+      updateUndoRedoButtons();
+    };
+    const mem = undoHistory.get(bid);
+    if (mem) return fill(mem);
+    if (window.SofiaOffline) SofiaOffline.getKv("undo:" + bid).then(fill, () => {});
+  }
+  window.addEventListener("pagehide", () => currentBoardId && stashUndo(currentBoardId));
+  document.addEventListener("visibilitychange", () => document.hidden && currentBoardId && stashUndo(currentBoardId));
+
   async function openBoard(id, title, opts) {
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     if (window.sofiaHistoryClose && id !== currentBoardId) window.sofiaHistoryClose();
@@ -11840,6 +11990,7 @@
     if (currentBoardId) {
       if (saveBoardFor) saveBoardNow();
       if (window.sofiaFlushPageMoves) window.sofiaFlushPageMoves();
+      stashUndo(currentBoardId);
       boardStrokes.clear();
       clearSelection();
       undoStack.length = 0;
@@ -11853,6 +12004,7 @@
     }
     currentBoardId = id;
     currentBoardMeta = { id, title, ownerId: currentPersonId, sharedWith: [] };
+    restoreUndo(id);
     if (!opts || opts.homework === undefined) syncHomeworkPanel(null);
     else syncHomeworkPanel({ id, sofiaHomeworkId: opts.homework.id }, opts.homework);
     if (filenameInput) filenameInput.value = title || "Unbenannte Skizze";
