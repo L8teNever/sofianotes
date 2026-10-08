@@ -33,7 +33,7 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #f2f4f7;
+  background: #e8e6ed;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
   overscroll-behavior: none;
@@ -41,6 +41,19 @@ html, body {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Installierte PWA: Fläche geht unter die Systemleiste (viewport-fit=cover).
+   Android per display_override:fullscreen; iOS per black-translucent. */
+html.pwa-standalone,
+html.pwa-standalone body {
+  background: #e8e6ed;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+}
+html.pwa-standalone body {
+  padding: 0;
+  /* Hintergrund füllt Notch/Statusleiste; Bedienelemente bleiben hinter --safe-*. */
 }
 
 .material-symbols-rounded {
@@ -580,7 +593,8 @@ button {
 }
 #toolbar.dock-left .swatch-scroll,
 #toolbar.dock-right .swatch-scroll,
-#toolbar.free-drag.orient-vertical .swatch-scroll {
+#toolbar.free-drag.orient-vertical .swatch-scroll,
+#toolbar.zoom-inner.orient-vertical .swatch-scroll {
   max-width: none;
   max-height: 136px;
   margin: 0 -4px;
@@ -589,7 +603,8 @@ button {
 }
 #toolbar.dock-left .swatch-scroll::before,
 #toolbar.dock-right .swatch-scroll::before,
-#toolbar.free-drag.orient-vertical .swatch-scroll::before {
+#toolbar.free-drag.orient-vertical .swatch-scroll::before,
+#toolbar.zoom-inner.orient-vertical .swatch-scroll::before {
   margin: 0 0 2px;
 }
 .swatch-menu {
@@ -674,12 +689,15 @@ button {
 
 #toolbar.dock-left .tools-container,
 #toolbar.dock-right .tools-container,
+#toolbar.zoom-inner.orient-vertical .tools-container,
 #toolbar.dock-left #swatches-container,
-#toolbar.dock-right #swatches-container {
+#toolbar.dock-right #swatches-container,
+#toolbar.zoom-inner.orient-vertical #swatches-container {
   flex-direction: column;
 }
 #toolbar.dock-left .dock-divider,
-#toolbar.dock-right .dock-divider {
+#toolbar.dock-right .dock-divider,
+#toolbar.zoom-inner.orient-vertical .dock-divider {
   width: 28px;
   height: 1px;
 }
@@ -1561,6 +1579,16 @@ button {
   touch-action: none;
 }
 .zoom-pane.hidden { display: none; }
+.zoom-pane-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  cursor: grab;
+  touch-action: none;
+}
 .zoom-pane canvas {
   flex: 1 1 auto;
   min-width: 0;
@@ -1584,6 +1612,68 @@ button {
   cursor: grab;
   touch-action: none;
 }
+/* hochkant an der Seite: eine senkrechte Knopf-Spalte neben der Schreibflaeche */
+.zoom-pane.chrome-side {
+  flex-direction: row;
+  align-items: stretch;
+}
+.zoom-pane.chrome-side .zoom-pane-chrome {
+  flex-direction: column;
+  width: auto;
+  max-width: 52%;
+}
+.zoom-pane.chrome-side .zoom-pane-controls {
+  flex-direction: column;
+  min-height: 0;
+  padding: 6px 4px;
+  gap: 6px;
+}
+.zoom-pane.chrome-side canvas {
+  width: auto;
+  height: 100%;
+  flex: 1 1 auto;
+}
+.zoom-pane.chrome-top {
+  flex-direction: column;
+}
+.zoom-pane.chrome-top .zoom-pane-chrome {
+  flex-direction: column;
+  width: 100%;
+}
+.zoom-pane.chrome-top .zoom-pane-controls {
+  flex-direction: row;
+  flex-wrap: nowrap;
+}
+#toolbar.zoom-inner {
+  position: relative;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  transform: none;
+  z-index: 1;
+  max-width: none;
+  max-height: none;
+  box-shadow: none;
+  margin: 0 4px 4px;
+}
+#toolbar.zoom-inner:not(.orient-vertical) {
+  height: var(--bar-h);
+  width: auto;
+  flex-direction: row;
+}
+#toolbar.zoom-inner.orient-vertical {
+  width: var(--bar-h);
+  height: auto;
+  max-height: 100%;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+#btn-zw-pen.active {
+  background: #d3e3fd;
+  color: #0b57d0;
+}
 .zoom-pane-controls button {
   flex: 0 0 auto;
   width: 40px;
@@ -1599,7 +1689,8 @@ button {
 }
 .zoom-pane-controls button:active { background: #e2e6ea; }
 .zoom-pane.moving { box-shadow: 0 16px 40px rgba(0, 0, 0, 0.24); }
-.zoom-pane.moving .zoom-pane-controls { cursor: grabbing; }
+.zoom-pane.moving .zoom-pane-controls,
+.zoom-pane.moving .zoom-pane-chrome { cursor: grabbing; }
 .zoom-pane-controls .material-symbols-rounded { font-size: 22px; }
 #zoom-box.hidden { display: none; }
 .zoom-handle,
@@ -1682,10 +1773,12 @@ button {
 .mode-group { display: flex; align-items: center; gap: 2px; }
 #toolbar.dock-left .mode-group,
 #toolbar.dock-right .mode-group,
-#toolbar.free-drag.orient-vertical .mode-group { flex-direction: column; }
+#toolbar.free-drag.orient-vertical .mode-group,
+#toolbar.zoom-inner.orient-vertical .mode-group { flex-direction: column; }
 .mode-sep { width: 1px; height: 22px; background: #d5d9dd; margin: 0 4px; flex: 0 0 auto; }
 #toolbar.dock-left .mode-sep,
-#toolbar.dock-right .mode-sep { width: 22px; height: 1px; margin: 4px 0; }
+#toolbar.dock-right .mode-sep,
+#toolbar.zoom-inner.orient-vertical .mode-sep { width: 22px; height: 1px; margin: 4px 0; }
 .size-btn .size-a { font-weight: 700; line-height: 1; font-family: Inter, sans-serif; }
 .size-btn.active, .fmt-btn.active, .angle-btn.active {
   background: var(--accent-soft);
@@ -1877,6 +1970,27 @@ button {
   box-shadow: 0 1px 4px rgba(0,0,0,0.15);
 }
 .te-handle.hidden { display: none; }
+
+/* Griff zum Verschieben eines offenen Textfelds (Finger, nicht Stift) */
+.te-move {
+  position: fixed;
+  z-index: 71;
+  width: 40px;
+  height: 28px;
+  margin: -14px 0 0 -20px;
+  border-radius: 10px;
+  background: #1a73e8;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  cursor: grab;
+  box-shadow: 0 2px 8px rgba(26, 115, 232, 0.35);
+}
+.te-move .material-symbols-rounded { font-size: 18px; }
+.te-move.hidden { display: none; }
+.te-move:active { cursor: grabbing; }
 
 
 /* =====================================================================
@@ -3352,6 +3466,13 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
   cursor: pointer;
 }
 .page-thumb.active .page-thumb-img { outline-color: #1a73e8; }
+.page-thumb-enter {
+  animation: page-thumb-in 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+@keyframes page-thumb-in {
+  from { opacity: 0; transform: scale(0.86); }
+  to { opacity: 1; transform: none; }
+}
 .page-thumb-foot { display: flex; align-items: center; justify-content: space-between; padding: 0 2px; font: 600 13px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; }
 .page-thumb-foot .hw-panel-btn { width: 30px; height: 30px; }
 .page-thumb-add {
@@ -3461,6 +3582,8 @@ body.view-only #redo-btn,
 body.view-only #zoom-box,
 body.view-only #zoom-pane,
 body.view-only #selection-toolbar,
+body.view-only #te-move,
+body.view-only .te-handle,
 body.view-only #text-format-bar,
 body.view-only #paste-menu { display: none !important; }
 body.view-only #undo-redo-dock > .bar-divider { display: none; }
@@ -3587,7 +3710,23 @@ body.pages-open .top-close-bar { display: flex; left: calc(var(--view-left) - va
 #canvas-filename { display: none !important; }
 
 /* ---- "Seiten" mittig ueber der Seiten-Leiste (zwischen ⋯ und ✕) ---- */
-body.pages-open .top-side-bar.tsb-corner { left: calc(var(--view-left) / 2); transform: translateX(-50%); }
+/* Auch wenn die Kopfleiste an der Seite liegt: nicht ueber der Leiste, sondern auf der Seiten-Leiste. */
+body.pages-open .top-side-bar.tsb-corner {
+  left: calc(var(--view-left) / 2);
+  top: var(--safe-top);
+  bottom: auto;
+  transform: translateX(-50%);
+}
+body.pages-open .top-back-bar,
+body.pages-open .top-close-bar {
+  top: var(--safe-top);
+  bottom: auto;
+}
+body.pages-open .top-back-bar.tbb-bottom,
+body.pages-open .top-close-bar.tbb-bottom {
+  top: var(--safe-top);
+  bottom: auto;
+}
 
 /* ---- weiche Uebergaenge beim Oeffnen/Schliessen der Seiten-Leiste ---- */
 .top-back-bar,
