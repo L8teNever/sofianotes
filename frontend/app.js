@@ -12207,6 +12207,32 @@
   }
   nameSheetCancel.addEventListener("click", () => closeNameSheet(null));
   nameSheetSave.addEventListener("click", () => closeNameSheet(nameSheetInput.value));
+  // iPad: schon beim Aufsetzen des Fingers ausloesen - bis zum "click" kann die Tastatur
+  // zugehen, der Dialog springt und der Tipp ginge ins Leere
+  // der Klick, der nach dem Loslassen folgt, darf nicht auf dem darunterliegenden Element landen
+  function swallowNextClick() {
+    const until = performance.now() + 700;
+    const stop = (ev) => {
+      if (performance.now() > until) return document.removeEventListener("click", stop, true);
+      ev.stopPropagation();
+      ev.preventDefault();
+      document.removeEventListener("click", stop, true);
+    };
+    document.addEventListener("click", stop, true);
+  }
+  nameSheetSave.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return;
+    e.preventDefault();
+    swallowNextClick();
+    sofiaLog.action("Namensfenster: Speichern");
+    closeNameSheet(nameSheetInput.value);
+  });
+  nameSheetCancel.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return;
+    e.preventDefault();
+    swallowNextClick();
+    closeNameSheet(null);
+  });
   nameSheetScrim.addEventListener("click", (e) => {
     if (e.target === nameSheetScrim) closeNameSheet(null);
   });
@@ -12314,7 +12340,13 @@
     window.addEventListener("resize", upd);
     window.addEventListener("orientationchange", later);
     document.addEventListener("focusin", later);
-    document.addEventListener("focusout", later);
+    // Beim Verlassen eines Feldes NICHT sofort umrechnen: auf dem iPad verliert das Feld den
+    // Fokus genau beim Antippen von "Speichern" - sprang der Dialog da schon auf volle Hoehe,
+    // landete der Tipp neben dem Knopf und es passierte nichts (Blatt/Ordner liess sich nicht anlegen).
+    document.addEventListener("focusout", () => {
+      setTimeout(upd, 500);
+      setTimeout(upd, 1100);
+    });
     document.addEventListener("visibilitychange", later);
     // jedes Oeffnen eines Dialogs: Hoehe frisch nehmen
     document.addEventListener("pointerdown", upd, true);
