@@ -3585,3 +3585,26 @@ body.pages-open .top-close-bar { display: flex; left: calc(var(--view-left) - va
 /* blauer Ordner-Knopf neben dem Dateinamen entfaellt (der Zurueck-Pfeil macht dasselbe) */
 #btn-open-library { display: none !important; }
 .layer-menu { position: fixed; z-index: 1250; min-width: 230px; width: max-content; max-width: 300px; right: auto; bottom: auto; transform: none; }
+
+/* ---- Dateiname oben entfaellt ---- */
+#canvas-filename { display: none !important; }
+
+/* ---- "Seiten" mittig ueber der Seiten-Leiste (zwischen ⋯ und ✕) ---- */
+body.pages-open .top-side-bar.tsb-corner { left: calc(var(--view-left) / 2); transform: translateX(-50%); }
+
+/* ---- weiche Uebergaenge beim Oeffnen/Schliessen der Seiten-Leiste ---- */
+.top-back-bar,
+.top-side-bar,
+.top-close-bar { transition: left 0.32s cubic-bezier(0.2, 0, 0, 1), transform 0.32s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s; }
+#top-filename-bar:not(.free-drag):not(.dragging) { transition: left 0.32s cubic-bezier(0.2, 0, 0, 1), transform 0.25s cubic-bezier(0.2, 0, 0, 1); }
+#undo-redo-dock { transition: top 0.2s, bottom 0.2s, left 0.32s cubic-bezier(0.2, 0, 0, 1), right 0.32s cubic-bezier(0.2, 0, 0, 1); }
+body.pages-open .top-close-bar { animation: bar-pop 0.32s cubic-bezier(0.2, 0, 0, 1); }
+body.pages-open .tsb-title { animation: bar-fade 0.3s ease; }
+body:not(.pages-open) #btn-pages,
+body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
+@keyframes bar-pop { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: none; } }
+@keyframes bar-fade { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
+.icon-swap { animation: icon-swap 0.35s cubic-bezier(0.2, 0, 0, 1); }
+@keyframes icon-swap { from { opacity: 0; transform: rotate(-90deg) scale(0.6); } to { opacity: 1; transform: none; } }
+.pages-panel.closing { animation: pages-out 0.24s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
+@keyframes pages-out { to { transform: translateX(calc(-100% - 24px)); opacity: 0.4; } }

@@ -691,6 +691,7 @@
     bar.addEventListener("transitionend", placeSideBar);
     // Rueckgaengig-Pille gleitet beim Oeffnen der Seiten-Leiste: danach Kopfleiste neu ausrichten
     document.getElementById("undo-redo-dock")?.addEventListener("transitionend", again);
+    side.addEventListener("transitionend", again);
   })();
   window.addEventListener("resize", () => layoutTopBar());
   window.addEventListener("resize", () => {
@@ -13788,16 +13789,35 @@
     const PANEL_W = 300;
     let panelOpen = false;
     let thumbTimer = null;
+    let panelHideTimer = null;
     function setPanel(open) {
+      const wasOpen = panelOpen;
       panelOpen = open && !!notebook;
-      panel.classList.toggle("hidden", !panelOpen);
+      // Schliessen: erst hinausgleiten lassen, dann verstecken
+      clearTimeout(panelHideTimer);
+      panel.classList.remove("closing");
+      if (panelOpen) panel.classList.remove("hidden");
+      else if (wasOpen && !panel.classList.contains("hidden")) {
+        panel.classList.add("closing");
+        panelHideTimer = setTimeout(() => {
+          panel.classList.add("hidden");
+          panel.classList.remove("closing");
+        }, 240);
+      } else panel.classList.add("hidden");
       pagesBtn.classList.toggle("active", panelOpen);
       pagesInsetLeft = panelOpen ? Math.min(PANEL_W, Math.round(window.innerWidth * 0.4)) : 0;
       // von links angedockt; oben sitzen ueber ihr die Leisten (⋯ und "Seiten  ✕")
       panel.style.width = pagesInsetLeft + "px";
       document.body.classList.toggle("pages-open", panelOpen);
       const backIco = document.querySelector("#btn-back .material-symbols-rounded");
-      if (backIco) backIco.textContent = panelOpen ? "more_horiz" : "arrow_back";
+      const want = panelOpen ? "more_horiz" : "arrow_back";
+      if (backIco && backIco.textContent !== want) {
+        backIco.textContent = want;
+        // Symbol dreht sich weich in das neue
+        backIco.classList.remove("icon-swap");
+        void backIco.offsetWidth;
+        backIco.classList.add("icon-swap");
+      }
       document.getElementById("btn-back")?.setAttribute("title", panelOpen ? "Notizbuch: Anordnung, Vorlagen …" : "Zurück");
       setViewInsets(requestedInsets[0], requestedInsets[1]);
       try {
