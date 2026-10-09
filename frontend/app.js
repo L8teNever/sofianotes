@@ -11858,7 +11858,9 @@
           pinchState.vy = 0.7 * (dy / dt) + 0.3 * (pinchState.vy || 0);
           pinchState.t = now;
           pinchState.lastMid = mid;
-          panState = { lastX: mid.x, lastY: mid.y, vx: pinchState.vx, vy: pinchState.vy, t: now };
+          // Nur ein echtes Zwei-Finger-Schwenken laeuft nach. Solange offen ist, ob gezoomt
+          // wird, bliebe sonst die alte Fingermitte als Schwenk-Start liegen.
+          if (pinchState.mode === "pan") panState = { lastX: mid.x, lastY: mid.y, vx: pinchState.vx, vy: pinchState.vy, t: now };
           if (notebookZoomedIn()) beginZoomLock();
           requestRedraw();
           return;
@@ -12083,6 +12085,16 @@
       const endedTwoFinger = pinchState;
       const pinchEnded = !!(endedTwoFinger && endedTwoFinger.mode === "pinch" && touchPointers.size < 2);
       if (touchPointers.size < 2) pinchState = null;
+      // Ein Finger ist von zweien zuerst hoch: Nach dem Zoomen bleibt die Ansicht stehen,
+      // der letzte Finger schiebt nichts mehr nach. Beim Zwei-Finger-Schwenken schiebt er
+      // ab seiner eigenen Stelle weiter, ohne Sprung von der alten Fingermitte.
+      if (endedTwoFinger && touchPointers.size === 1) {
+        const rest = touchPointers.values().next().value;
+        if (endedTwoFinger.mode === "pan" && panState && rest) {
+          panState.lastX = rest.x;
+          panState.lastY = rest.y;
+        } else panState = null;
+      }
       if (pinchEnded) {
         if (!(notebookZoomedIn() && !boardEditId) && window.sofiaPageSnap) window.sofiaPageSnap({});
         zoomGesture = false;
