@@ -431,6 +431,28 @@ def _stroke_center(stroke: dict[str, Any]) -> tuple[float, float]:
     return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
 
 
+def _fit_board(strokes: list[dict[str, Any]], w: float, h: float, pad: float = 28.0) -> tuple[float, float, float] | None:
+    """Inhalt eines unendlichen Boards gleichmäßig in die A4-Seite legen."""
+    minx = miny = float("inf")
+    maxx = maxy = float("-inf")
+    for s in strokes:
+        for p in s.get("points") or []:
+            x = float(p.get("x", 0))
+            y = float(p.get("y", 0))
+            minx = min(minx, x)
+            miny = min(miny, y)
+            maxx = max(maxx, x)
+            maxy = max(maxy, y)
+    if minx == float("inf"):
+        return None
+    bw = max(1.0, maxx - minx)
+    bh = max(1.0, maxy - miny)
+    sc = min((w - 2 * pad) / bw, (h - 2 * pad) / bh)
+    ox = (w - bw * sc) / 2 - minx * sc
+    oy = (h - bh * sc) / 2 - miny * sc
+    return sc, ox, oy
+
+
 def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
     """Ein PDF mit einer Seite pro Notizbuch-Seite (A4), samt Seiten-Hintergrund."""
     buf = io.BytesIO()
@@ -493,15 +515,37 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
                         c.circle(x, ph - y, 0.55, stroke=0, fill=1)
                         x += step
                     y += step
-        mine = [s for s in strokes if px <= _stroke_center(s)[0] <= px + w and py <= _stroke_center(s)[1] <= py + h]
+        if pg.get("board"):
+            mine = [s for s in strokes if ((s.get("extra") or {}).get("boardPage") == pg.get("id"))]
+            fit = _fit_board(mine, w, h)
+            if fit:
+                bsc, box, boy = fit
 
-        def tx(x: float, _px=px) -> float:
-            return (x - _px) * scale
+                def tx(x: float, _sc=bsc, _ox=box, _ps=scale) -> float:
+                    return (x * _sc + _ox) * _ps
 
-        def ty(y: float, _py=py, _ph=ph) -> float:
-            return _ph - (y - _py) * scale
+                def ty(y: float, _sc=bsc, _oy=boy, _ps=scale, _ph=ph) -> float:
+                    return _ph - (y * _sc + _oy) * _ps
 
-        _render_strokes(c, mine, tx, ty, scale)
+                _render_strokes(c, mine, tx, ty, scale * bsc)
+            else:
+                _render_strokes(c, [], lambda x: x, lambda y: y, scale)
+        else:
+            mine = [
+                s
+                for s in strokes
+                if not (s.get("extra") or {}).get("boardPage")
+                and px <= _stroke_center(s)[0] <= px + w
+                and py <= _stroke_center(s)[1] <= py + h
+            ]
+
+            def tx(x: float, _px=px) -> float:
+                return (x - _px) * scale
+
+            def ty(y: float, _py=py, _ph=ph) -> float:
+                return _ph - (y - _py) * scale
+
+            _render_strokes(c, mine, tx, ty, scale)
         c.showPage()
     if not rects:
         c.showPage()

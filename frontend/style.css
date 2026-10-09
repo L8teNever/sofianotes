@@ -4176,3 +4176,31 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
 #gn-pick-zip .material-symbols-rounded { color: #1a73e8; font-size: 26px; }
 #gn-pick-dir.active,
 #gn-pick-zip.active { color: #1a73e8; }
+
+#board-mode-bar {
+  position: fixed;
+  z-index: 80;
+  left: 50%;
+  top: calc(var(--safe-top, 0px) + 62px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  font: 600 14px/1 "Google Sans", Inter, sans-serif;
+  color: #1c1b1f;
+}
+#board-mode-bar.hidden { display: none; }
+#board-mode-bar button {
+  border: none;
+  background: #eaddff;
+  color: #6750a4;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font: 600 13px/1 inherit;
+  cursor: pointer;
+}
