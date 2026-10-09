@@ -43,6 +43,10 @@
   <button type="button" id="btn-update-later" class="update-later">Später</button>
 </div>
 <canvas id="board"></canvas>
+<div id="board-mode-bar" class="hidden">
+  <span id="board-mode-label">Unendliches Board</span>
+  <button type="button" id="board-mode-btn">Zur Seite</button>
+</div>
 <div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
 <!-- zweite Leiste: erscheint, solange Lineal/Geodreieck an ist -->
@@ -974,6 +978,7 @@
     <div id="pap-templates" class="pap-templates"></div>
     <div class="pap-list">
       <button type="button" data-act="read"><span class="material-symbols-rounded">auto_stories</span>Leseseite</button>
+      <button type="button" data-act="board"><span class="material-symbols-rounded">open_in_full</span>Unendliches Board</button>
       <button type="button" data-act="image"><span class="material-symbols-rounded">image</span>Bild</button>
       <button type="button" data-act="photo"><span class="material-symbols-rounded">photo_camera</span>Foto aufnehmen</button>
       <button type="button" data-act="import"><span class="material-symbols-rounded">download</span>PDF importieren</button>

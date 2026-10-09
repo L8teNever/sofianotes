@@ -751,6 +751,8 @@ def clean_notebook(nb: Any) -> dict[str, Any] | None:
             item["rot"] = rot
         if pg.get("read"):
             item["read"] = True
+        if pg.get("board"):
+            item["board"] = True
         pages.append(item)
     page_ids = {p["id"] for p in pages}
     bookmarks = []
