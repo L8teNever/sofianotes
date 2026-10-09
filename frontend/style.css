@@ -4632,3 +4632,80 @@ html[data-theme="dark"] .selection-toolbar button.sel-bad {
   animation: btn-spin 0.7s linear infinite;
 }
 @keyframes btn-spin { to { transform: rotate(360deg); } }
+
+/* ---- Dunkelmodus: Bereiche, die bisher nur hell gestaltet waren ---- */
+html[data-theme="dark"] .tsb-title,
+html[data-theme="dark"] .pap-sub { color: #f4f1f8; }
+html[data-theme="dark"] .pap-sub { color: #c8c2d0; }
+html[data-theme="dark"] .set-ico { background: #2b2930; color: #d0bcff; }
+html[data-theme="dark"] .lib-row-icon { background-image: linear-gradient(rgba(18, 16, 24, 0.55), rgba(18, 16, 24, 0.55)); }
+
+/* Rechner und Lineal */
+html[data-theme="dark"] .calc-display { background: #1f1d26; color: #f4f1f8; }
+html[data-theme="dark"] .calc-mode { background: #2b2930; }
+html[data-theme="dark"] .calc-tab { background: #2b2930; color: #c8c2d0; }
+html[data-theme="dark"] .calc-tab.active { background: #3a3350; color: #e8def8; }
+html[data-theme="dark"] .calc-key { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .calc-key.op { background: #3a3350; color: #e8def8; }
+html[data-theme="dark"] .calc-key.clr { background: #4a2c35; color: #ffb3b8; }
+html[data-theme="dark"] .angle-field { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .angle-label { color: #f4f1f8; }
+
+/* Zoom-Fenster */
+html[data-theme="dark"] #zoom-window button,
+html[data-theme="dark"] [id^="btn-zw-"] { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] [id^="btn-zw-"].active { background: #3a3350; color: #e8def8; }
+
+/* Teilen-Popup */
+html[data-theme="dark"] .share-here-chip { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .share-here-label { color: #d0bcff; }
+html[data-theme="dark"] .share-row { background: #2b2930; }
+html[data-theme="dark"] .share-row.open { background: #34303c; }
+html[data-theme="dark"] .share-row-text strong { color: #f4f1f8; }
+html[data-theme="dark"] .share-row-text small { color: #c8c2d0; }
+html[data-theme="dark"] .share-av { color: #1c1b1f; }
+html[data-theme="dark"] .share-role-chip { background: #3a3350; color: #c8c2d0; }
+html[data-theme="dark"] .share-role-chip.role-edit { background: #243044; color: #a8c7fa; }
+html[data-theme="dark"] .share-role-chip.role-add { background: #1e3a2a; color: #a8e6b8; }
+html[data-theme="dark"] .share-role-chip.role-view { background: #3d3420; color: #ffdd9e; }
+html[data-theme="dark"] .share-role-chip.role-owner { background: #3a3350; color: #e8def8; }
+html[data-theme="dark"] .share-opt { background: #232029; color: #f4f1f8; }
+html[data-theme="dark"] .share-opt:hover { background: #2b2930; }
+html[data-theme="dark"] .share-opt.active { background: #3a3350; border-color: #d0bcff; }
+html[data-theme="dark"] .share-opt-text small { color: #c8c2d0; }
+html[data-theme="dark"] .share-opt > .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] .share-opt.danger > .material-symbols-rounded { color: #ffb3b8; }
+html[data-theme="dark"] .share-hint { color: #c8c2d0; }
+
+/* Verlauf */
+html[data-theme="dark"] .history-toggle { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .history-toggle strong { color: #f4f1f8; }
+html[data-theme="dark"] .history-toggle small { color: #c8c2d0; }
+html[data-theme="dark"] .history-legend { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .history-legend span,
+html[data-theme="dark"] .history-legend small { color: #f4f1f8; }
+html[data-theme="dark"] .history-day { color: #d0bcff; }
+
+/* Tabellen-Dialog */
+html[data-theme="dark"] .td-card { background: #1f1d26; color: #f4f1f8; }
+html[data-theme="dark"] .td-chip,
+html[data-theme="dark"] .td-btn { background: #2b2930; color: #f4f1f8; }
+
+/* ▾-Menü der Kopfleiste */
+html[data-theme="dark"] .tbm-head { color: #d0bcff; }
+html[data-theme="dark"] .tbm-ico { background: #2b2930; color: #d0bcff; }
+html[data-theme="dark"] .tbm-tile, html[data-theme="dark"] .tbm-row { color: #f4f1f8; }
+html[data-theme="dark"] .tbm-tile:hover, html[data-theme="dark"] .tbm-row:hover { background: rgba(208, 188, 255, 0.1); }
+html[data-theme="dark"] .tbm-tile.active .tbm-ico, html[data-theme="dark"] .tbm-row.active .tbm-ico { background: #d0bcff; color: #381e72; }
+html[data-theme="dark"] .tbm-tile.active { color: #d0bcff; }
+html[data-theme="dark"] .tbm-view { background: #243044; color: #a8c7fa; }
+html[data-theme="dark"] .tbm-view:hover { background: #2c3d58; }
+html[data-theme="dark"] .tbm-view small { color: #c8c2d0; }
+html[data-theme="dark"] .history-chip { background: #3a3350; color: #f4f1f8; }
+html[data-theme="dark"] .calc-expr { color: #c8c2d0; }
+html[data-theme="dark"] .angle-label, html[data-theme="dark"] .angle-field { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] #btn-zw-pen.active, html[data-theme="dark"] #zoom-window #btn-zw-pen.active { background: #3a3350; color: #e8def8; }
+html[data-theme="dark"] #td-title { color: #f4f1f8; }
+html[data-theme="dark"] .td-label, html[data-theme="dark"] .td-hint { color: #c8c2d0; }
+html[data-theme="dark"] .tbm-tile.active .tbm-ico, html[data-theme="dark"] .tbm-row.active .tbm-ico { background: #5b4b8a; color: #f4f1f8; }
+html[data-theme="dark"] .calc-mode .active { background: #3a3350; color: #e8def8; }
