@@ -751,8 +751,16 @@ def clean_notebook(nb: Any) -> dict[str, Any] | None:
             item["rot"] = rot
         if pg.get("read"):
             item["read"] = True
-        if pg.get("board"):
+        if pg.get("board") or pg.get("boardOf"):
             item["board"] = True
+        if pg.get("boardOf"):
+            item["boardOf"] = str(pg["boardOf"])[:60]
+        try:
+            board_index = int(pg.get("boardIndex"))
+        except (TypeError, ValueError):
+            board_index = None
+        if board_index is not None and board_index >= 0:
+            item["boardIndex"] = board_index
         pages.append(item)
     page_ids = {p["id"] for p in pages}
     bookmarks = []
