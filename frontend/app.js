@@ -11276,9 +11276,10 @@
       }
     }
     if (currentStroke.objectKind) {
-      const o = currentStroke.objectOrigin || currentStroke.points[0];
-      const last = currentStroke.points[currentStroke.points.length - 1];
-      if (!last || Math.hypot(last.x - o.x, last.y - o.y) < 8) {
+      // Groesse ueber alle Punkte: Rechteck, Kreis und Dreieck enden wieder am Startpunkt,
+      // der letzte Punkt allein sagt also nichts ueber die Groesse.
+      const b = makeBBox(currentStroke.points);
+      if (!b || Math.hypot(b.maxX - b.minX, b.maxY - b.minY) < 8) {
         wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
         currentStroke = null;
         requestRedraw();
