@@ -3878,6 +3878,14 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 
 /* ---- Schau-Ansicht ---- */
 #btn-view-only.active { background: #d3e3fd; color: #0b57d0; }
+#btn-laser.active,
+.tool-btn[data-tool="laser"].active { background: #ffd9df; color: #ba1a1a; }
+#btn-laser.active .material-symbols-rounded,
+.tool-btn[data-tool="laser"].active .material-symbols-rounded { color: #ba1a1a; }
+html[data-theme="dark"] #btn-laser.active,
+html[data-theme="dark"] .tool-btn[data-tool="laser"].active { background: #5c2b32; color: #ffb3b8; }
+html[data-theme="dark"] #btn-laser.active .material-symbols-rounded,
+html[data-theme="dark"] .tool-btn[data-tool="laser"].active .material-symbols-rounded { color: #ffb3b8; }
 body.view-only #mode-switch,
 body.view-only .insert-menu-wrap,
 body.view-only .objects-menu-wrap,
@@ -3991,7 +3999,7 @@ html, body { background: #e8e6ed; }
   border: none;
   border-right: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 0 28px 28px 0;
-  padding-top: calc(var(--safe-top) + 8px);
+  padding-top: calc(max(0px, var(--safe-top) - 12px) + var(--bar-h) + 22px);
   box-shadow: 4px 0 28px rgba(0, 0, 0, 0.12);
 }
 .pages-panel .pages-head { display: none; }

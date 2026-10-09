@@ -2072,6 +2072,7 @@
     drawRuler();
     drawHoldHint();
     drawShapeGuide();
+    drawLaser();
     drawPagePullRing();
     positionTextEditor();
     positionInkChips();
@@ -2088,6 +2089,12 @@
 
   function tick() {
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
+    if (laser) {
+      // Spitze bleibt hell, solange noch etwas aufliegt; der Schweif altert von hinten
+      const tip = laser.points[laser.points.length - 1];
+      if (tip) tip.t = performance.now();
+      dirty = true;
+    }
     if (pagePull) dirty = true;
     if (pageAppear) dirty = true;
     if (window.sofiaPagePullTick) window.sofiaPagePullTick();
@@ -2100,7 +2107,10 @@
   }
 
   // ---- toolbar ------------------------------------------------------
-  let currentTool = "pen"; // pen | marker | eraser | select
+  let currentTool = "pen"; // pen | marker | eraser | select | laser
+  // Laserpointer: nur lokal, kein Strich. Schweif verblasst von hinten, weg sobald nichts mehr aufliegt.
+  let laser = null; // { pointerId, color, points: [{x,y,t}] }
+  const LASER_MS = 720;
   let objectKind = null; // null | rect | line | circle | triangle | arrow
   let objectDash = lsGetRaw("sofianotes-object-dash") === "1";
   let objectArrowHeads = ["end", "start", "both"].includes(lsGetRaw("sofianotes-object-arrow"))
@@ -2314,6 +2324,93 @@
     if (!toolPopover.classList.contains("hidden")) positionToolPopover();
   }
 
+  function laserInk() {
+    const rgb = parseHexColor(currentColor);
+    if (!rgb) return "#FF2D55";
+    const y = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+    return y < 0.28 ? "#FF2D55" : currentColor;
+  }
+
+  function laserBegin(pointerId, x, y) {
+    laser = { pointerId, color: laserInk(), points: [] };
+    laserAdd(x, y);
+  }
+
+  function laserAdd(x, y) {
+    if (!laser) return;
+    const now = performance.now();
+    const pts = laser.points;
+    const last = pts[pts.length - 1];
+    if (last && Math.hypot(x - last.x, y - last.y) < 1.5 / Math.max(scale, 0.05)) last.t = now;
+    else pts.push({ x, y, t: now });
+    const cut = now - LASER_MS;
+    while (pts.length > 2 && pts[0].t < cut) pts.shift();
+    dirty = true;
+  }
+
+  function laserUp() {
+    if (!laser) return;
+    laser = null;
+    dirty = true;
+  }
+
+  function drawLaser() {
+    if (!laser || historyView) return;
+    const now = performance.now();
+    const pts = laser.points.filter((p) => now - p.t < LASER_MS);
+    if (!pts.length) return;
+    const color = laser.color || "#FF2D55";
+    const toS = (p) => {
+      const s = worldToScreen(p.x, p.y);
+      return { x: s.x - canvasLeft, y: s.y };
+    };
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = color;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1];
+      const b = pts[i];
+      const alpha = 1 - Math.min(1, Math.max(0, (now - a.t) / LASER_MS));
+      if (alpha <= 0.02) continue;
+      const sa = toS(a);
+      const sb = toS(b);
+      ctx.globalAlpha = alpha * 0.9;
+      ctx.shadowBlur = 16;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 8 * (0.45 + 0.55 * alpha);
+      ctx.beginPath();
+      ctx.moveTo(sa.x, sa.y);
+      ctx.lineTo(sb.x, sb.y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = alpha * 0.95;
+      ctx.strokeStyle = "rgba(255,255,255,0.92)";
+      ctx.lineWidth = 2.2 * (0.5 + 0.5 * alpha);
+      ctx.beginPath();
+      ctx.moveTo(sa.x, sa.y);
+      ctx.lineTo(sb.x, sb.y);
+      ctx.stroke();
+    }
+    const tip = pts[pts.length - 1];
+    const tipA = 1 - Math.min(1, Math.max(0, (now - tip.t) / LASER_MS));
+    const st = toS(tip);
+    ctx.globalAlpha = Math.max(0.2, tipA);
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(st.x, st.y, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(st.x, st.y, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function setTool(tool, { openPopover } = {}) {
     if (textEdit) commitTextEditor();
     if (zoomWin && (tool === "select" || tool === "text")) closeZoomWindow();
@@ -2321,6 +2418,7 @@
     if (tool === "eraser" && currentTool !== "eraser") {
       lastToolBeforeEraser = currentTool || "pen";
     }
+    if (tool !== "laser") laserUp();
     currentTool = tool;
     if (tool === "pen" || tool === "marker") lastInkTool = lastInkToolPref = tool;
     if (window.__sofiaSwitchPalette) window.__sofiaSwitchPalette(tool);
@@ -2329,7 +2427,14 @@
     toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tool === tool);
     });
+    document.getElementById("btn-laser")?.classList.toggle("active", tool === "laser");
     updateEraserCursorVisibility();
+    if (tool === "laser") {
+      toolPopover.classList.add("hidden");
+      hideSettings();
+      zoomPopover.classList.add("hidden");
+      return;
+    }
     if (tool === "eraser") clearSelection();
     hideSettings();
     zoomPopover.classList.add("hidden");
@@ -2379,6 +2484,11 @@
       }
       setTool(btn.dataset.tool, { openPopover: true });
     });
+  });
+  document.getElementById("btn-laser")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (historyView) return;
+    setTool(currentTool === "laser" ? lastInkTool || "pen" : "laser");
   });
   // ---- Farben: 4 feste Plaetze + eigene Verknuepfungen (rechts, scrollbar) ----
   // Gespeichert pro Geraet, gilt fuer alle Blaetter. Lange druecken (Rechtsklick)
@@ -7904,6 +8014,11 @@
         zoomPointer = null;
         return;
       }
+      if (currentTool === "laser") {
+        laserBegin(e.pointerId, w.x, w.y);
+        requestRedraw();
+        return;
+      }
       if (currentTool === "eraser") {
         erasedThisGesture.clear();
         erasedStrokesThisGesture.clear();
@@ -7922,6 +8037,13 @@
         zoomHover = { px: e.clientX - rr.left, py: e.clientY - rr.top };
         requestRedraw();
       }
+      if (zoomPointer === e.pointerId && laser && laser.pointerId === e.pointerId) {
+        for (const ev of coalescedEvents(e)) {
+          const w = paneToWorld(ev.clientX, ev.clientY);
+          laserAdd(w.x, w.y);
+        }
+        return;
+      }
       if (zoomPointer !== e.pointerId || !currentStroke) return;
       for (const ev of coalescedEvents(e)) {
         const w = paneToWorld(ev.clientX, ev.clientY);
@@ -7936,6 +8058,10 @@
     const endZoomPointer = (e) => {
       if (zoomPointer !== e.pointerId) return;
       zoomPointer = null;
+      if (laser && laser.pointerId === e.pointerId) {
+        laserUp();
+        return;
+      }
       if (!currentStroke) return;
       if (currentStroke.eraser) {
         if (pendingErase.size > 0) {
@@ -8738,7 +8864,7 @@
       if (mode === "shapes") {
         if (currentTool !== "pen") setTool("pen");
       } else if (mode === "pen") {
-        if (!["pen", "marker"].includes(currentTool)) setTool(lastInkTool || "pen");
+        if (!["pen", "marker", "laser"].includes(currentTool)) setTool(lastInkTool || "pen");
       } else if (mode === "eraser") {
         if (currentTool !== "eraser") setTool("eraser");
       } else if (mode === "text") {
@@ -8758,6 +8884,11 @@
   // folgt der Modus - Tabelle bleibt bei der Auswahl. Das Lineal ist ein eigener Schalter.
   function syncModeFromTool(tool) {
     if (modeSyncing || !toolbarEl.dataset) return;
+    if (tool === "laser") {
+      objectKind = null;
+      if (currentMode !== "pen") showMode("pen");
+      return;
+    }
     let mode = currentMode;
     if (currentMode === "shapes" && (tool === "pen" || tool === "marker")) {
       if (typeof syncObjectsMenu === "function") syncObjectsMenu();
@@ -11185,6 +11316,26 @@
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     stopFling();
+    if (currentTool === "laser" && !historyView) {
+      const panBtn = e.pointerType === "mouse" && (e.button === 1 || e.button === 2 || spacePressed);
+      const secondFinger = e.pointerType === "touch" && touchPointers.size >= 1;
+      const palm = e.pointerType === "touch" && looksLikePalm(e);
+      if (!panBtn && !secondFinger && !palm) {
+        try {
+          canvas.setPointerCapture(e.pointerId);
+        } catch (err) {}
+        activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+        if (e.pointerType === "touch") {
+          if (!touchPointers.size) touchGestureView = { scale, offsetX, offsetY };
+          touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+        if (e.pointerType === "pen") notePenActivity();
+        const w = screenToWorld(e.clientX, e.clientY);
+        laserBegin(e.pointerId, w.x, w.y);
+        return;
+      }
+      if (secondFinger) laserUp();
+    }
     // Vorschau einer alten Version: nur ansehen (Finger/Maus verschieben, nicht schreiben)
     if ((historyView || viewOnly) && e.pointerType !== "touch") {
       if (e.pointerType === "mouse" || viewOnly) {
@@ -11339,6 +11490,17 @@
   }, { passive: false });
 
   canvas.addEventListener("pointermove", (e) => {
+    if (laser && laser.pointerId === e.pointerId) {
+      if (e.pointerType === "touch") touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (e.pointerType === "touch" && touchPointers.size >= 2) laserUp();
+      else {
+        for (const ev of coalescedEvents(e)) {
+          const w = screenToWorld(ev.clientX, ev.clientY);
+          laserAdd(w.x, w.y);
+        }
+        return;
+      }
+    }
     if (palmIds.has(e.pointerId)) return;
     if (e.pointerType === "touch" && penIsDown() && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
       // Stift liegt auf und der Kontakt ist sehr breit -> Handballen, Geste abbrechen
@@ -11586,6 +11748,15 @@
   }
 
   function endPointer(e) {
+    if (laser && laser.pointerId === e.pointerId) {
+      laserUp();
+      activePointers.delete(e.pointerId);
+      if (e.pointerType === "touch") {
+        touchPointers.delete(e.pointerId);
+        if (touchPointers.size < 2) pinchState = null;
+      }
+      return;
+    }
     if (palmIds.has(e.pointerId)) {
       palmIds.delete(e.pointerId);
       return;
@@ -11759,6 +11930,17 @@
     }
   }
   canvas.addEventListener("pointerup", endPointer);
+  const laserLost = (e) => {
+    if (!laser || laser.pointerId !== e.pointerId || e.target === canvas) return;
+    laserUp();
+    activePointers.delete(e.pointerId);
+    if (touchPointers.has(e.pointerId)) {
+      touchPointers.delete(e.pointerId);
+      if (touchPointers.size < 2) pinchState = null;
+    }
+  };
+  window.addEventListener("pointerup", laserLost, true);
+  window.addEventListener("pointercancel", laserLost, true);
   canvas.addEventListener("dblclick", (e) => {
     const hit = boardPageAt(screenToWorld(e.clientX, e.clientY));
     if (hit) enterBoardPage(hit.page.boardOf || hit.id);
@@ -18342,6 +18524,7 @@
       if (on) {
         if (textEdit) commitTextEditor();
         if (cropState) cancelCropMode();
+        laserUp();
         if (currentStroke) abortStroke();
         if (selection.ids.size) clearSelection();
         lassoPoints = null;
