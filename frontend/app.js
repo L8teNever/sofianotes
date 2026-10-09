@@ -261,7 +261,18 @@
   }
   // Dunkle Tinte wird im Dunkelmodus hell, helle Tinte im Hellmodus dunkel.
   // Bunte Stifte und Marker bleiben.
+  // Ergebnis pro Farbe merken: wird fuer jeden Strich in jedem Bild gebraucht
+  const themeInkMemo = new Map();
   function themeInk(color) {
+    const key = (darkMode ? "d|" : "l|") + color;
+    const hit = themeInkMemo.get(key);
+    if (hit !== undefined) return hit;
+    const out = themeInkCompute(color);
+    if (themeInkMemo.size > 400) themeInkMemo.clear();
+    themeInkMemo.set(key, out);
+    return out;
+  }
+  function themeInkCompute(color) {
     const rgb = parseHexColor(color);
     if (!rgb) return color || "#1E1F22";
     const max = Math.max(rgb[0], rgb[1], rgb[2]);
@@ -747,6 +758,13 @@
   let offsetX = 0;
   let offsetY = 0;
   let dpr = Math.max(1, window.devicePixelRatio || 1);
+  // Beim Verschieben/Zoomen rechnet die Kanvas mit niedrigerer Aufloesung (auf dem iPad mit
+  // doppelter Pixeldichte viermal weniger Pixel pro Bild). Nach dem Loslassen wieder scharf.
+  let lowResView = false;
+  let viewKeyLast = "";
+  let viewSettleAt = 0;
+  let lastWheelAt = 0;
+  window.addEventListener("wheel", () => (lastWheelAt = performance.now()), { capture: true, passive: true });
 
   function worldToScreen(x, y) {
     return { x: x * scale + offsetX, y: y * scale + offsetY };
@@ -772,7 +790,7 @@
   let canvasLeft = 0;
   let canvasRight = 0;
   function resizeCanvas() {
-    dpr = Math.max(1, window.devicePixelRatio || 1);
+    dpr = lowResView ? 1 : Math.max(1, window.devicePixelRatio || 1);
     if (!splitOn()) {
       canvasLeft = viewLeft;
       canvasRight = viewRight;
@@ -823,6 +841,11 @@
   }
   // Obere Leiste bei schmalem Zeichenbereich (Seitenleiste angedockt) in den freien Platz
   // neben den Rueckgaengig-Knoepfen einpassen; der Blattname wird dafuer gekuerzt.
+  // Klasse nur schreiben, wenn sie sich aendert: jede Schreibung (auch gleich) loest die
+  // Beobachter der Kopfleiste aus und wuerde sonst pro Bild die Leiste neu berechnen.
+  function setCls(el, cls, on) {
+    if (el && el.classList.contains(cls) !== !!on) el.classList.toggle(cls, !!on);
+  }
   function layoutTopBar() {
     const bar = document.getElementById("top-filename-bar");
     const undo = document.getElementById("undo-redo-dock");
@@ -834,7 +857,7 @@
     // eigene kleine Leiste (Seiten, geteilte Ansicht, Schau-Ansicht) sitzt links daneben
     const side = document.getElementById("top-side-bar");
     const sideOn = !!side && Array.from(side.children).some((c) => !c.classList.contains("hidden") && !c.classList.contains("tb-off"));
-    if (side) side.classList.toggle("tsb-empty", !sideOn);
+    if (side) setCls(side, "tsb-empty", !sideOn);
     const sideW = sideOn && !vertical ? side.offsetWidth + 8 : 0;
     // kleine Leiste sitzt ganz links am Rand; die Rueckgaengig-Pille in derselben Ecke rueckt daneben
     const atBottom0 = bar.classList.contains("tb-bottom");
@@ -845,7 +868,7 @@
     const back = document.getElementById("top-back-bar");
     const overPanel0 = document.body.classList.contains("pages-open");
     const backBottom = atBottom0 && !vertical && !overPanel0;
-    if (back) back.classList.toggle("tbb-bottom", backBottom);
+    if (back) setCls(back, "tbb-bottom", backBottom);
     const backW = back && back.offsetWidth ? back.offsetWidth + 8 : 0;
     document.documentElement.style.setProperty("--back-shift", backW + "px");
     // offene Seiten-Leiste: ⋯ und "Seiten ✕" liegen ueber ihr, die Rueckgaengig-Pille rueckt nicht nach
@@ -1130,7 +1153,7 @@
   }
 
   function traceMidpointPath(c, pts) {
-    c.beginPath();
+    if (c.beginPath) c.beginPath(); // Path2D hat kein beginPath: dort ist der Pfad frisch
     c.moveTo(pts[0].x, pts[0].y);
     if (pts.length === 2) {
       c.lineTo(pts[1].x, pts[1].y);
@@ -1146,6 +1169,21 @@
     c.lineTo(last.x, last.y);
   }
 
+  // Geglaettete Linie als Path2D, pro Strich gemerkt: beim Verschieben, Zoomen und Schwenken
+  // muss sie nicht jedes Bild neu aus allen Punkten gebaut werden. Ein Fingerabdruck aus den
+  // Koordinaten faengt auch Punkte ab, die direkt veraendert wurden.
+  const smoothPathCache = new WeakMap();
+  function smoothPathFor(pts) {
+    let sig = pts.length;
+    for (let i = 0; i < pts.length; i++) sig += pts[i].x * 1.0000003 + pts[i].y * 0.9999991;
+    const hit = smoothPathCache.get(pts);
+    if (hit && hit.sig === sig) return hit.path;
+    const path = new Path2D();
+    traceMidpointPath(path, pts);
+    smoothPathCache.set(pts, { sig, path });
+    return path;
+  }
+
   function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth, dash) {
     color = themeInk(color);
     c.save();
@@ -1159,10 +1197,13 @@
       const off = Math.max(7, size * 1.8);
       c.setLineDash([on, off]);
     }
-    if (smooth && !looksLikePolygon(pts)) traceMidpointPath(c, pts);
-    else traceStraightPath(c, pts);
     c.lineWidth = constantWidth ? size : avgPressureWidth(pts, size);
-    c.stroke();
+    if (smooth && !dash && pts.length > 2 && !looksLikePolygon(pts)) c.stroke(smoothPathFor(pts));
+    else {
+      if (smooth && !looksLikePolygon(pts)) traceMidpointPath(c, pts);
+      else traceStraightPath(c, pts);
+      c.stroke();
+    }
     c.restore();
   }
 
@@ -1425,14 +1466,19 @@
   const markerLayer = document.createElement("canvas");
   const markerCtx = markerLayer.getContext("2d", { alpha: true });
 
+  // Markerlayer: nur anfassen, wenn dieses oder das letzte Bild Marker enthielt
+  // (sonst wuerde jedes Bild eine ganze Kanvas loeschen und kopieren)
+  let markerLayerUsed = false;
   function syncMarkerLayer() {
     if (markerLayer.width !== canvas.width || markerLayer.height !== canvas.height) {
       markerLayer.width = canvas.width;
       markerLayer.height = canvas.height;
-    } else {
+      markerLayerUsed = false;
+    } else if (markerLayerUsed) {
       markerCtx.setTransform(1, 0, 0, 1, 0, 0);
       markerCtx.clearRect(0, 0, markerLayer.width, markerLayer.height);
     }
+    markerLayerUsed = false;
   }
 
   let gridStyle = "graph";
@@ -1814,8 +1860,8 @@
     const changed = btn.title !== title || btn.classList.contains("in-board") !== inBoard;
     btn.title = title;
     btn.setAttribute("aria-label", title);
-    btn.classList.add("back-icon");
-    btn.classList.toggle("in-board", inBoard);
+    setCls(btn, "back-icon", true);
+    setCls(btn, "in-board", inBoard);
     if (label) label.hidden = true;
     if (icon && icon.textContent !== ico) icon.textContent = ico;
     if (changed) layoutTopBar();
@@ -1841,7 +1887,7 @@
     }
     const show = !!pageId;
     const was = !btn.classList.contains("hidden");
-    btn.classList.toggle("hidden", !show);
+    setCls(btn, "hidden", !show);
     if (show) btn.dataset.pageId = pageId;
     if (was !== show) layoutTopBar();
   }
@@ -2119,16 +2165,21 @@
     // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
     // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
-    syncMarkerLayer();
-    markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
-    for (const stroke of markers) drawStroke(stroke, markerCtx, { alpha: 1 });
-    for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
-    if (live && currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, markerCtx, { alpha: 1 });
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 0.38;
-    ctx.drawImage(markerLayer, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
+    const liveMarker = live && currentStroke && currentStroke.tool === "marker";
+    const hasMarkers = markers.length > 0 || liveMarker || Array.from(remoteInProgress.values()).some((st) => st.tool === "marker");
+    if (hasMarkers || markerLayerUsed) syncMarkerLayer();
+    if (hasMarkers) {
+      markerLayerUsed = true;
+      markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
+      for (const stroke of markers) drawStroke(stroke, markerCtx, { alpha: 1 });
+      for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+      if (liveMarker) drawStroke(currentStroke, markerCtx, { alpha: 1 });
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 0.38;
+      ctx.drawImage(markerLayer, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
 
     for (const stroke of main) drawLoose(stroke);
@@ -2170,7 +2221,28 @@
     if (ruler.visible) positionRulerBar();
   }
 
+  // Ansicht bewegt sich (Finger, Maus, Mausrad, Nachlauf): Aufloesung senken, sonst wieder scharf
+  function trackViewMotion() {
+    const key = scale + "|" + offsetX + "|" + offsetY + "|" + canvasLeft;
+    const now = performance.now();
+    if (key !== viewKeyLast) {
+      viewKeyLast = key;
+      const moving = activePointers.size > 0 || !!panState || !!pinchState || now - lastWheelAt < 250 || (typeof fling !== "undefined" && !!fling);
+      if (moving) viewSettleAt = now + 220;
+      if (moving && !lowResView && Math.max(1, window.devicePixelRatio || 1) > 1) {
+        lowResView = true;
+        resizeCanvas();
+      }
+      return;
+    }
+    if (lowResView && now > viewSettleAt) {
+      lowResView = false;
+      resizeCanvas();
+    }
+  }
+
   function tick() {
+    trackViewMotion();
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
     if (laser) {
       // Spitze bleibt hell, solange noch etwas aufliegt; der Schweif altert von hinten
@@ -18011,8 +18083,7 @@
     };
     window.sofiaPagesUi = () => {
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
-      pagesBtn.classList.toggle("hidden", !show);
-      document.getElementById("canvas-menu-rotate")?.classList.add("hidden");
+      setCls(pagesBtn, "hidden", !show);
       if (!show) {
         closeMenu();
         if (panelOpen) setPanel(false);
