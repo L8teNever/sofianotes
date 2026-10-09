@@ -1560,6 +1560,7 @@
     repositionPresenceLabels();
     drawZoomPane();
     if (ruler.visible) positionRulerBar();
+    if (typeof positionObjectsBar === "function") positionObjectsBar();
   }
 
   function tick() {
@@ -1720,7 +1721,6 @@
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
-    document.getElementById("objects-menu")?.classList.add("hidden");
     if (typeof closeTextColorPop === "function") closeTextColorPop();
   }
 
@@ -2729,6 +2729,10 @@
   function beginLiveDockDrag() {
     if (!dockDrag || dockDrag.live) return;
     hidePopovers();
+    if (zoomPaneDrag) {
+      zoomPaneDrag = null;
+      zoomPaneEl?.classList.remove("moving");
+    }
     const r = liftDock(dockDrag.el, dockDrag.kind);
     dockDrag.live = true;
     dockDrag.grabDX = dockDrag.lastX - r.left;
@@ -2742,9 +2746,10 @@
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .text-color-pop, .text-color-btn")) return;
-    if (kind !== "topbar") e.preventDefault();
+    const zoomInner = kind === "dock" && toolbarEl.classList.contains("zoom-inner");
+    if (kind !== "topbar" && !zoomInner) e.preventDefault();
     const el = kind === "dock" ? toolbarEl : kind === "topbar" ? topBar : undoDock;
-    const fromChrome = !isDockInteractiveTarget(e.target);
+    const fromChrome = zoomInner ? false : !isDockInteractiveTarget(e.target);
     dockDrag = {
       kind,
       el,
@@ -6858,7 +6863,7 @@
     document.getElementById("btn-zw-pen")?.classList.toggle("active", inner);
   }
   function attachZoomInnerBar() {
-    if (!zoomInnerBarPref || !zoomWin || !zoomPaneEl || !toolbarEl) return;
+    if (!zoomWin || !zoomPaneEl || !toolbarEl) return;
     const chrome = document.getElementById("zoom-pane-chrome");
     if (!chrome) return;
     if (!toolbarSavedDock) {
@@ -6966,8 +6971,7 @@
     // Notizbuch: Rahmen und Raender an der aktuellen A4-Seite ausrichten
     if (notebook && window.sofiaCurrentPage) zoomToPage(window.sofiaCurrentPage(), false);
     if (zoomWinBtn) zoomWinBtn.classList.add("active");
-    if (zoomInnerBarPref) attachZoomInnerBar();
-    else applyZoomChrome();
+    attachZoomInnerBar();
     layoutZoomPane();
     requestRedraw();
   }
@@ -7384,13 +7388,13 @@
     if (penBtn) {
       penBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        zoomInnerBarPref = !toolbarEl.classList.contains("zoom-inner");
+        if (toolbarEl.classList.contains("zoom-inner")) return;
+        zoomInnerBarPref = true;
         try {
-          localStorage.setItem("sofianotes-zoom-inner-bar", zoomInnerBarPref ? "1" : "0");
+          localStorage.setItem("sofianotes-zoom-inner-bar", "1");
         } catch (err) {}
         renderZoomRowsSetting();
-        if (zoomInnerBarPref) attachZoomInnerBar();
-        else detachZoomInnerBar();
+        attachZoomInnerBar();
         requestRedraw();
       });
     }
@@ -7411,7 +7415,7 @@
     };
     zoomPaneEl.addEventListener("pointerdown", (e) => {
       if (!zoomWin) return;
-      if (e.target.closest("canvas, button, #toolbar")) return;
+      if (e.target.closest("canvas, button, input, .swatch, .tool-popover, .swatch-scroll")) return;
       e.preventDefault();
       e.stopPropagation();
       try {
@@ -8250,19 +8254,16 @@
   //  - setzt der Stift auf, waehrend noch eine Finger-Geste laeuft, war das der Ballen:
   //    Ansicht auf den Stand vor der Geste zuruecksetzen
   const palmIds = new Set();
-  const PALM_CONTACT_PX = 38;
-  const PEN_GRACE_MS = 350; // kuerzer: direkt nach dem Schreiben/Wegkritzeln laesst sich wieder scrollen
+  const PALM_CONTACT_PX = 52;
   let lastPenActivity = -Infinity;
   let touchGestureView = null; // {scale, offsetX, offsetY} beim Start der Finger-Geste
-  // Groesse allein ist auf dem iPad unzuverlaessig (Finger melden teils grosse Flaechen):
-  // nur kurz nach Stift-Benutzung zaehlt eine breite Beruehrung als Handballen.
-  function penRecentlyUsed() {
-    return performance.now() - lastPenActivity < 1200;
-  }
+  // Handballen nur, solange der Stift wirklich auf dem Blatt liegt — nicht noch
+  // Sekunden danach, sonst geht Pinch-Zoom/Verschieben nach dem Schreiben nicht.
   function looksLikePalm(e) {
-    if (penRecentlyUsed() && ((e.width || 0) >= PALM_CONTACT_PX || (e.height || 0) >= PALM_CONTACT_PX)) return true;
-    for (const p of activePointers.values()) if (p.type === "pen") return true;
-    return performance.now() - lastPenActivity < PEN_GRACE_MS;
+    if (e.pointerType !== "touch") return false;
+    if (touchPointers.size >= 1) return false;
+    if (penIsDown()) return true;
+    return false;
   }
   function notePenActivity() {
     lastPenActivity = performance.now();
@@ -9477,6 +9478,7 @@
         mediaId: im.mediaId,
         w: sz.w,
         h: sz.h,
+        read: true,
       };
     });
   }
@@ -9587,37 +9589,88 @@
   });
   document.addEventListener("pointerdown", (e) => {
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
-    const objMenu = document.getElementById("objects-menu");
-    if (objMenu && !objMenu.classList.contains("hidden") && !e.target.closest(".objects-menu-wrap") && !e.target.closest("#objects-menu")) objMenu.classList.add("hidden");
   }, true);
 
-  const objectsMenu = document.getElementById("objects-menu");
+  const objectsBar = document.getElementById("objects-bar");
   const objectsBtn = document.getElementById("btn-objects");
+  let objectsBarPos = null;
+  try {
+    const v = JSON.parse(localStorage.getItem("sofianotes-objectsbar-pos") || "null");
+    if (v && Number.isFinite(v.fx) && Number.isFinite(v.fy)) objectsBarPos = v;
+  } catch (err) {}
+  let objectsBarDrag = null;
+  function objectsBarOpen() {
+    return !!(objectsBar && !objectsBar.classList.contains("hidden"));
+  }
+  function objectsBarDefaultPos() {
+    const tb = toolbarEl.getBoundingClientRect();
+    const w = objectsBar.offsetWidth;
+    const h = objectsBar.offsetHeight;
+    const dock = currentDock();
+    let left = tb.left + tb.width / 2 - w / 2;
+    let top;
+    if (dock === "bottom") {
+      top = tb.top - 10 - h;
+      if (rulerBar && !rulerBar.classList.contains("hidden")) top -= rulerBar.offsetHeight + 8;
+    } else if (dock === "top") {
+      top = tb.bottom + 10;
+      if (rulerBar && !rulerBar.classList.contains("hidden")) top += rulerBar.offsetHeight + 8;
+    } else {
+      left = window.innerWidth / 2 - w / 2;
+      top = window.innerHeight - h - 20;
+      if (rulerBar && !rulerBar.classList.contains("hidden")) top -= rulerBar.offsetHeight + 8;
+    }
+    return { left, top };
+  }
+  function positionObjectsBar() {
+    if (!objectsBarOpen() || (objectsBarDrag && objectsBarDrag.live)) return;
+    const w = objectsBar.offsetWidth;
+    const h = objectsBar.offsetHeight;
+    if (objectsBarPos) {
+      const left = objectsBarPos.fx * window.innerWidth - w / 2;
+      const top = objectsBarPos.fy * window.innerHeight - h / 2;
+      objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, left)) + "px";
+      objectsBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, top)) + "px";
+      return;
+    }
+    const p = objectsBarDefaultPos();
+    objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, p.left)) + "px";
+    objectsBar.style.top = p.top + "px";
+  }
   function syncObjectsMenu() {
-    document.getElementById("btn-objects")?.classList.toggle("active", !!objectKind);
-    document.querySelectorAll("#objects-menu .lib-add-opt[data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
+    const open = objectsBarOpen();
+    document.getElementById("btn-objects")?.classList.toggle("active", open || !!objectKind);
+    if (objectsBar) objectsBar.dataset.kind = objectKind || "";
+    document.querySelectorAll("#objects-bar [data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
     document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => b.classList.toggle("active", (b.dataset.dash === "1") === objectDash));
     document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => b.classList.toggle("active", b.dataset.heads === objectArrowHeads));
+    positionObjectsBar();
+  }
+  function setObjectsBarVisible(on) {
+    if (!objectsBar) return;
+    objectsBar.classList.toggle("hidden", !on);
+    if (!on) objectKind = null;
+    syncObjectsMenu();
   }
   function setObjectKind(kind) {
     objectKind = kind || null;
     if (objectKind && currentTool !== "pen" && currentTool !== "marker") setTool("pen");
-    syncObjectsMenu();
+    if (objectKind) setObjectsBarVisible(true);
+    else syncObjectsMenu();
   }
   objectsBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    const wasOpen = !!(objectsMenu && !objectsMenu.classList.contains("hidden"));
     hidePopovers();
-    if (!objectsMenu) return;
-    objectsMenu.classList.toggle("hidden", wasOpen);
-    syncObjectsMenu();
+    setObjectsBarVisible(!objectsBarOpen());
   });
-  objectsMenu?.querySelectorAll(".lib-add-opt[data-obj]").forEach((b) => {
+  document.getElementById("objects-bar-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setObjectsBarVisible(false);
+  });
+  objectsBar?.querySelectorAll("[data-obj]").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      const kind = b.dataset.obj;
-      setObjectKind(objectKind === kind ? null : kind);
-      objectsMenu.classList.add("hidden");
+      setObjectKind(objectKind === b.dataset.obj ? null : b.dataset.obj);
     });
   });
   document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => {
@@ -9640,6 +9693,72 @@
       syncObjectsMenu();
     });
   });
+  if (objectsBar) {
+    objectsBar.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const r = objectsBar.getBoundingClientRect();
+      objectsBarDrag = {
+        id: e.pointerId,
+        live: false,
+        dx: e.clientX - r.left,
+        dy: e.clientY - r.top,
+        sx: e.clientX,
+        sy: e.clientY,
+        timer: setTimeout(() => {
+          if (!objectsBarDrag) return;
+          objectsBarDrag.live = true;
+          objectsBar.classList.add("dragging");
+          try {
+            objectsBar.setPointerCapture(objectsBarDrag.id);
+          } catch (err) {}
+        }, DOCK_HOLD_MS),
+      };
+    });
+    objectsBar.addEventListener("pointermove", (e) => {
+      const d = objectsBarDrag;
+      if (!d || d.id !== e.pointerId) return;
+      if (!d.live) {
+        if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 10) {
+          clearTimeout(d.timer);
+          objectsBarDrag = null;
+        }
+        return;
+      }
+      const w = objectsBar.offsetWidth;
+      const h = objectsBar.offsetHeight;
+      objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - d.dx)) + "px";
+      objectsBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - d.dy)) + "px";
+    });
+    const endObjBarDrag = (e) => {
+      const d = objectsBarDrag;
+      if (!d || d.id !== e.pointerId) return;
+      clearTimeout(d.timer);
+      objectsBarDrag = null;
+      if (!d.live) return;
+      objectsBar.classList.remove("dragging");
+      objectsBar.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }, { capture: true, once: true });
+      const r = objectsBar.getBoundingClientRect();
+      const def = objectsBarDefaultPos();
+      if (Math.hypot(r.left - def.left, r.top - def.top) < 40) {
+        objectsBarPos = null;
+        try {
+          localStorage.removeItem("sofianotes-objectsbar-pos");
+        } catch (err) {}
+      } else {
+        objectsBarPos = { fx: (r.left + r.width / 2) / window.innerWidth, fy: (r.top + r.height / 2) / window.innerHeight };
+        try {
+          localStorage.setItem("sofianotes-objectsbar-pos", JSON.stringify(objectsBarPos));
+        } catch (err) {}
+      }
+      positionObjectsBar();
+    };
+    objectsBar.addEventListener("pointerup", endObjBarDrag);
+    objectsBar.addEventListener("pointercancel", endObjBarDrag);
+  }
   syncObjectsMenu();
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
@@ -10554,18 +10673,20 @@
 
   canvas.addEventListener("pointermove", (e) => {
     if (palmIds.has(e.pointerId)) return;
-    if (e.pointerType === "touch" && penRecentlyUsed() && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
-      // Kontakt ist beim Auflegen gewachsen -> doch Handballen: Geste abbrechen
+    if (e.pointerType === "touch" && penIsDown() && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
+      // Stift liegt auf und der Kontakt ist sehr breit -> Handballen, Geste abbrechen
       palmIds.add(e.pointerId);
       penTookOverTouchOnly(e.pointerId);
       return;
     }
-    // Schwebender Stift (Apple Pencil Hover, buttons=0) zaehlt nicht als aufgelegt -
-    // sonst gilt jeder Finger als Handballen und Zoomen/Verschieben geht nicht.
-    const penHover = e.pointerType === "pen" && !e.buttons && !activePointers.has(e.pointerId);
-    if (e.pointerType === "pen" && !penHover) notePenActivity();
+    // Schwebender Stift oder losgelassener Zeiger zaehlt nicht als aufgelegt.
+    if (!(e.buttons & 1)) {
+      activePointers.delete(e.pointerId);
+    } else {
+      if (e.pointerType === "pen") notePenActivity();
+      activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+    }
     notePasteHoldMove(e);
-    if (!penHover) activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
     if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
       if (e.pointerType === "touch") touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       moveZoomBoxDrag(e);
@@ -15349,9 +15470,17 @@
       const ok = await askConfirm({ title: "Seite " + (i + 1) + " löschen?", text: "Alles, was auf dieser Seite steht, wird mitgelöscht.", ok: "Löschen" });
       if (!ok) return;
       const nb = clone();
+      const gone = nb.pages[i] && nb.pages[i].id;
       nb.pages.splice(i, 1);
+      if (gone) nb.bookmarks = (nb.bookmarks || []).filter((m) => m.pageId !== gone);
       withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
       fitPage(Math.min(i, nb.pages.length - 1));
+    }
+    function setPageRead(i, on) {
+      const nb = clone();
+      if (on) nb.pages[i].read = true;
+      else delete nb.pages[i].read;
+      withPageUndo(() => saveNotebook(nb));
     }
     function setPageBg(i, bg) {
       const nb = clone();
@@ -15546,7 +15675,13 @@
         return openMenu([{ head: "Seite " + (i + 1) }, { icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }], anchor);
       }
       // Drehen ganz oben, damit es schnell zu finden ist
-      const items = [{ head: "Seite " + (i + 1) }, { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) }, { head: "Hintergrund" }];
+      const items = [
+        { head: "Seite " + (i + 1) },
+        { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) },
+        { icon: "auto_stories", label: pg.read ? "Als Notizseite" : "Als Leseseite (nur Dokument)", active: !!pg.read, run: () => setPageRead(i, !pg.read) },
+        { icon: "bookmark", label: "Lesezeichen …", run: () => addBookmark(i) },
+        { head: "Hintergrund" },
+      ];
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
       for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBgSafe(i, { paper: "blank", mediaId: u.mediaId }) });
       items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
@@ -15729,6 +15864,111 @@
       e.stopPropagation();
       if (!menu.classList.contains("hidden")) return closeMenu();
       notebookMenu(e.currentTarget);
+    });
+    const marksEl = document.getElementById("pages-marks");
+    const marksBtn = document.getElementById("btn-bookmarks");
+    let marksOpen = false;
+    function notebookMarks() {
+      return (notebook && notebook.bookmarks) || [];
+    }
+    function pageIndexById(id) {
+      return notebook.pages.findIndex((p) => p.id === id);
+    }
+    async function addBookmark(i) {
+      if (!notebook || !fullRights()) return showToast("Nur wer bearbeiten darf, kann Lesezeichen setzen");
+      const pg = notebook.pages[i];
+      if (!pg) return;
+      const res = await openNameSheet({ title: "Lesezeichen", label: "Name", initial: "", placeholder: "z. B. Einleitung" });
+      const name = res && String(res.value || "").trim().slice(0, 80);
+      if (!name) return;
+      const nb = clone();
+      nb.bookmarks = (nb.bookmarks || []).concat([{ id: newId(), pageId: pg.id, name }]);
+      withPageUndo(() => saveNotebook(nb));
+      marksOpen = true;
+      renderMarks();
+    }
+    async function renameBookmark(id) {
+      const m = notebookMarks().find((x) => x.id === id);
+      if (!m) return;
+      const res = await openNameSheet({ title: "Lesezeichen umbenennen", label: "Name", initial: m.name });
+      const name = res && String(res.value || "").trim().slice(0, 80);
+      if (!name) return;
+      const nb = clone();
+      nb.bookmarks = (nb.bookmarks || []).map((x) => (x.id === id ? Object.assign({}, x, { name }) : x));
+      withPageUndo(() => saveNotebook(nb));
+      renderMarks();
+    }
+    function deleteBookmark(id) {
+      const nb = clone();
+      nb.bookmarks = (nb.bookmarks || []).filter((x) => x.id !== id);
+      withPageUndo(() => saveNotebook(nb));
+      renderMarks();
+    }
+    function jumpBookmark(m) {
+      const i = pageIndexById(m.pageId);
+      if (i < 0) return;
+      if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
+      fitPage(i);
+    }
+    function renderMarks() {
+      marksBtn?.classList.toggle("active", marksOpen);
+      if (!marksEl) return;
+      marksEl.classList.toggle("hidden", !marksOpen);
+      if (!marksOpen || !notebook) {
+        marksEl.innerHTML = "";
+        return;
+      }
+      marksEl.innerHTML = "";
+      if (fullRights()) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "pages-marks-add";
+        add.innerHTML = '<span class="material-symbols-rounded">bookmark</span><span>Lesezeichen auf dieser Seite</span>';
+        add.addEventListener("click", (e) => {
+          e.stopPropagation();
+          addBookmark(currentPage());
+        });
+        marksEl.appendChild(add);
+      }
+      for (const m of notebookMarks()) {
+        const i = pageIndexById(m.pageId);
+        const row = document.createElement("div");
+        row.className = "pages-mark";
+        row.innerHTML = '<span class="pages-mark-text"><strong></strong><small></small></span>';
+        row.querySelector("strong").textContent = m.name;
+        row.querySelector("small").textContent = i >= 0 ? "Seite " + (i + 1) : "Seite fehlt";
+        row.addEventListener("click", (e) => {
+          if (e.target.closest("button")) return;
+          jumpBookmark(m);
+        });
+        if (fullRights()) {
+          const more = document.createElement("button");
+          more.type = "button";
+          more.className = "hw-panel-btn";
+          more.title = "Umbenennen oder löschen";
+          more.innerHTML = '<span class="material-symbols-rounded">more_vert</span>';
+          more.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openMenu([
+              { icon: "edit", label: "Umbenennen", run: () => renameBookmark(m.id) },
+              { icon: "delete", label: "Löschen", danger: true, run: () => deleteBookmark(m.id) },
+            ], more);
+          });
+          row.appendChild(more);
+        }
+        marksEl.appendChild(row);
+      }
+      if (!notebookMarks().length && !fullRights()) {
+        const empty = document.createElement("div");
+        empty.className = "pap-hint";
+        empty.textContent = "Noch keine Lesezeichen";
+        marksEl.appendChild(empty);
+      }
+    }
+    marksBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      marksOpen = !marksOpen;
+      renderMarks();
     });
     panel.addEventListener("pointerdown", (e) => e.stopPropagation());
     addPop.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -15990,7 +16230,8 @@
     let renderedSig = "";
     function renderPanel() {
       if (!panelOpen || !notebook) return;
-      renderedSig = JSON.stringify(notebook.pages) + notebook.layout;
+      renderedSig = JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []);
+      renderMarks();
       const rects = pageRects(notebook);
       const cur = currentPage();
       thumbBuckets = bucketStrokes(rects);
@@ -15999,7 +16240,7 @@
       grid.innerHTML = "";
       rects.forEach((r, i) => {
         const cell = document.createElement("div");
-        cell.className = "page-thumb" + (i === cur ? " active" : "") + (pageAppear && pageAppear.ids.has(r.id) ? " page-thumb-enter" : "");
+        cell.className = "page-thumb" + (i === cur ? " active" : "") + (notebook.pages[i] && notebook.pages[i].read ? " read" : "") + (pageAppear && pageAppear.ids.has(r.id) ? " page-thumb-enter" : "");
         cell.dataset.index = i;
         const cv = document.createElement("canvas");
         cv.className = "page-thumb-img";
@@ -16007,7 +16248,11 @@
         const foot = document.createElement("div");
         foot.className = "page-thumb-foot";
         foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite: drehen, Hintergrund, löschen …"><span class="material-symbols-rounded">expand_more</span></button>';
-        foot.firstChild.textContent = i + 1;
+        if (notebook.pages[i] && notebook.pages[i].read) {
+          foot.firstChild.className = "page-thumb-kind";
+          foot.firstChild.innerHTML = '<span class="material-symbols-rounded">auto_stories</span><span></span>';
+          foot.firstChild.lastChild.textContent = i + 1;
+        } else foot.firstChild.textContent = i + 1;
         cell.appendChild(foot);
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -16047,7 +16292,7 @@
     // Nur bei geaenderten Seiten alles neu, sonst nur das Bild der aktuellen Seite (schnell)
     window.sofiaPagesChanged = (now) => {
       if (!panelOpen) return;
-      if (now && notebook && JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) {
+      if (now && notebook && JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []) !== renderedSig) {
         clearTimeout(thumbTimer);
         requestAnimationFrame(() => panelOpen && notebook && renderPanel());
         return;
@@ -16055,7 +16300,7 @@
       clearTimeout(thumbTimer);
       thumbTimer = setTimeout(() => {
         if (!panelOpen || !notebook) return;
-        if (JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) return renderPanel();
+        if (JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []) !== renderedSig) return renderPanel();
         // nur Seiten mit Aenderungen neu zeichnen
         const rects = pageRects(notebook);
         thumbBuckets = bucketStrokes(rects);
@@ -16342,7 +16587,10 @@
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         addPop.classList.add("hidden");
-        if (b.dataset.act === "photo") photoInput.click();
+        if (b.dataset.act === "read") {
+          const at = fullRights() ? currentPage() : notebook.pages.length - 1;
+          addPages(at, [{ id: newId(), paper: "blank", w: A4_W, h: A4_H, read: true }]);
+        } else if (b.dataset.act === "photo") photoInput.click();
         else if (b.dataset.act === "image") imageInput.click();
         else pdfInput.click();
       })
@@ -17000,7 +17248,6 @@
     const pairs = [
       ["canvas-menu", "btn-canvas-menu"],
       ["insert-menu", "btn-insert"],
-      ["objects-menu", "btn-objects"],
       ["split-menu", "btn-split"],
       ["tb-more-menu", "btn-tb-more"],
       ["canvas-share-submenu", null],

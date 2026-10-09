@@ -749,11 +749,25 @@ def clean_notebook(nb: Any) -> dict[str, Any] | None:
             rot = 0
         if rot:
             item["rot"] = rot
+        if pg.get("read"):
+            item["read"] = True
         pages.append(item)
+    page_ids = {p["id"] for p in pages}
+    bookmarks = []
+    for raw in (nb.get("bookmarks") or [])[:200]:
+        if not isinstance(raw, dict):
+            continue
+        pid = str(raw.get("pageId") or "")[:60]
+        name = str(raw.get("name") or "").strip()[:80]
+        bid = str(raw.get("id") or "")[:60]
+        if not pid or pid not in page_ids or not name:
+            continue
+        bookmarks.append({"id": bid or pid, "pageId": pid, "name": name})
     return {
         "layout": "horizontal" if nb.get("layout") == "horizontal" else "vertical",
         "template": page_bg(nb.get("template")),
         "pages": pages,
+        "bookmarks": bookmarks,
     }
 
 
