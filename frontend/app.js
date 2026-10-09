@@ -2191,7 +2191,7 @@
 
   // ---- toolbar ------------------------------------------------------
   let currentTool = "pen"; // pen | marker | eraser | select | laser
-  // Laserpointer: nur lokal, kein Strich. Schweif verblasst von hinten, weg sobald nichts mehr aufliegt.
+  // Laserpointer: nur lokal, kein Strich. Nur Stift und Maus. Finger verschieben und zoomen.
   let laser = null; // { pointerId, color, points: [{x,y,t}] }
   const LASER_MS = 720;
   let objectKind = null; // null | rect | line | circle | triangle | arrow
@@ -8106,6 +8106,10 @@
         return;
       }
       if (currentTool === "laser") {
+        if (e.pointerType === "touch") {
+          zoomPointer = null;
+          return;
+        }
         laserBegin(e.pointerId, w.x, w.y);
         requestRedraw();
         return;
@@ -11461,25 +11465,18 @@
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     stopFling();
-    if (currentTool === "laser" && !historyView) {
+    if (currentTool === "laser" && !historyView && e.pointerType !== "touch") {
       const panBtn = e.pointerType === "mouse" && (e.button === 1 || e.button === 2 || spacePressed);
-      const secondFinger = e.pointerType === "touch" && touchPointers.size >= 1;
-      const palm = e.pointerType === "touch" && looksLikePalm(e);
-      if (!panBtn && !secondFinger && !palm) {
+      if (!panBtn) {
         try {
           canvas.setPointerCapture(e.pointerId);
         } catch (err) {}
         activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
-        if (e.pointerType === "touch") {
-          if (!touchPointers.size) touchGestureView = { scale, offsetX, offsetY };
-          touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        }
         if (e.pointerType === "pen") notePenActivity();
         const w = screenToWorld(e.clientX, e.clientY);
         laserBegin(e.pointerId, w.x, w.y);
         return;
       }
-      if (secondFinger) laserUp();
     }
     // Vorschau einer alten Version: nur ansehen (Finger/Maus verschieben, nicht schreiben)
     if ((historyView || viewOnly) && e.pointerType !== "touch") {
@@ -11582,7 +11579,7 @@
           requestRedraw();
           return;
         }
-        if (fingerDrawEnabled && !pinchState && !boardPageAt(screenToWorld(e.clientX, e.clientY))) {
+        if (fingerDrawEnabled && currentTool !== "laser" && !pinchState && !boardPageAt(screenToWorld(e.clientX, e.clientY))) {
           if (window.sofiaArmPagePull && window.sofiaArmPagePull()) {
             pullArm = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
           }
