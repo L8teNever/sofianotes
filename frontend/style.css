@@ -4712,3 +4712,20 @@ html[data-theme="dark"] #td-title { color: #f4f1f8; }
 html[data-theme="dark"] .td-label, html[data-theme="dark"] .td-hint { color: #c8c2d0; }
 html[data-theme="dark"] .tbm-tile.active .tbm-ico, html[data-theme="dark"] .tbm-row.active .tbm-ico { background: #5b4b8a; color: #f4f1f8; }
 html[data-theme="dark"] .calc-mode .active { background: #3a3350; color: #e8def8; }
+
+/* ---- Dunkelmodus: Einstellungen (Personen, App & Version) ---- */
+html[data-theme="dark"] .admin-person-card,
+html[data-theme="dark"] .dlg .admin-person-card { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .admin-person-card .link { color: #d0bcff; }
+html[data-theme="dark"] .admin-person-card .danger,
+html[data-theme="dark"] .admin-person-card button.danger { color: #ffb3b8; }
+html[data-theme="dark"] .admin-person-card small,
+html[data-theme="dark"] .admin-person-card .admin-mail-hint { color: #c8c2d0; }
+html[data-theme="dark"] .version-name { color: #f4f1f8; }
+html[data-theme="dark"] .version-name span,
+html[data-theme="dark"] #settings-commit-badge { background: #243044; color: #a8c7fa; }
+html[data-theme="dark"] .version-date,
+html[data-theme="dark"] #settings-update-desc { color: #c8c2d0; }
+html[data-theme="dark"] .version-btn { background: #3a3350; color: #e8def8; }
+html[data-theme="dark"] .version-btn:disabled { background: #2b2930; color: #8a8494; }
+html[data-theme="dark"] .version-btn-apply { background: #d0bcff; color: #381e72; }
