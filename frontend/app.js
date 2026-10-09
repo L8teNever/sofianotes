@@ -1560,6 +1560,7 @@
     repositionPresenceLabels();
     drawZoomPane();
     if (ruler.visible) positionRulerBar();
+    if (typeof positionObjectsBar === "function") positionObjectsBar();
   }
 
   function tick() {
@@ -1720,7 +1721,6 @@
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
-    document.getElementById("objects-menu")?.classList.add("hidden");
     if (typeof closeTextColorPop === "function") closeTextColorPop();
   }
 
@@ -9587,37 +9587,88 @@
   });
   document.addEventListener("pointerdown", (e) => {
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
-    const objMenu = document.getElementById("objects-menu");
-    if (objMenu && !objMenu.classList.contains("hidden") && !e.target.closest(".objects-menu-wrap") && !e.target.closest("#objects-menu")) objMenu.classList.add("hidden");
   }, true);
 
-  const objectsMenu = document.getElementById("objects-menu");
+  const objectsBar = document.getElementById("objects-bar");
   const objectsBtn = document.getElementById("btn-objects");
+  let objectsBarPos = null;
+  try {
+    const v = JSON.parse(localStorage.getItem("sofianotes-objectsbar-pos") || "null");
+    if (v && Number.isFinite(v.fx) && Number.isFinite(v.fy)) objectsBarPos = v;
+  } catch (err) {}
+  let objectsBarDrag = null;
+  function objectsBarOpen() {
+    return !!(objectsBar && !objectsBar.classList.contains("hidden"));
+  }
+  function objectsBarDefaultPos() {
+    const tb = toolbarEl.getBoundingClientRect();
+    const w = objectsBar.offsetWidth;
+    const h = objectsBar.offsetHeight;
+    const dock = currentDock();
+    let left = tb.left + tb.width / 2 - w / 2;
+    let top;
+    if (dock === "bottom") {
+      top = tb.top - 10 - h;
+      if (rulerBar && !rulerBar.classList.contains("hidden")) top -= rulerBar.offsetHeight + 8;
+    } else if (dock === "top") {
+      top = tb.bottom + 10;
+      if (rulerBar && !rulerBar.classList.contains("hidden")) top += rulerBar.offsetHeight + 8;
+    } else {
+      left = window.innerWidth / 2 - w / 2;
+      top = window.innerHeight - h - 20;
+      if (rulerBar && !rulerBar.classList.contains("hidden")) top -= rulerBar.offsetHeight + 8;
+    }
+    return { left, top };
+  }
+  function positionObjectsBar() {
+    if (!objectsBarOpen() || (objectsBarDrag && objectsBarDrag.live)) return;
+    const w = objectsBar.offsetWidth;
+    const h = objectsBar.offsetHeight;
+    if (objectsBarPos) {
+      const left = objectsBarPos.fx * window.innerWidth - w / 2;
+      const top = objectsBarPos.fy * window.innerHeight - h / 2;
+      objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, left)) + "px";
+      objectsBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, top)) + "px";
+      return;
+    }
+    const p = objectsBarDefaultPos();
+    objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, p.left)) + "px";
+    objectsBar.style.top = p.top + "px";
+  }
   function syncObjectsMenu() {
-    document.getElementById("btn-objects")?.classList.toggle("active", !!objectKind);
-    document.querySelectorAll("#objects-menu .lib-add-opt[data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
+    const open = objectsBarOpen();
+    document.getElementById("btn-objects")?.classList.toggle("active", open || !!objectKind);
+    if (objectsBar) objectsBar.dataset.kind = objectKind || "";
+    document.querySelectorAll("#objects-bar [data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
     document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => b.classList.toggle("active", (b.dataset.dash === "1") === objectDash));
     document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => b.classList.toggle("active", b.dataset.heads === objectArrowHeads));
+    positionObjectsBar();
+  }
+  function setObjectsBarVisible(on) {
+    if (!objectsBar) return;
+    objectsBar.classList.toggle("hidden", !on);
+    if (!on) objectKind = null;
+    syncObjectsMenu();
   }
   function setObjectKind(kind) {
     objectKind = kind || null;
     if (objectKind && currentTool !== "pen" && currentTool !== "marker") setTool("pen");
-    syncObjectsMenu();
+    if (objectKind) setObjectsBarVisible(true);
+    else syncObjectsMenu();
   }
   objectsBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
-    const wasOpen = !!(objectsMenu && !objectsMenu.classList.contains("hidden"));
     hidePopovers();
-    if (!objectsMenu) return;
-    objectsMenu.classList.toggle("hidden", wasOpen);
-    syncObjectsMenu();
+    setObjectsBarVisible(!objectsBarOpen());
   });
-  objectsMenu?.querySelectorAll(".lib-add-opt[data-obj]").forEach((b) => {
+  document.getElementById("objects-bar-close")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setObjectsBarVisible(false);
+  });
+  objectsBar?.querySelectorAll("[data-obj]").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      const kind = b.dataset.obj;
-      setObjectKind(objectKind === kind ? null : kind);
-      objectsMenu.classList.add("hidden");
+      setObjectKind(objectKind === b.dataset.obj ? null : b.dataset.obj);
     });
   });
   document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => {
@@ -9640,6 +9691,72 @@
       syncObjectsMenu();
     });
   });
+  if (objectsBar) {
+    objectsBar.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const r = objectsBar.getBoundingClientRect();
+      objectsBarDrag = {
+        id: e.pointerId,
+        live: false,
+        dx: e.clientX - r.left,
+        dy: e.clientY - r.top,
+        sx: e.clientX,
+        sy: e.clientY,
+        timer: setTimeout(() => {
+          if (!objectsBarDrag) return;
+          objectsBarDrag.live = true;
+          objectsBar.classList.add("dragging");
+          try {
+            objectsBar.setPointerCapture(objectsBarDrag.id);
+          } catch (err) {}
+        }, DOCK_HOLD_MS),
+      };
+    });
+    objectsBar.addEventListener("pointermove", (e) => {
+      const d = objectsBarDrag;
+      if (!d || d.id !== e.pointerId) return;
+      if (!d.live) {
+        if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 10) {
+          clearTimeout(d.timer);
+          objectsBarDrag = null;
+        }
+        return;
+      }
+      const w = objectsBar.offsetWidth;
+      const h = objectsBar.offsetHeight;
+      objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - d.dx)) + "px";
+      objectsBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - d.dy)) + "px";
+    });
+    const endObjBarDrag = (e) => {
+      const d = objectsBarDrag;
+      if (!d || d.id !== e.pointerId) return;
+      clearTimeout(d.timer);
+      objectsBarDrag = null;
+      if (!d.live) return;
+      objectsBar.classList.remove("dragging");
+      objectsBar.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }, { capture: true, once: true });
+      const r = objectsBar.getBoundingClientRect();
+      const def = objectsBarDefaultPos();
+      if (Math.hypot(r.left - def.left, r.top - def.top) < 40) {
+        objectsBarPos = null;
+        try {
+          localStorage.removeItem("sofianotes-objectsbar-pos");
+        } catch (err) {}
+      } else {
+        objectsBarPos = { fx: (r.left + r.width / 2) / window.innerWidth, fy: (r.top + r.height / 2) / window.innerHeight };
+        try {
+          localStorage.setItem("sofianotes-objectsbar-pos", JSON.stringify(objectsBarPos));
+        } catch (err) {}
+      }
+      positionObjectsBar();
+    };
+    objectsBar.addEventListener("pointerup", endObjBarDrag);
+    objectsBar.addEventListener("pointercancel", endObjBarDrag);
+  }
   syncObjectsMenu();
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
@@ -17000,7 +17117,6 @@
     const pairs = [
       ["canvas-menu", "btn-canvas-menu"],
       ["insert-menu", "btn-insert"],
-      ["objects-menu", "btn-objects"],
       ["split-menu", "btn-split"],
       ["tb-more-menu", "btn-tb-more"],
       ["canvas-share-submenu", null],

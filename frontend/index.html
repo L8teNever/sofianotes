@@ -59,6 +59,27 @@
   <span class="mode-sep"></span>
   <button type="button" id="ruler-bar-close" class="tool-btn" title="Lineal ausblenden"><span class="material-symbols-rounded">close</span></button>
 </div>
+<!-- zweite Leiste: Formen, wie die Stiftleiste / Lineal-Leiste -->
+<div id="objects-bar" class="ruler-bar hidden" role="toolbar" aria-label="Formen">
+  <button type="button" class="tool-btn kind-btn" data-obj="rect" title="Rechteck"><span class="material-symbols-rounded">rectangle</span></button>
+  <button type="button" class="tool-btn kind-btn" data-obj="line" title="Gerade Linie"><span class="material-symbols-rounded">horizontal_rule</span></button>
+  <button type="button" class="tool-btn kind-btn" data-obj="circle" title="Kreis"><span class="material-symbols-rounded">circle</span></button>
+  <button type="button" class="tool-btn kind-btn" data-obj="triangle" title="Dreieck"><span class="material-symbols-rounded">change_history</span></button>
+  <button type="button" class="tool-btn kind-btn" data-obj="arrow" title="Pfeil"><span class="material-symbols-rounded">east</span></button>
+  <span class="mode-sep"></span>
+  <span id="obj-dash">
+    <button type="button" class="tool-btn" data-dash="0" title="Durchgezogen"><span class="angle-label">—</span></button>
+    <button type="button" class="tool-btn" data-dash="1" title="Gestrichelt"><span class="angle-label">- -</span></button>
+  </span>
+  <span class="mode-sep obj-heads"></span>
+  <span id="obj-arrow" class="obj-heads">
+    <button type="button" class="tool-btn" data-heads="end" title="Pfeilspitze am Ende"><span class="material-symbols-rounded">line_end</span></button>
+    <button type="button" class="tool-btn" data-heads="start" title="Pfeilspitze am Anfang"><span class="material-symbols-rounded">line_start</span></button>
+    <button type="button" class="tool-btn" data-heads="both" title="Beide Enden"><span class="material-symbols-rounded">swap_horiz</span></button>
+  </span>
+  <span class="mode-sep"></span>
+  <button type="button" id="objects-bar-close" class="tool-btn" title="Formen ausblenden"><span class="material-symbols-rounded">close</span></button>
+</div>
 <input id="ruler-angle-input" class="ruler-angle-input hidden" type="number" inputmode="decimal" min="0" max="359" step="1" aria-label="Winkel in Grad" />
 <div id="zoom-box" class="hidden">
   <div id="zoom-grip" class="zoom-handle" title="Rahmen verschieben"><span class="material-symbols-rounded">open_with</span></div>
@@ -242,42 +263,9 @@
     <span class="material-symbols-rounded">straighten</span>
   </button>
   <div class="insert-menu-wrap objects-menu-wrap">
-    <button id="btn-objects" class="icon-btn" type="button" title="Objekte: Rechteck, Linie, Kreis, Dreieck, Pfeil">
+    <button id="btn-objects" class="icon-btn" type="button" title="Formen: Rechteck, Linie, Kreis, Dreieck, Pfeil">
       <span class="material-symbols-rounded">shapes</span>
     </button>
-    <div id="objects-menu" class="lib-add-menu insert-menu hidden" role="menu" aria-label="Objekte">
-      <button type="button" class="lib-add-opt" data-obj="rect">
-        <span class="material-symbols-rounded">rectangle</span>
-        Rechteck
-      </button>
-      <button type="button" class="lib-add-opt" data-obj="line">
-        <span class="material-symbols-rounded">horizontal_rule</span>
-        Gerade Linie
-      </button>
-      <button type="button" class="lib-add-opt" data-obj="circle">
-        <span class="material-symbols-rounded">circle</span>
-        Kreis
-      </button>
-      <button type="button" class="lib-add-opt" data-obj="triangle">
-        <span class="material-symbols-rounded">change_history</span>
-        Dreieck
-      </button>
-      <button type="button" class="lib-add-opt" data-obj="arrow">
-        <span class="material-symbols-rounded">east</span>
-        Pfeil
-      </button>
-      <div class="obj-menu-sub">Strich</div>
-      <div class="set-seg obj-seg" id="obj-dash">
-        <button type="button" data-dash="0">Durchgezogen</button>
-        <button type="button" data-dash="1">Gestrichelt</button>
-      </div>
-      <div class="obj-menu-sub">Pfeilspitze</div>
-      <div class="set-seg obj-seg" id="obj-arrow">
-        <button type="button" data-heads="end">Ende</button>
-        <button type="button" data-heads="start">Anfang</button>
-        <button type="button" data-heads="both">Beide</button>
-      </div>
-    </div>
   </div>
   <button id="btn-zoom-window" class="icon-btn" type="button" title="Zoom-Fenster: groß schreiben, klein aufs Blatt">
     <span class="material-symbols-rounded">zoom_in_map</span>
