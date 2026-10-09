@@ -23,6 +23,9 @@
       window.matchMedia("(display-mode: fullscreen)").matches ||
       window.matchMedia("(display-mode: minimal-ui)").matches;
     if (standalone) document.documentElement.classList.add("pwa-standalone");
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem("sofianotes-theme") === "dark" ? "dark" : "light";
+    } catch (err) {}
   })();
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -762,11 +765,17 @@
   </div>
 </div>
 
-<div id="who-backdrop" class="who-backdrop">
-  <div class="who-card">
-    <img class="app-logo" src="icons/icon-192.png?v=__BUILD__" alt="" width="72" height="72" />
+<div id="who-backdrop" class="who-backdrop" role="status" aria-live="polite" aria-busy="true">
+  <div class="who-card" data-state="loading">
+    <div class="gate-mark" aria-hidden="true">
+      <svg class="gate-spin" viewBox="0 0 88 88">
+        <circle cx="44" cy="44" r="38" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" />
+      </svg>
+      <img class="app-logo" src="icons/icon-192.png?v=__BUILD__" alt="" width="72" height="72" />
+    </div>
     <h1 id="gate-title">Lädt…</h1>
     <p id="gate-text"></p>
+    <button type="button" id="gate-retry" class="gate-retry hidden">Neu laden</button>
   </div>
 </div>
 
@@ -1191,6 +1200,58 @@
     window.ensureFflate = function () {
       return load("https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js").then(function () { return window.fflate; });
     };
+  })();
+</script>
+<script>
+  (function () {
+    var LIMIT = 12000;
+    var settled = false;
+    function hardReload() {
+      var finish = function () { location.reload(); };
+      var pending = Promise.resolve();
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        pending = navigator.serviceWorker.getRegistrations().then(function (regs) {
+          return Promise.all(regs.map(function (r) { return r.unregister(); }));
+        }).catch(function () {});
+      }
+      pending.then(function () {
+        if (!window.caches) return;
+        return caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        });
+      }).then(finish, finish);
+    }
+    function showBootError(msg) {
+      if (settled) return;
+      var gate = document.getElementById("who-backdrop");
+      if (!gate || gate.classList.contains("hidden")) return;
+      var title = document.getElementById("gate-title");
+      if (title && title.textContent && title.textContent !== "Lädt…") return;
+      settled = true;
+      gate.setAttribute("aria-busy", "false");
+      var card = gate.querySelector(".who-card");
+      if (card) card.setAttribute("data-state", "error");
+      if (title) title.textContent = "Start fehlgeschlagen";
+      var text = document.getElementById("gate-text");
+      if (text) text.textContent = msg || "Die App konnte nicht starten. Bitte neu laden.";
+      var btn = document.getElementById("gate-retry");
+      if (btn) btn.classList.remove("hidden");
+    }
+    window.sofiaBootOk = function () { settled = true; };
+    window.sofiaBootFail = function (msg) { showBootError(msg); };
+    var retry = document.getElementById("gate-retry");
+    if (retry) retry.addEventListener("click", hardReload);
+    window.addEventListener("error", function (e) {
+      var t = e && e.target;
+      if (t && t.tagName === "SCRIPT") {
+        showBootError("Eine Datei konnte nicht geladen werden. Bitte neu laden.");
+        return;
+      }
+      if (e && e.message) showBootError(String(e.message));
+    }, true);
+    setTimeout(function () {
+      showBootError("Das Laden dauert zu lange. Bitte Seite neu laden.");
+    }, LIMIT);
   })();
 </script>
 <script src="de-words.js?v=__BUILD__"></script>

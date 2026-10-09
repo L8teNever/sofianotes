@@ -1202,6 +1202,62 @@ html[data-theme="dark"] .app-toast {
   margin: 0 0 22px;
   color: var(--muted);
 }
+.who-card[data-state="loading"] {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.who-card[data-state="loading"] h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #49454f;
+}
+.who-card[data-state="loading"] p:empty { margin: 0; }
+.gate-mark {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 16px;
+}
+.gate-mark .app-logo {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: 72px;
+  height: 72px;
+  margin: 0;
+}
+.gate-spin {
+  position: absolute;
+  inset: 0;
+  width: 96px;
+  height: 96px;
+  color: #6750a4;
+  animation: gate-spin 0.9s linear infinite;
+}
+.gate-spin circle {
+  stroke-dasharray: 64 180;
+  transform-origin: 44px 44px;
+}
+.who-card[data-state="error"] .gate-spin { display: none; }
+.who-card[data-state="error"] p { margin-bottom: 0; }
+.gate-retry {
+  margin-top: 18px;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 22px;
+  background: #6750a4;
+  color: #fff;
+  font: 600 15px/1 Inter, system-ui, sans-serif;
+  cursor: pointer;
+}
+.gate-retry.hidden { display: none; }
+@keyframes gate-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .gate-spin { animation: none; }
+}
 .who-grid {
   display: grid;
   gap: 12px;
@@ -2021,6 +2077,12 @@ html[data-theme="dark"] .app-toast {
   display: block;
 }
 .who-card .app-logo { width: 72px; height: 72px; margin: 0 auto 14px; }
+.who-card .gate-mark .app-logo {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  margin: 0;
+}
 
 /* ---- Tabellen-Dialog ---- */
 .table-dialog {
@@ -4378,6 +4440,10 @@ html[data-theme="dark"] #canvas-filename:focus { background: #2b2930; }
 html[data-theme="dark"] .file-icon { background: #243044; color: #a8c7fa; }
 html[data-theme="dark"] .library-backdrop,
 html[data-theme="dark"] .who-backdrop { background: #121018; }
+html[data-theme="dark"] .who-card[data-state="loading"] { background: transparent; box-shadow: none; }
+html[data-theme="dark"] .who-card[data-state="loading"] h1 { color: #cac4d0; }
+html[data-theme="dark"] .gate-spin { color: #d0bcff; }
+html[data-theme="dark"] .gate-retry { background: #d0bcff; color: #381e72; }
 html[data-theme="dark"] .lib-page { background: #16141c; color: #f4f1f8; }
 html[data-theme="dark"] .lib-header { background: rgba(22, 20, 28, 0.9); }
 html[data-theme="dark"] .lib-title,

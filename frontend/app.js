@@ -12690,15 +12690,42 @@
     if (libPerson) libPerson.textContent = personName(currentPersonId);
   }
 
-  function showGate(title, text) {
-    document.getElementById("gate-title").textContent = title;
-    document.getElementById("gate-text").textContent = text || "";
-    whoBackdrop.classList.remove("hidden");
-    libraryBackdrop.classList.add("hidden");
+  function showGate(title, text, opts) {
+    const titleEl = document.getElementById("gate-title");
+    const textEl = document.getElementById("gate-text");
+    if (titleEl) titleEl.textContent = title;
+    if (textEl) textEl.textContent = text || "";
+    const loading = !!(opts && opts.loading);
+    const card = document.querySelector("#who-backdrop .who-card");
+    if (card) card.setAttribute("data-state", loading ? "loading" : "error");
+    const retry = document.getElementById("gate-retry");
+    if (retry) retry.classList.toggle("hidden", loading);
+    if (whoBackdrop) {
+      whoBackdrop.classList.remove("hidden");
+      whoBackdrop.setAttribute("aria-busy", loading ? "true" : "false");
+    }
+    if (libraryBackdrop) libraryBackdrop.classList.add("hidden");
   }
 
   function hideWho() {
-    whoBackdrop.classList.add("hidden");
+    if (whoBackdrop) whoBackdrop.classList.add("hidden");
+    if (window.sofiaBootOk) window.sofiaBootOk();
+  }
+
+  function bootWait(promise, ms) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("timeout")), ms);
+      Promise.resolve(promise).then(
+        (v) => {
+          clearTimeout(t);
+          resolve(v);
+        },
+        (e) => {
+          clearTimeout(t);
+          reject(e);
+        }
+      );
+    });
   }
 
   function showLibrary(opts) {
@@ -19990,35 +20017,42 @@
   requestAnimationFrame(tick);
 
   (async () => {
-    showGate("Lädt…", "");
-    let me;
+    showGate("Lädt…", "", { loading: true });
     try {
-      me = await api("/api/me");
-    } catch (err) {
-      if (String(err.message) === "401") {
-        showGate("Nicht angemeldet", "Bitte über den regulären Zugangslink erneut anmelden (Cloudflare Access).");
-      } else if (String(err.message) === "403") {
-        showGate("Kein Zugriff", "Diese Mail-Adresse ist noch keiner Person zugeordnet. Ein Admin muss dich erst freischalten.");
-      } else {
-        showGate("Verbindung fehlgeschlagen", "Bitte Seite neu laden.");
+      let me;
+      try {
+        me = await bootWait(api("/api/me"), 10000);
+      } catch (err) {
+        const msg = String(err && err.message);
+        if (msg === "401") {
+          showGate("Nicht angemeldet", "Bitte über den regulären Zugangslink erneut anmelden (Cloudflare Access).");
+        } else if (msg === "403") {
+          showGate("Kein Zugriff", "Diese Mail-Adresse ist noch keiner Person zugeordnet. Ein Admin muss dich erst freischalten.");
+        } else if (msg === "timeout") {
+          showGate("Verbindung zu langsam", "Der Server antwortet nicht. Bitte Seite neu laden.");
+        } else {
+          showGate("Verbindung fehlgeschlagen", "Bitte Seite neu laden.");
+        }
+        return;
       }
-      return;
+      currentPersonId = me.id;
+      isAdmin = !!me.isAdmin;
+      document.getElementById("set-nav-people")?.classList.toggle("hidden", !isAdmin);
+      localStorage.setItem("sofianotes-person", currentPersonId);
+      const startParams = new URLSearchParams(location.search);
+      currentFolderId = startParams.get("folder") || null;
+      loadMySettings();
+      prefSync.check(true);
+      await bootWait(refreshPeople(), 8000).catch(() => {});
+      hideWho();
+      syncWhoChip();
+      showLibrary({ fromHistory: true });
+      // Link mit ?board=... oeffnet direkt dieses Blatt (Titel kommt mit dem "init" vom Server)
+      const startBoard = startParams.get("board");
+      if (startBoard) await openBoard(startBoard, null, { fromHistory: true });
+      syncUrl(false);
+    } catch (err) {
+      showGate("Start fehlgeschlagen", "Bitte Seite neu laden.");
     }
-    currentPersonId = me.id;
-    isAdmin = !!me.isAdmin;
-    document.getElementById("set-nav-people")?.classList.toggle("hidden", !isAdmin);
-    localStorage.setItem("sofianotes-person", currentPersonId);
-    const startParams = new URLSearchParams(location.search);
-    currentFolderId = startParams.get("folder") || null;
-    loadMySettings();
-    prefSync.check(true);
-    await refreshPeople();
-    hideWho();
-    syncWhoChip();
-    showLibrary({ fromHistory: true });
-    // Link mit ?board=... oeffnet direkt dieses Blatt (Titel kommt mit dem "init" vom Server)
-    const startBoard = startParams.get("board");
-    if (startBoard) await openBoard(startBoard, null, { fromHistory: true });
-    syncUrl(false);
   })();
 })();
