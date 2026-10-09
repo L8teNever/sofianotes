@@ -758,13 +758,6 @@
   let offsetX = 0;
   let offsetY = 0;
   let dpr = Math.max(1, window.devicePixelRatio || 1);
-  // Beim Verschieben/Zoomen rechnet die Kanvas mit niedrigerer Aufloesung (auf dem iPad mit
-  // doppelter Pixeldichte viermal weniger Pixel pro Bild). Nach dem Loslassen wieder scharf.
-  let lowResView = false;
-  let viewKeyLast = "";
-  let viewSettleAt = 0;
-  let lastWheelAt = 0;
-  window.addEventListener("wheel", () => (lastWheelAt = performance.now()), { capture: true, passive: true });
 
   function worldToScreen(x, y) {
     return { x: x * scale + offsetX, y: y * scale + offsetY };
@@ -790,7 +783,7 @@
   let canvasLeft = 0;
   let canvasRight = 0;
   function resizeCanvas() {
-    dpr = lowResView ? 1 : Math.max(1, window.devicePixelRatio || 1);
+    dpr = Math.max(1, window.devicePixelRatio || 1);
     if (!splitOn()) {
       canvasLeft = viewLeft;
       canvasRight = viewRight;
@@ -2221,28 +2214,7 @@
     if (ruler.visible) positionRulerBar();
   }
 
-  // Ansicht bewegt sich (Finger, Maus, Mausrad, Nachlauf): Aufloesung senken, sonst wieder scharf
-  function trackViewMotion() {
-    const key = scale + "|" + offsetX + "|" + offsetY + "|" + canvasLeft;
-    const now = performance.now();
-    if (key !== viewKeyLast) {
-      viewKeyLast = key;
-      const moving = activePointers.size > 0 || !!panState || !!pinchState || now - lastWheelAt < 250 || (typeof fling !== "undefined" && !!fling);
-      if (moving) viewSettleAt = now + 220;
-      if (moving && !lowResView && Math.max(1, window.devicePixelRatio || 1) > 1) {
-        lowResView = true;
-        resizeCanvas();
-      }
-      return;
-    }
-    if (lowResView && now > viewSettleAt) {
-      lowResView = false;
-      resizeCanvas();
-    }
-  }
-
   function tick() {
-    trackViewMotion();
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
     if (laser) {
       // Spitze bleibt hell, solange noch etwas aufliegt; der Schweif altert von hinten
