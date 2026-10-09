@@ -2191,6 +2191,14 @@
 
   // ---- toolbar ------------------------------------------------------
   let currentTool = "pen"; // pen | marker | eraser | select | laser
+  // Diese Werte liest der Start (setTool, Kopfleiste), bevor die spaeteren Bloecke drankommen.
+  let textEdit = null; // laufende Eingabe: {kind:"text"|"cell", ...}
+  let textDrag = null;
+  let textTapSuppressed = null;
+  let zoomWin = null; // {x, y, w, left, right} in Weltkoordinaten
+  let currentMode = "pen";
+  let lastInkTool = "pen";
+  let modeSyncing = false;
   // Laserpointer: nur lokal, kein Strich. Nur Stift und Maus. Finger verschieben und zoomen.
   let laser = null; // { pointerId, color, points: [{x,y,t}] }
   const LASER_MS = 720;
@@ -2235,6 +2243,7 @@
   const filenameInput = document.getElementById("canvas-filename");
   const topBar = document.getElementById("top-filename-bar");
   const undoDock = document.getElementById("undo-redo-dock");
+  const objectsBtn = document.getElementById("btn-objects");
 
   function activeSize() {
     if (currentTool === "text") return textSize;
@@ -5946,9 +5955,6 @@
   const TEXT_LINE = 1.3;
   const measureCtx = document.createElement("canvas").getContext("2d");
   const textEditorEl = document.getElementById("text-editor");
-  let textEdit = null; // laufende Eingabe: {kind:"text"|"cell", ...}
-  let textDrag = null; // {pointerId, startWorld, cur} - Ziehen/Tippen mit dem Text-Werkzeug
-  let textTapSuppressed = null;
 
   function isObjectStroke(s) {
     return !!s && (s.tool === "image" || s.tool === "text" || s.tool === "table");
@@ -7576,7 +7582,6 @@
   const ZOOM_LEAD = 0.05; // so viel vom Wortende ist im Kasten noch zu sehen
   let zoomNext = null; // {x, y} Weltursprung des naechsten Ausschnitts
   let zoomHover = null; // {px, py} Stift-/Radierer-Position in der Schreibflaeche (Pixel)
-  let zoomWin = null; // {x, y, w, left, right} in Weltkoordinaten
   let zoomPointer = null; // pointerId, der gerade im Zoom-Fenster schreibt/radiert
   let zoomAdvanceTimer = null;
   let zoomBoxDrag = null;
@@ -8932,9 +8937,6 @@
   // ---- Modi: Stift / Text / Tabelle / Lineal / Lasso -----------------------
   // Die Modus-Knoepfe sitzen oben neben dem Blattnamen; die Werkzeugleiste unten zeigt
   // per CSS (data-mode / data-modes) nur, was zum Modus gehoert.
-  let currentMode = "pen";
-  let lastInkTool = "pen";
-  let modeSyncing = false;
   const textDefaults = { b: false, i: false, s: false, u: false };
   const modeButtons = Array.from(document.querySelectorAll(".mode-btn"));
 
@@ -10460,7 +10462,6 @@
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
   }, true);
 
-  const objectsBtn = document.getElementById("btn-objects");
   function syncObjectsMenu() {
     const on = currentMode === "shapes";
     objectsBtn?.classList.toggle("active", on);

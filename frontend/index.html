@@ -39,6 +39,24 @@
   window.__APP_VERSION__ = "%%APP_VERSION%%";
   window.__BUILD_TS__ = "__BUILD__";
 </script>
+<script>
+  (function () {
+    var mine = String(window.__APP_VERSION__ || "");
+    if (!mine || mine.indexOf("%") >= 0) return;
+    fetch("/version.json", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (info) {
+        if (!info || !info.version || String(info.version) === mine) return;
+        var remote = String(info.version);
+        try {
+          if (sessionStorage.getItem("sofianotes-ver-reload") === remote) return;
+          sessionStorage.setItem("sofianotes-ver-reload", remote);
+        } catch (err) { return; }
+        location.reload();
+      })
+      .catch(function () {});
+  })();
+</script>
 </head>
 <body>
 <div id="update-banner" class="update-banner hidden" role="status">
@@ -1206,27 +1224,36 @@
   (function () {
     var LIMIT = 12000;
     var settled = false;
+    var recovering = false;
+    function clearSwCaches() {
+      if (!window.caches) return Promise.resolve();
+      return caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      });
+    }
     function hardReload() {
       var finish = function () { location.reload(); };
-      var pending = Promise.resolve();
-      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-        pending = navigator.serviceWorker.getRegistrations().then(function (regs) {
-          return Promise.all(regs.map(function (r) { return r.unregister(); }));
-        }).catch(function () {});
+      clearSwCaches().then(finish, finish);
+    }
+    function recoverOnce() {
+      if (recovering) return true;
+      try {
+        if (sessionStorage.getItem("sofianotes-boot-recover") === "1") return false;
+        sessionStorage.setItem("sofianotes-boot-recover", "1");
+      } catch (err) {
+        return false;
       }
-      pending.then(function () {
-        if (!window.caches) return;
-        return caches.keys().then(function (keys) {
-          return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-        });
-      }).then(finish, finish);
+      recovering = true;
+      clearSwCaches().then(function () { location.reload(); }, function () { location.reload(); });
+      return true;
     }
     function showBootError(msg) {
-      if (settled) return;
+      if (settled || recovering) return;
       var gate = document.getElementById("who-backdrop");
       if (!gate || gate.classList.contains("hidden")) return;
       var title = document.getElementById("gate-title");
       if (title && title.textContent && title.textContent !== "Lädt…") return;
+      if (recoverOnce()) return;
       settled = true;
       gate.setAttribute("aria-busy", "false");
       var card = gate.querySelector(".who-card");
@@ -1237,7 +1264,10 @@
       var btn = document.getElementById("gate-retry");
       if (btn) btn.classList.remove("hidden");
     }
-    window.sofiaBootOk = function () { settled = true; };
+    window.sofiaBootOk = function () {
+      settled = true;
+      try { sessionStorage.removeItem("sofianotes-boot-recover"); } catch (err) {}
+    };
     window.sofiaBootFail = function (msg) { showBootError(msg); };
     var retry = document.getElementById("gate-retry");
     if (retry) retry.addEventListener("click", hardReload);

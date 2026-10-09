@@ -31,9 +31,15 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        if request.url.path == "/service-worker.js":
+        fresh = request.url.path in ("/app.js", "/style.css", "/updates.js", "/version.json", "/", "/index.html")
+        if request.url.path in ("/service-worker.js", "/version.json"):
             response.headers["Cache-Control"] = "no-store"
-        elif request.query_params.get("v") and not request.url.path.startswith("/api/") and request.url.path not in ("/", "/index.html"):
+        elif (
+            request.query_params.get("v")
+            and not fresh
+            and not request.url.path.startswith("/api/")
+            and request.url.path not in ("/", "/index.html")
+        ):
             # versionierte Dateien (style.css?v=BUILD ...) aendern sich nie -> darf lange im Cache bleiben
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         elif request.url.path == "/" or not request.url.path.startswith("/api/"):
@@ -80,6 +86,15 @@ async def admin_log(limit: int = 100, _: dict = Depends(require_admin)) -> dict:
 @app.get("/api/version")
 async def app_version() -> dict:
     return get_version_info(BUILD_TS)
+
+
+@app.get("/version.json")
+async def version_json() -> Response:
+    return Response(
+        content=json.dumps(get_version_info(BUILD_TS)),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _index_html() -> HTMLResponse:
