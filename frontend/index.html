@@ -8,8 +8,9 @@
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#e8e6ed" />
 <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#e8e6ed" />
 <link rel="manifest" href="manifest.json" />
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-<link rel="icon" href="icons/favicon.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=__BUILD__" />
+<link rel="icon" href="icons/favicon.png?v=__BUILD__" sizes="32x32" />
+<link rel="icon" href="icons/icon.svg?v=__BUILD__" type="image/svg+xml" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -44,10 +45,8 @@
 </div>
 <canvas id="board"></canvas>
 <div id="board-mode-bar" class="hidden">
-  <span id="board-mode-label">Unendliches Board</span>
   <button type="button" id="board-mode-btn">Fertig</button>
 </div>
-<div id="board-open-chips" class="hidden"></div>
 <div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
 <!-- zweite Leiste: erscheint, solange Lineal/Geodreieck an ist -->
@@ -63,27 +62,6 @@
   <label class="angle-field" title="Winkel eintippen"><input id="ruler-bar-angle" type="number" inputmode="decimal" min="0" max="359" step="1" value="0" /><span>°</span></label>
   <span class="mode-sep"></span>
   <button type="button" id="ruler-bar-close" class="tool-btn" title="Lineal ausblenden"><span class="material-symbols-rounded">close</span></button>
-</div>
-<!-- zweite Leiste: Formen, wie die Stiftleiste / Lineal-Leiste -->
-<div id="objects-bar" class="ruler-bar hidden" role="toolbar" aria-label="Formen">
-  <button type="button" class="tool-btn kind-btn" data-obj="rect" title="Rechteck"><span class="material-symbols-rounded">rectangle</span></button>
-  <button type="button" class="tool-btn kind-btn" data-obj="line" title="Gerade Linie"><span class="material-symbols-rounded">horizontal_rule</span></button>
-  <button type="button" class="tool-btn kind-btn" data-obj="circle" title="Kreis"><span class="material-symbols-rounded">circle</span></button>
-  <button type="button" class="tool-btn kind-btn" data-obj="triangle" title="Dreieck"><span class="material-symbols-rounded">change_history</span></button>
-  <button type="button" class="tool-btn kind-btn" data-obj="arrow" title="Pfeil"><span class="material-symbols-rounded">east</span></button>
-  <span class="mode-sep"></span>
-  <span id="obj-dash">
-    <button type="button" class="tool-btn" data-dash="0" title="Durchgezogen"><span class="angle-label">—</span></button>
-    <button type="button" class="tool-btn" data-dash="1" title="Gestrichelt"><span class="angle-label">- -</span></button>
-  </span>
-  <span class="mode-sep obj-heads"></span>
-  <span id="obj-arrow" class="obj-heads">
-    <button type="button" class="tool-btn" data-heads="end" title="Pfeilspitze am Ende"><span class="material-symbols-rounded">line_end</span></button>
-    <button type="button" class="tool-btn" data-heads="start" title="Pfeilspitze am Anfang"><span class="material-symbols-rounded">line_start</span></button>
-    <button type="button" class="tool-btn" data-heads="both" title="Beide Enden"><span class="material-symbols-rounded">swap_horiz</span></button>
-  </span>
-  <span class="mode-sep"></span>
-  <button type="button" id="objects-bar-close" class="tool-btn" title="Formen ausblenden"><span class="material-symbols-rounded">close</span></button>
 </div>
 <input id="ruler-angle-input" class="ruler-angle-input hidden" type="number" inputmode="decimal" min="0" max="359" step="1" aria-label="Winkel in Grad" />
 <div id="zoom-box" class="hidden">
@@ -207,6 +185,9 @@
   </button>
 </div>
 <div id="top-side-bar" class="top-side-bar">
+  <button type="button" id="btn-board-open" class="icon-btn hidden" title="Board öffnen">
+    <span class="material-symbols-rounded">open_in_full</span>
+  </button>
   <span class="tsb-title">Seiten</span>
   <button type="button" id="btn-bookmarks" class="icon-btn hidden" title="Lesezeichen">
     <span class="material-symbols-rounded">bookmark</span>
@@ -395,6 +376,28 @@
       <button id="btn-insert-table" class="tool-btn" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">table</span></button>
       <button type="button" id="btn-bar-tbl-edit" class="tool-btn" title="Tabelle bearbeiten: Spalten, Zeilen, Breiten"><span class="material-symbols-rounded">tune</span></button>
     </div>
+    <div class="mode-group" data-modes="shapes" id="shape-tools">
+      <button type="button" class="tool-btn kind-btn" data-obj="rect" title="Rechteck"><span class="material-symbols-rounded">rectangle</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="line" title="Gerade Linie"><span class="material-symbols-rounded">horizontal_rule</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="circle" title="Kreis"><span class="material-symbols-rounded">circle</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="triangle" title="Dreieck"><span class="material-symbols-rounded">change_history</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="arrow" title="Pfeil"><span class="material-symbols-rounded">east</span></button>
+      <span class="mode-sep"></span>
+      <span id="obj-dash">
+        <button type="button" class="tool-btn" data-dash="0" title="Durchgezogen"><span class="angle-label">—</span></button>
+        <button type="button" class="tool-btn" data-dash="1" title="Gestrichelt"><span class="angle-label">- -</span></button>
+      </span>
+      <span class="mode-sep obj-heads"></span>
+      <span id="obj-arrow" class="obj-heads">
+        <button type="button" class="tool-btn" data-heads="end" title="Pfeilspitze am Ende"><span class="material-symbols-rounded">line_end</span></button>
+        <button type="button" class="tool-btn" data-heads="start" title="Pfeilspitze am Anfang"><span class="material-symbols-rounded">line_start</span></button>
+        <button type="button" class="tool-btn" data-heads="both" title="Beide Enden"><span class="material-symbols-rounded">swap_horiz</span></button>
+      </span>
+      <span class="mode-sep"></span>
+      <button type="button" class="tool-btn stroke-size-btn" data-stroke="3" title="Dünner Strich"><span class="stroke-dot" style="width:4px;height:4px"></span></button>
+      <button type="button" class="tool-btn stroke-size-btn" data-stroke="8" title="Mittlerer Strich"><span class="stroke-dot" style="width:8px;height:8px"></span></button>
+      <button type="button" class="tool-btn stroke-size-btn" data-stroke="20" title="Dicker Strich"><span class="stroke-dot" style="width:14px;height:14px"></span></button>
+    </div>
     <div class="mode-group" data-modes="eraser">
       <span class="mode-sep"></span>
       <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="12" title="Kleiner Radierer"><span class="eraser-dot" style="width:8px;height:8px"></span></button>
@@ -426,8 +429,8 @@
     </div>
   </div>
 
-  <div class="dock-divider" data-modes="pen lasso"></div>
-  <div id="swatches-container" data-modes="pen lasso">
+  <div class="dock-divider" data-modes="pen lasso shapes"></div>
+  <div id="swatches-container" data-modes="pen lasso shapes">
     <div id="swatch-base" class="swatch-group"></div>
     <div id="swatch-custom" class="swatch-group swatch-scroll"></div>
     <label class="custom-color" title="Neue Farbe hinzufügen">
@@ -743,6 +746,7 @@
 
 <div id="who-backdrop" class="who-backdrop">
   <div class="who-card">
+    <img class="app-logo" src="icons/icon-192.png?v=__BUILD__" alt="" width="72" height="72" />
     <h1 id="gate-title">Lädt…</h1>
     <p id="gate-text"></p>
   </div>
@@ -771,6 +775,7 @@
       <button type="button" id="btn-library-home" class="lib-icon-btn" title="Zurück">
         <i data-lucide="arrow-left"></i>
       </button>
+      <img class="app-logo" src="icons/icon-192.png?v=__BUILD__" alt="" width="40" height="40" />
       <div class="lib-header-text">
         <div id="library-person" class="lib-eyebrow">Simon</div>
         <div id="library-crumbs" class="lib-title">Alle Blätter</div>

@@ -449,11 +449,12 @@ def _stroke_bounds(stroke: dict[str, Any]) -> tuple[float, float, float, float] 
     return minx - m, miny - m, maxx + m, maxy + m
 
 
-def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str, Any]:
-    """Wie im Frontend: kleine Inhalte auf eine Seite, große lesbar auf mehrere A4-Kacheln."""
-    pad = min(28.0, w * 0.04, h * 0.04)
-    inner_w = max(40.0, w - 2 * pad)
-    inner_h = max(40.0, h - 2 * pad)
+BOARD_PAGE_PAD = 36.0
+BOARD_PAGE_MIN_H = 240.0
+BOARD_PAGE_MAX_H = A4_H * 4
+
+
+def _board_content_bounds(strokes: list[dict[str, Any]]) -> tuple[float, float, float, float] | None:
     minx = miny = float("inf")
     maxx = maxy = float("-inf")
     for s in strokes:
@@ -463,46 +464,41 @@ def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str
         minx, miny = min(minx, b[0]), min(miny, b[1])
         maxx, maxy = max(maxx, b[2]), max(maxy, b[3])
     if minx == float("inf"):
+        return None
+    return minx, miny, maxx, maxy
+
+
+def _board_page_size(strokes: list[dict[str, Any]]) -> tuple[float, float]:
+    """Eine Seite: Breite wie A4, Höhe aus dem Seitenverhältnis des Inhalts."""
+    bounds = _board_content_bounds(strokes)
+    if not bounds:
+        return A4_W, A4_H
+    bw = max(1.0, bounds[2] - bounds[0])
+    bh = max(1.0, bounds[3] - bounds[1])
+    inner_w = A4_W - 2 * BOARD_PAGE_PAD
+    h = 2 * BOARD_PAGE_PAD + inner_w * (bh / bw)
+    h = max(BOARD_PAGE_MIN_H, min(BOARD_PAGE_MAX_H, h))
+    return A4_W, float(round(h))
+
+
+def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str, Any]:
+    """Gesamten Board-Inhalt in die eine Vorschauseite einpassen."""
+    pad = BOARD_PAGE_PAD
+    inner_w = max(40.0, w - 2 * pad)
+    inner_h = max(40.0, h - 2 * pad)
+    bounds = _board_content_bounds(strokes)
+    if not bounds:
         return {"empty": True, "pad": pad, "scale": 1.0, "tiles": [{"fit": True}]}
+    minx, miny, maxx, maxy = bounds
     bw = max(1.0, maxx - minx)
     bh = max(1.0, maxy - miny)
-    fit = min(inner_w / bw, inner_h / bh)
-
-    def occupied(sc: float) -> list[dict[str, Any]]:
-        view_w, view_h = inner_w / sc, inner_h / sc
-        found: dict[tuple[int, int], dict[str, Any]] = {}
-        for s in strokes:
-            b = _stroke_bounds(s)
-            if not b:
-                continue
-            c0 = max(0, int((b[0] - minx) / view_w))
-            c1 = int((max(b[0], b[2]) - minx) / view_w)
-            r0 = max(0, int((b[1] - miny) / view_h))
-            r1 = int((max(b[1], b[3]) - miny) / view_h)
-            for row in range(r0, r1 + 1):
-                for col in range(c0, c1 + 1):
-                    found[(col, row)] = {
-                        "wx": minx + col * view_w,
-                        "wy": miny + row * view_h,
-                        "viewW": view_w,
-                        "viewH": view_h,
-                    }
-        return [found[k] for k in sorted(found)]
-
-    if fit >= 0.72:
-        tiles = [{"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh}]
-        scale = fit
-    else:
-        scale = 0.72
-        tiles = occupied(scale)
-        guard = 0
-        while len(tiles) > 24 and guard < 16:
-            scale *= 0.86
-            tiles = occupied(scale)
-            guard += 1
-        if len(tiles) <= 1:
-            tiles = [{"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh}]
-    return {"empty": False, "pad": pad, "scale": scale, "tiles": tiles}
+    scale = min(inner_w / bw, inner_h / bh)
+    return {
+        "empty": False,
+        "pad": pad,
+        "scale": scale,
+        "tiles": [{"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh}],
+    }
 
 
 def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
@@ -512,6 +508,12 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
     c.setTitle("sofianotes")
     rects = page_rects(notebook)
     for pg, px, py, w, h in rects:
+        if pg.get("boardOf"):
+            continue
+        board_strokes = None
+        if pg.get("board"):
+            board_strokes = [s for s in strokes if ((s.get("extra") or {}).get("boardPage") == pg.get("id"))]
+            w, h = _board_page_size(board_strokes)
         scale = A4_PT_W / A4_W
         pw, ph = w * scale, h * scale
         c.setPageSize((pw, ph))
@@ -568,25 +570,14 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
                         x += step
                     y += step
         if pg.get("board"):
-            primary = pg.get("boardOf") or pg.get("id")
-            mine = [s for s in strokes if ((s.get("extra") or {}).get("boardPage") == primary)]
+            mine = board_strokes or []
             layout = _board_layout(mine, w, h)
-            tiles = layout["tiles"]
-            try:
-                idx = int(pg.get("boardIndex") or 0)
-            except (TypeError, ValueError):
-                idx = 0
-            tile = tiles[min(max(idx, 0), len(tiles) - 1)] if tiles else None
-            if tile and not layout.get("empty"):
+            tile = layout["tiles"][0] if layout.get("tiles") else None
+            if tile and tile.get("fit") and not layout.get("empty"):
                 bsc = float(layout["scale"])
-                pad = float(layout["pad"])
-                if tile.get("fit"):
-                    bw, bh = float(tile["bw"]), float(tile["bh"])
-                    box = (w - bw * bsc) / 2 - float(tile["minX"]) * bsc
-                    boy = (h - bh * bsc) / 2 - float(tile["minY"]) * bsc
-                else:
-                    box = pad - float(tile["wx"]) * bsc
-                    boy = pad - float(tile["wy"]) * bsc
+                bw, bh = float(tile["bw"]), float(tile["bh"])
+                box = (w - bw * bsc) / 2 - float(tile["minX"]) * bsc
+                boy = (h - bh * bsc) / 2 - float(tile["minY"]) * bsc
 
                 def tx(x: float, _sc=bsc, _ox=box, _ps=scale) -> float:
                     return (x * _sc + _ox) * _ps
