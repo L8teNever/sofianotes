@@ -4758,3 +4758,43 @@ html[data-theme="dark"] #settings-update-desc { color: #c8c2d0; }
 html[data-theme="dark"] .version-btn { background: #3a3350; color: #e8def8; }
 html[data-theme="dark"] .version-btn:disabled { background: #2b2930; color: #8a8494; }
 html[data-theme="dark"] .version-btn-apply { background: #d0bcff; color: #381e72; }
+
+/* ---- Dunkelmodus: Aufgabe/Material-Leiste (angedockt und als Fenster), Einklapp-Pille, Viewer ---- */
+html[data-theme="dark"] .hw-panel.docked,
+html[data-theme="dark"] .hw-panel:not(.docked) { background: #1c1b22; color: #f4f1f8; }
+html[data-theme="dark"] .hw-panel.docked.dock-left { border-right-color: rgba(255, 255, 255, 0.1); box-shadow: 4px 0 28px rgba(0, 0, 0, 0.5); }
+html[data-theme="dark"] .hw-panel.docked.dock-right { border-left-color: rgba(255, 255, 255, 0.1); box-shadow: -4px 0 28px rgba(0, 0, 0, 0.5); }
+html[data-theme="dark"] .hw-panel:not(.docked) { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55); }
+html[data-theme="dark"] .hw-panel-btn,
+html[data-theme="dark"] .hw-viewer-name,
+html[data-theme="dark"] .hw-desc,
+html[data-theme="dark"] .hw-file,
+html[data-theme="dark"] .hw-share,
+html[data-theme="dark"] .hw-empty strong,
+html[data-theme="dark"] .hw-pill { color: #f4f1f8; }
+html[data-theme="dark"] .hw-panel-btn:hover { background: rgba(255, 255, 255, 0.1); }
+html[data-theme="dark"] #hw-panel .hw-chrome-close:hover { background: #2b2930; }
+html[data-theme="dark"] .hw-subject-chip {
+  background: color-mix(in srgb, var(--subj, #6750a4) 45%, #1c1b22);
+  color: #f4f1f8;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+html[data-theme="dark"] .hw-due,
+html[data-theme="dark"] .hw-hint,
+html[data-theme="dark"] .hw-item-meta,
+html[data-theme="dark"] .hw-item-subj,
+html[data-theme="dark"] .hw-share-text small,
+html[data-theme="dark"] .hw-empty { color: #c8c2d0; }
+html[data-theme="dark"] .hw-item:hover { background: #2b2930; }
+html[data-theme="dark"] .hw-panel-foot { border-top-color: rgba(255, 255, 255, 0.1); }
+html[data-theme="dark"] .hw-share { background: #2b2930; }
+html[data-theme="dark"] .hw-share > .material-symbols-rounded,
+html[data-theme="dark"] .hw-pill .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] .hw-pill { background: rgba(43, 41, 48, 0.97); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+html[data-theme="dark"] .hw-viewer-stage { background: #121018; }
+html[data-theme="dark"] .hw-file,
+html[data-theme="dark"] .hw-images img,
+html[data-theme="dark"] .hw-file { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
+html[data-theme="dark"] .hw-file { background: #2b2930; }
+html[data-theme="dark"] .hw-file .material-symbols-rounded { color: #a8c7fa; }
+html[data-theme="dark"] .hw-panel.docked .hw-dock-edge::after { background: rgba(208, 188, 255, 0.55); }
