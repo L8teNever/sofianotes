@@ -4112,6 +4112,33 @@ body.pages-open #top-side-bar .tsb-title { display: block; }
 #btn-bookmarks { display: none; }
 body.pages-open #btn-bookmarks { display: flex; }
 body.pages-open #btn-bookmarks.active { background: #eaddff; color: #6750a4; }
+/* Offene Seiten-Leiste: "Seiten" und Lesezeichen sind zwei getrennte Pillen (wie das ✕ daneben) */
+body.pages-open #top-side-bar {
+  gap: 8px;
+  padding: 0;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  background: none;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+body.pages-open #top-side-bar .tsb-title,
+body.pages-open #top-side-bar #btn-bookmarks {
+  height: var(--bar-h);
+  box-sizing: border-box;
+  border-radius: 22px;
+  background: var(--dock-bg);
+  border: 1px solid var(--dock-border);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+body.pages-open #top-side-bar .tsb-title { display: flex; align-items: center; padding: 0 18px; }
+body.pages-open #top-side-bar #btn-bookmarks { width: var(--bar-h); align-items: center; justify-content: center; }
+body.pages-open #top-side-bar #btn-bookmarks.active { background: #eaddff; color: #6750a4; }
 body.pages-open .tsb-close { display: flex; border-radius: 50%; background: #ece6f0; }
 body.pages-open .tsb-close:hover { background: #e2dbe8; }
 body.pages-open #btn-pages,
