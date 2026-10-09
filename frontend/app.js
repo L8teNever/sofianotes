@@ -248,6 +248,8 @@
   }
   // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
   function clampNotebookView() {
+    // Waehrend Pan/Pinch/Animation/Schwung nicht gegen die Bewegung arbeiten (sonst Flackern)
+    if (panState || pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy())) return;
     const rects = pageRects(notebook);
     if (!rects.length) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0, maxH = 0;
@@ -10610,6 +10612,10 @@
           initialDist: distance(pts[0], pts[1]),
           initialScale: scale,
           anchorWorld: screenToWorld(mid.x, mid.y),
+          startMid: mid,
+          lastMid: mid,
+          mode: null,
+          t: performance.now(),
         };
         return;
       }
@@ -10680,8 +10686,12 @@
       return;
     }
     // Schwebender Stift oder losgelassener Zeiger zaehlt nicht als aufgelegt.
-    if (!(e.buttons & 1)) {
-      activePointers.delete(e.pointerId);
+    const pointerHeld =
+      !!(e.buttons & 1) ||
+      (e.pointerType === "touch" && touchPointers.has(e.pointerId)) ||
+      (e.pointerType === "pen" && (e.pressure || 0) > 0);
+    if (!pointerHeld) {
+      if (e.pointerType === "pen") activePointers.delete(e.pointerId);
     } else {
       if (e.pointerType === "pen") notePenActivity();
       activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
@@ -10706,6 +10716,29 @@
         const pts = Array.from(touchPointers.values());
         const mid = midpoint(pts[0], pts[1]);
         const dist = distance(pts[0], pts[1]);
+        const now = performance.now();
+        const spread = Math.abs(dist - pinchState.initialDist);
+        const startMid = pinchState.startMid || mid;
+        const travel = Math.hypot(mid.x - startMid.x, mid.y - startMid.y);
+        if (!pinchState.mode) {
+          if (spread > 16 && spread > travel * 0.55) pinchState.mode = "pinch";
+          else if (travel > 10) pinchState.mode = "pan";
+        }
+        if (pinchState.mode !== "pinch") {
+          const last = pinchState.lastMid || mid;
+          const dx = mid.x - last.x;
+          const dy = mid.y - last.y;
+          const dt = Math.max(1, now - (pinchState.t || now - 16));
+          offsetX += dx;
+          offsetY += dy;
+          pinchState.vx = 0.7 * (dx / dt) + 0.3 * (pinchState.vx || 0);
+          pinchState.vy = 0.7 * (dy / dt) + 0.3 * (pinchState.vy || 0);
+          pinchState.t = now;
+          pinchState.lastMid = mid;
+          panState = { lastX: mid.x, lastY: mid.y, vx: pinchState.vx, vy: pinchState.vy, t: now };
+          requestRedraw();
+          return;
+        }
         const newScale = clampZoom(pinchState.initialScale * (dist / Math.max(1, pinchState.initialDist)));
         scale = newScale;
         offsetX = mid.x - pinchState.anchorWorld.x * scale;
@@ -10747,8 +10780,15 @@
       requestRedraw();
       return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
-      offsetX += e.clientX - panState.lastX;
-      offsetY += e.clientY - panState.lastY;
+      const dx = e.clientX - panState.lastX;
+      const dy = e.clientY - panState.lastY;
+      offsetX += dx;
+      offsetY += dy;
+      const now = performance.now();
+      const dt = Math.max(1, now - (panState.t || now - 16));
+      panState.vx = 0.7 * (dx / dt) + 0.3 * (panState.vx || 0);
+      panState.vy = 0.7 * (dy / dt) + 0.3 * (panState.vy || 0);
+      panState.t = now;
       panState.lastX = e.clientX;
       panState.lastY = e.clientY;
       requestRedraw();
@@ -10891,12 +10931,13 @@
         } else startRulerGesture(); // mit dem verbliebenen Finger nahtlos weiterschieben
         return;
       }
+      const endedTwoFinger = pinchState;
       if (touchPointers.size < 2) pinchState = null;
       if (touchPointers.size === 0) {
         const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
         if (addedPage) panState = null;
         else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
-        else if (!panState && window.sofiaPageSnap) window.sofiaPageSnap({}); // nach dem Zoomen mit zwei Fingern
+        else if (!panState && endedTwoFinger && endedTwoFinger.mode === "pinch" && window.sofiaPageSnap) window.sofiaPageSnap({});
         panState = null;
       }
       if (tapState && tapState.pointerId === e.pointerId) {
@@ -10926,8 +10967,12 @@
       return;
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
+      const snapPan = panState;
       panState = null;
-      if (!addedPage && notebook && window.sofiaPageSnap) window.sofiaPageSnap({});
+      if (!addedPage) {
+        if (notebook && window.sofiaPageSnap && window.sofiaPageSnap(snapPan || {})) return;
+        if (e.type === "pointerup") startFling(snapPan);
+      }
       return;
     }
 
@@ -11035,18 +11080,41 @@
         return;
       }
       const anchor = screenToWorld(e.clientX, e.clientY);
+      // Trackpad/Mausrad: im Notizbuch blaettern (Pan). Pinch-Zoom kommt als Wheel+ctrl/meta.
+      if (notebook && !e.ctrlKey && !e.metaKey) {
+        const dx = e.deltaX || 0;
+        const dy = e.deltaY || 0;
+        const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
+        const mx = -(dx * k);
+        const my = -(dy * k);
+        offsetX += mx;
+        offsetY += my;
+        const now = performance.now();
+        const dt = Math.max(8, now - (wheelPan.t || now - 16));
+        wheelPan.vx = 0.55 * (mx / dt) + 0.45 * (wheelPan.vx || 0);
+        wheelPan.vy = 0.55 * (my / dt) + 0.45 * (wheelPan.vy || 0);
+        wheelPan.t = now;
+        requestRedraw();
+        clearTimeout(wheelSnapTimer);
+        wheelSnapTimer = setTimeout(() => {
+          const ps = { vx: wheelPan.vx, vy: wheelPan.vy, t: wheelPan.t };
+          wheelPan = { vx: 0, vy: 0, t: 0 };
+          if (window.sofiaPageSnap) window.sofiaPageSnap(ps);
+        }, 140);
+        return;
+      }
       const factor = Math.exp(-e.deltaY * 0.0015);
       scale = clampZoom(scale * factor);
       offsetX = e.clientX - anchor.x * scale;
       offsetY = e.clientY - anchor.y * scale;
       requestRedraw();
-      // Notizbuch: kurz nach dem letzten Drehen wieder auf eine Seite einrasten
       clearTimeout(wheelSnapTimer);
       wheelSnapTimer = setTimeout(() => window.sofiaPageSnap && window.sofiaPageSnap({}), 260);
     },
     { passive: false }
   );
   let wheelSnapTimer = null;
+  let wheelPan = { vx: 0, vy: 0, t: 0 };
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   // Textfelder auf dem Blatt sind contenteditable - dort muss Markieren erlaubt bleiben
@@ -15256,6 +15324,7 @@
       return { scale: sc, offsetX: ox, offsetY: oy };
     }
     let viewAnim = null;
+    window.sofiaViewBusy = () => !!viewAnim;
     function animateView(v, ms) {
       if (!v) return;
       const from = { scale, offsetX, offsetY };
@@ -16621,8 +16690,9 @@
         if (cur !== lastCur) {
           lastCur = cur;
           grid.querySelectorAll(".page-thumb[data-index]").forEach((el) => el.classList.toggle("active", Number(el.dataset.index) === cur));
+          const gesturing = !!(panState || pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy()));
           const act = grid.querySelector(".page-thumb.active");
-          if (act && act.scrollIntoView) act.scrollIntoView({ block: "nearest" });
+          if (!gesturing && act && act.scrollIntoView) act.scrollIntoView({ block: "nearest", inline: "nearest" });
         }
         if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
       }
