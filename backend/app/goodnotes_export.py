@@ -467,34 +467,41 @@ def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str
     bw = max(1.0, maxx - minx)
     bh = max(1.0, maxy - miny)
     fit = min(inner_w / bw, inner_h / bh)
-    scale, cols, rows = fit, 1, 1
-    if fit < 0.72:
-        lo, hi = min(fit, 1.0), 1.0
-        for _ in range(18):
-            mid = (lo + hi) / 2
-            c = max(1, int((bw * mid) / inner_w + 0.999999))
-            r = max(1, int((bh * mid) / inner_h + 0.999999))
-            if c * r <= 24:
-                lo = mid
-            else:
-                hi = mid
-        scale = lo
-        cols = max(1, int((bw * scale) / inner_w + 0.999999))
-        rows = max(1, int((bh * scale) / inner_h + 0.999999))
-        guard = 0
-        while cols * rows > 24 and guard < 12:
-            scale *= 0.92
-            cols = max(1, int((bw * scale) / inner_w + 0.999999))
-            rows = max(1, int((bh * scale) / inner_h + 0.999999))
-            guard += 1
-    tiles: list[dict[str, Any]] = []
-    if cols == 1 and rows == 1:
-        tiles.append({"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh})
+
+    def occupied(sc: float) -> list[dict[str, Any]]:
+        view_w, view_h = inner_w / sc, inner_h / sc
+        found: dict[tuple[int, int], dict[str, Any]] = {}
+        for s in strokes:
+            b = _stroke_bounds(s)
+            if not b:
+                continue
+            c0 = max(0, int((b[0] - minx) / view_w))
+            c1 = int((max(b[0], b[2]) - minx) / view_w)
+            r0 = max(0, int((b[1] - miny) / view_h))
+            r1 = int((max(b[1], b[3]) - miny) / view_h)
+            for row in range(r0, r1 + 1):
+                for col in range(c0, c1 + 1):
+                    found[(col, row)] = {
+                        "wx": minx + col * view_w,
+                        "wy": miny + row * view_h,
+                        "viewW": view_w,
+                        "viewH": view_h,
+                    }
+        return [found[k] for k in sorted(found)]
+
+    if fit >= 0.72:
+        tiles = [{"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh}]
+        scale = fit
     else:
-        view_w, view_h = inner_w / scale, inner_h / scale
-        for row in range(rows):
-            for col in range(cols):
-                tiles.append({"wx": minx + col * view_w, "wy": miny + row * view_h, "viewW": view_w, "viewH": view_h})
+        scale = 0.72
+        tiles = occupied(scale)
+        guard = 0
+        while len(tiles) > 24 and guard < 16:
+            scale *= 0.86
+            tiles = occupied(scale)
+            guard += 1
+        if len(tiles) <= 1:
+            tiles = [{"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh}]
     return {"empty": False, "pad": pad, "scale": scale, "tiles": tiles}
 
 

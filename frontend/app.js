@@ -1675,49 +1675,47 @@
     const bw = Math.max(1, bounds.maxX - bounds.minX);
     const bh = Math.max(1, bounds.maxY - bounds.minY);
     const fit = Math.min(innerW / bw, innerH / bh);
-    let scale = fit;
-    let cols = 1;
-    let rows = 1;
-    if (fit < BOARD_MIN_SCALE) {
-      let lo = Math.min(fit, 1);
-      let hi = 1;
-      for (let i = 0; i < 18; i++) {
-        const mid = (lo + hi) / 2;
-        const c = Math.max(1, Math.ceil((bw * mid) / innerW - 1e-6));
-        const r = Math.max(1, Math.ceil((bh * mid) / innerH - 1e-6));
-        if (c * r <= BOARD_MAX_TILES) lo = mid;
-        else hi = mid;
-      }
-      scale = lo;
-      cols = Math.max(1, Math.ceil((bw * scale) / innerW - 1e-6));
-      rows = Math.max(1, Math.ceil((bh * scale) / innerH - 1e-6));
-      let guard = 0;
-      while (cols * rows > BOARD_MAX_TILES && guard++ < 12) {
-        scale *= 0.92;
-        cols = Math.max(1, Math.ceil((bw * scale) / innerW - 1e-6));
-        rows = Math.max(1, Math.ceil((bh * scale) / innerH - 1e-6));
-      }
-    }
-    const tiles = [];
-    if (cols === 1 && rows === 1) {
-      tiles.push({ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh });
-    } else {
+    const occupied = (scale) => {
       const viewW = innerW / scale;
       const viewH = innerH / scale;
-      for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-          tiles.push({
-            col,
-            row,
-            wx: bounds.minX + col * viewW,
-            wy: bounds.minY + row * viewH,
-            viewW,
-            viewH,
-          });
+      const map = new Map();
+      for (const st of strokes) {
+        const b = boardStrokeBounds(st);
+        if (!b) continue;
+        const c0 = Math.max(0, Math.floor((b.minX - bounds.minX) / viewW));
+        const c1 = Math.floor((Math.max(b.minX, b.maxX) - bounds.minX) / viewW);
+        const r0 = Math.max(0, Math.floor((b.minY - bounds.minY) / viewH));
+        const r1 = Math.floor((Math.max(b.minY, b.maxY) - bounds.minY) / viewH);
+        for (let row = r0; row <= r1; row++) {
+          for (let col = c0; col <= c1; col++) {
+            map.set(col + ":" + row, {
+              col,
+              row,
+              wx: bounds.minX + col * viewW,
+              wy: bounds.minY + row * viewH,
+              viewW,
+              viewH,
+            });
+          }
         }
       }
+      return [...map.values()].sort((a, b) => a.row - b.row || a.col - b.col);
+    };
+    let scale = fit;
+    let tiles;
+    if (fit >= BOARD_MIN_SCALE) {
+      tiles = [{ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh }];
+    } else {
+      scale = BOARD_MIN_SCALE;
+      tiles = occupied(scale);
+      let guard = 0;
+      while (tiles.length > BOARD_MAX_TILES && guard++ < 16) {
+        scale *= 0.86;
+        tiles = occupied(scale);
+      }
+      if (tiles.length <= 1) tiles = [{ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh }];
     }
-    return { empty: false, pad, scale, cols, rows, tiles, bounds, pageW, pageH };
+    return { empty: false, pad, scale, cols: tiles.length, rows: 1, tiles, bounds, pageW, pageH };
   }
   function layoutForBoard(primaryId, pageW, pageH) {
     const list = strokesForBoard(primaryId);
@@ -1807,7 +1805,7 @@
     if (!btn) return;
     const inBoard = !!boardEditId;
     const title = inBoard ? "Zurück zum Notizbuch" : "Dokumente";
-    const text = inBoard ? "Zum Notizbuch" : "Dokumente";
+    const text = title;
     const ico = inBoard ? "menu_book" : "folder";
     let changed = btn.title !== title;
     if (changed) btn.title = title;
@@ -15209,8 +15207,6 @@
   document.getElementById("btn-back")?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (window.sofiaExitBoardPage && window.sofiaExitBoardPage()) return;
-    // bei offener Seiten-Leiste ist der Knopf das ⋯-Menue des Notizbuchs
-    if (document.body.classList.contains("pages-open") && window.sofiaNotebookMenu) return window.sofiaNotebookMenu(e.currentTarget);
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     showLibrary();
   });
@@ -16714,16 +16710,7 @@
       // von links angedockt; oben sitzen ueber ihr die Leisten (⋯ und "Seiten  ✕")
       panel.style.width = pagesInsetLeft + "px";
       document.body.classList.toggle("pages-open", panelOpen);
-      const backIco = document.querySelector("#btn-back .material-symbols-rounded");
-      const want = panelOpen ? "more_horiz" : "arrow_back";
-      if (backIco && backIco.textContent !== want) {
-        backIco.textContent = want;
-        // Symbol dreht sich weich in das neue
-        backIco.classList.remove("icon-swap");
-        void backIco.offsetWidth;
-        backIco.classList.add("icon-swap");
-      }
-      document.getElementById("btn-back")?.setAttribute("title", panelOpen ? "Notizbuch: Anordnung, Vorlagen …" : "Zurück");
+      if (typeof syncBackButton === "function") syncBackButton();
       setViewInsets(requestedInsets[0], requestedInsets[1]);
       try {
         localStorage.setItem("sofianotes-pages-panel", panelOpen ? "1" : "0");

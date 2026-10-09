@@ -3991,11 +3991,12 @@ body.pages-open .top-close-bar { display: flex; left: calc(var(--view-left) - va
 /* ---- "Seiten" mittig ueber der Seiten-Leiste (zwischen ⋯ und ✕) ---- */
 /* Auch wenn die Kopfleiste an der Seite liegt: nicht ueber der Leiste, sondern auf der Seiten-Leiste. */
 body.pages-open .top-side-bar.tsb-corner {
-  left: calc(var(--view-left) / 2);
+  left: calc(var(--safe-left) + var(--back-shift, 0px));
   top: var(--safe-top);
   bottom: auto;
-  transform: translateX(-50%);
+  transform: none;
 }
+body.pages-open #top-back-bar { z-index: 80; }
 body.pages-open .top-back-bar,
 body.pages-open .top-close-bar {
   top: var(--safe-top);
