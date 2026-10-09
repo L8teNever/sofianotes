@@ -1939,6 +1939,89 @@
     else requestRedraw();
     return true;
   }
+  function boardViewForBounds(bounds, maxScale) {
+    const availW = Math.max(200, window.innerWidth - viewLeft - viewRight - 48);
+    const availH = Math.max(200, window.innerHeight - 120);
+    const bw = Math.max(1, bounds.maxX - bounds.minX);
+    const bh = Math.max(1, bounds.maxY - bounds.minY);
+    const sc = clampZoom(Math.min(availW / bw, availH / bh, maxScale == null ? 2 : maxScale));
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+    return {
+      scale: sc,
+      offsetX: viewLeft + (window.innerWidth - viewLeft - viewRight) / 2 - cx * sc,
+      offsetY: window.innerHeight / 2 - cy * sc,
+    };
+  }
+  function boardOriginView() {
+    return {
+      scale: 1,
+      offsetX: viewLeft + (window.innerWidth - viewLeft - viewRight) / 2,
+      offsetY: window.innerHeight / 2,
+    };
+  }
+  function findBoardHome() {
+    if (!boardEditId) return;
+    const list = strokesForBoard(boardEditId);
+    const bounds = boardContentBounds(list);
+    let target;
+    let note = "Zurück zum Ursprung";
+    if (!bounds) target = boardOriginView();
+    else {
+      const fit = boardViewForBounds(bounds, 2);
+      const span = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+      const huge = fit.scale < 0.45 && span > 2400;
+      if (!huge) {
+        target = fit;
+        note = "Zurück zum Inhalt";
+      } else {
+        const c = screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
+        let best = null;
+        let bestD = Infinity;
+        for (const st of list) {
+          const b = boardStrokeBounds(st);
+          if (!b) continue;
+          const dx = c.x < b.minX ? b.minX - c.x : c.x > b.maxX ? c.x - b.maxX : 0;
+          const dy = c.y < b.minY ? b.minY - c.y : c.y > b.maxY ? c.y - b.maxY : 0;
+          const dist = Math.hypot(dx, dy) || Math.hypot((b.minX + b.maxX) / 2 - c.x, (b.minY + b.maxY) / 2 - c.y) * 0.001;
+          if (dist < bestD) {
+            bestD = dist;
+            best = b;
+          }
+        }
+        if (!best) target = boardOriginView();
+        else {
+          const ncx = (best.minX + best.maxX) / 2;
+          const ncy = (best.minY + best.maxY) / 2;
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          for (const st of list) {
+            const b = boardStrokeBounds(st);
+            if (!b) continue;
+            const cx = (b.minX + b.maxX) / 2;
+            const cy = (b.minY + b.maxY) / 2;
+            if (Math.hypot(cx - ncx, cy - ncy) > 720) continue;
+            minX = Math.min(minX, b.minX);
+            minY = Math.min(minY, b.minY);
+            maxX = Math.max(maxX, b.maxX);
+            maxY = Math.max(maxY, b.maxY);
+          }
+          target = boardViewForBounds({ minX, minY, maxX, maxY }, 1.6);
+          note = "Nächster Inhalt";
+        }
+      }
+    }
+    if (window.sofiaAnimateView) window.sofiaAnimateView(target, 520);
+    else {
+      scale = target.scale;
+      offsetX = target.offsetX;
+      offsetY = target.offsetY;
+      requestRedraw();
+    }
+    showToast(note);
+  }
   window.sofiaEnterBoardPage = enterBoardPage;
   window.sofiaExitBoardPage = exitBoardPage;
   function draw() {
@@ -2548,7 +2631,9 @@
     currentColor = normColor(color);
     markActiveSwatch();
     if (textEdit) applyTextEditStyle({ color: currentColor });
-    restyleSelection({ color: currentColor });
+    const hadSel = selection.ids.size > 0 && !textEdit;
+    const colored = restyleSelection({ color: currentColor });
+    if (hadSel) ackSel(null, !!colored, colored ? "Farbe geändert" : "Diese Auswahl lässt sich nicht umfärben");
     renderToolPopover();
     savePrefs();
   }
@@ -3585,6 +3670,7 @@
     { key: "status", label: "Verbindung", icon: "wifi", sel: "#status" },
     { key: "modes", label: "Modus-Knöpfe", icon: "ink_pen", sel: "#mode-switch" },
     { key: "ruler", label: "Lineal", icon: "straighten", sel: "#btn-ruler" },
+    { key: "laser", label: "Laserpointer", icon: "flashlight_on", sel: "#btn-laser" },
     { key: "objects", label: "Objekte", icon: "shapes", sel: ".objects-menu-wrap" },
     { key: "zoom", label: "Zoom-Fenster", icon: "zoom_in_map", sel: "#btn-zoom-window" },
     { key: "calc", label: "Rechner", icon: "calculate", sel: "#btn-calc" },
@@ -3648,7 +3734,7 @@
   window.sofiaApplyTopBar = () => applyTopBarItems();
   // Schau-Ansicht: oben stehen immer Lineal, Rechner und Aufgabe (egal, was sonst unter
   // dem ▾ liegt); alles zum Schreiben ist weg, das ▾ auch
-  const VIEW_TOOLS = ["status", "ruler", "calc", "hw", "view"];
+  const VIEW_TOOLS = ["status", "ruler", "laser", "calc", "hw", "view"];
   function applyTopBarItems() {
     topBarHidden = viewOnly ? TOPBAR_ITEMS.map((it) => it.key).filter((k) => !VIEW_TOOLS.includes(k)) : effectiveHidden();
     for (const it of TOPBAR_ITEMS) {
@@ -3804,6 +3890,7 @@
     }
     const helpers = [];
     if (want("ruler")) helpers.push(["straighten", "Lineal", "#btn-ruler"]);
+    if (want("laser")) helpers.push(["flashlight_on", "Laserpointer", "#btn-laser"]);
     if (want("objects")) helpers.push(["shapes", "Objekte", "#btn-objects"]);
     if (want("zoom")) helpers.push(["zoom_in_map", "Zoom-Fenster", "#btn-zoom-window"]);
     if (want("calc")) helpers.push(["calculate", "Rechner", "#btn-calc"]);
@@ -6178,7 +6265,7 @@
   // Fett/kursiv/... fuer ganze ausgewaehlte Textfelder umschalten (alle an -> alle aus)
   function toggleTextFlag(flag) {
     const texts = selectedTextBoxes();
-    if (!texts.length) return;
+    if (!texts.length) return false;
     const allOn = texts.every((t) => strokeRuns(t).every((r) => r[flag]));
     for (const t of texts) {
       const before = cloneStroke(t);
@@ -6194,11 +6281,15 @@
     selectStrokeIds(Array.from(selection.ids));
     syncSelectionToolbar();
     requestRedraw();
+    return true;
   }
   document.querySelectorAll(".txt-btn").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      toggleTextFlag(b.dataset.flag);
+      const ok = toggleTextFlag(b.dataset.flag);
+      if (!b.closest("#selection-toolbar")) return;
+      const names = { b: "Fett", i: "Kursiv", s: "Durchgestrichen", u: "Unterstrichen" };
+      ackSel(b, ok, ok ? names[b.dataset.flag] || "Geändert" : "Geht nur bei Text");
     })
   );
 
@@ -9150,7 +9241,7 @@
 
   function restyleSelection(patch, mergeKey) {
     const strokes = selectionInkStrokes();
-    if (!strokes.length) return;
+    if (!strokes.length) return false;
     const changes = [];
     for (const s of strokes) {
       const before = { color: s.color, size: s.size };
@@ -9167,7 +9258,7 @@
         stroke: serializeStroke(s),
       });
     }
-    if (!changes.length) return;
+    if (!changes.length) return false;
     const last = undoStack[undoStack.length - 1];
     const sameIds =
       last &&
@@ -9185,6 +9276,7 @@
       pushUndo({ type: "style", changes, mergeKey: mergeKey || null });
     }
     requestRedraw();
+    return true;
   }
 
   function strokeHitsPoint(stroke, pt, pad) {
@@ -9774,9 +9866,9 @@
 
   function enterCropMode() {
     const s = selectedImageStroke();
-    if (!s) return;
+    if (!s) return false;
     const full = imageFullRect(s);
-    if (!full) return;
+    if (!full) return false;
     cropState = {
       strokeId: s.id,
       full,
@@ -9788,6 +9880,7 @@
     setTool("select");
     syncMediaToolbar();
     requestRedraw();
+    return true;
   }
 
   function cancelCropMode(silent) {
@@ -9801,12 +9894,12 @@
   }
 
   function applyCropMode() {
-    if (!cropState) return;
+    if (!cropState) return false;
     const s = boardStrokes.get(cropState.strokeId);
     if (!s) {
       cropState = null;
       syncMediaToolbar();
-      return;
+      return false;
     }
     const full = cropState.full;
     const crop = clampCrop(cropState.crop);
@@ -9839,6 +9932,7 @@
     cropState = null;
     syncMediaToolbar();
     requestRedraw();
+    return true;
   }
 
   function selectedStrokes() {
@@ -9853,37 +9947,40 @@
 
   function copySelection() {
     const clones = selectedStrokes().map(cloneStroke);
-    if (!clones.length) return;
+    if (!clones.length) return false;
     strokeClipboard = clones;
     syncSelectionToolbar();
+    return true;
   }
 
   function deleteSelection() {
     const clones = selectedStrokes().map(cloneStroke);
-    if (!clones.length) return;
+    if (!clones.length) return false;
     removeStrokes(clones.map((s) => s.id));
     pushUndo({ type: "erase", strokes: clones });
     clearSelection();
     requestRedraw();
+    return true;
   }
 
   function cutSelection() {
     const clones = selectedStrokes().map(cloneStroke);
-    if (!clones.length) return;
+    if (!clones.length) return false;
     strokeClipboard = clones.map(cloneStroke);
     const ids = clones.map((s) => s.id);
     removeStrokes(ids);
     pushUndo({ type: "erase", strokes: clones });
     clearSelection();
     requestRedraw();
+    return true;
   }
 
   function pasteClipboard() {
-    if (!strokeClipboard.length) return;
+    if (!strokeClipboard.length) return false;
     hidePasteMenu();
     const boxes = strokeClipboard.map((s) => makeBBox(s.points));
     const union = unionBBox(boxes);
-    if (!union) return;
+    if (!union) return false;
     const target =
       pasteAnchorWorld || lastPointerWorld || screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
     pasteAnchorWorld = null;
@@ -9898,11 +9995,12 @@
       putStroke(n);
       pasted.push(cloneStroke(n));
     }
-    if (!pasted.length) return;
+    if (!pasted.length) return false;
     pushUndo({ type: "add_many", strokes: pasted });
     setTool("select");
     selectStrokeIds(pasted.map((s) => s.id));
     requestRedraw();
+    return true;
   }
 
   const mediaToolbar = document.getElementById("selection-toolbar");
@@ -10445,7 +10543,7 @@
   }
   function applyLayer(kind) {
     const ids = Array.from(selection.ids).filter((id) => boardStrokes.has(id));
-    if (!ids.length) return;
+    if (!ids.length) return false;
     const key = new Map();
     let i = 0;
     for (const st of boardStrokes.values()) {
@@ -10483,7 +10581,7 @@
       }
       if (!patches.size) {
         showToast(up ? "Liegt schon ganz vorne" : "Liegt schon ganz hinten");
-        return;
+        return false;
       }
     }
     const moves = [];
@@ -10501,6 +10599,7 @@
     }
     pushUndo({ type: "move", moves });
     requestRedraw();
+    return kind;
   }
   document.getElementById("btn-sel-layer")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -10515,11 +10614,46 @@
     layerMenu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left + r.width / 2 - mw / 2)) + "px";
     layerMenu.style.top = top + "px";
   });
+  function ackSel(btn, ok, toast) {
+    if (btn) {
+      btn.classList.remove("sel-ok", "sel-bad");
+      void btn.offsetWidth;
+      btn.classList.add(ok ? "sel-ok" : "sel-bad");
+      setTimeout(() => btn.classList.remove("sel-ok", "sel-bad"), 460);
+      const icon = btn.querySelector(".material-symbols-rounded");
+      if (icon && ok) {
+        const prev = icon.dataset.prevIcon || icon.textContent;
+        icon.dataset.prevIcon = prev;
+        icon.textContent = "check";
+        setTimeout(() => {
+          if (icon.textContent === "check") icon.textContent = icon.dataset.prevIcon || prev;
+        }, 700);
+      }
+    }
+    if (toast) showToast(toast);
+  }
+  function vanishSel(btn, toast, run) {
+    if (!selectedStrokes().length) {
+      ackSel(btn, false, "Nichts ausgewählt");
+      return;
+    }
+    ackSel(btn, true, toast);
+    if (mediaToolbar) {
+      mediaToolbar.classList.add("sel-leaving");
+      setTimeout(() => {
+        mediaToolbar.classList.remove("sel-leaving");
+        run();
+      }, 180);
+    } else run();
+  }
   layerMenu?.querySelectorAll("[data-layer]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       layerMenu.classList.add("hidden");
-      applyLayer(b.dataset.layer);
+      const labels = { front: "In den Vordergrund", up: "Eine Ebene nach vorne", down: "Eine Ebene nach hinten", back: "In den Hintergrund" };
+      const result = applyLayer(b.dataset.layer);
+      if (result) ackSel(b, true, labels[result] || "Ebene geändert");
+      else if (!selection.ids.size) ackSel(b, false, "Nichts ausgewählt");
     })
   );
   document.addEventListener("pointerdown", (e) => {
@@ -10529,7 +10663,10 @@
   // Auswahl (z. B. ein schief eingefuegtes Bild) mit einem Tipp um 90 Grad drehen
   document.getElementById("btn-sel-rotate")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (!selection.ids.size || !selection.bbox || dragState) return;
+    if (!selection.ids.size || !selection.bbox || dragState) {
+      ackSel(e.currentTarget, false, dragState ? "Gerade wird schon gezogen" : "Drehen hat nicht geklappt");
+      return;
+    }
     const b = selection.bbox;
     const c = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
     startSelectionRotate(null, { x: c.x + 100, y: c.y });
@@ -10537,42 +10674,50 @@
     finalizeSelectionDrag();
     syncSelectionToolbar();
     requestRedraw();
+    ackSel(e.currentTarget, true, "Gedreht");
   });
   document.getElementById("btn-media-crop")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    enterCropMode();
+    const ok = enterCropMode();
+    ackSel(e.currentTarget, ok, ok ? "Zuschneiden" : "Zuschneiden geht nur bei einem Bild");
   });
   document.getElementById("btn-media-crop-done")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    applyCropMode();
+    const ok = applyCropMode();
+    ackSel(e.currentTarget, ok, ok ? "Zuschnitt übernommen" : "Zuschnitt hat nicht geklappt");
   });
   document.getElementById("btn-media-crop-cancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     cancelCropMode();
+    ackSel(e.currentTarget, true, "Abgebrochen");
   });
   document.getElementById("btn-sel-ki")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    recognizeSelection();
+    const ok = recognizeSelection();
+    ackSel(e.currentTarget, ok, ok ? "Wird gelesen…" : "Nichts zum Lesen");
   });
   document.getElementById("btn-sel-copy")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    copySelection();
+    const ok = copySelection();
+    ackSel(e.currentTarget, ok, ok ? "Kopiert" : "Nichts zum Kopieren");
   });
   document.getElementById("btn-sel-cut")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    cutSelection();
+    vanishSel(e.currentTarget, "Ausgeschnitten", cutSelection);
   });
   document.getElementById("btn-sel-paste")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    pasteClipboard();
+    const ok = pasteClipboard();
+    ackSel(e.currentTarget, ok, ok ? "Eingefügt" : "Nichts zum Einfügen");
   });
   document.getElementById("btn-sel-delete")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    deleteSelection();
+    vanishSel(e.currentTarget, "Gelöscht", deleteSelection);
   });
   document.getElementById("btn-paste-here")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    pasteClipboard();
+    const ok = pasteClipboard();
+    ackSel(e.currentTarget, ok, ok ? "Eingefügt" : "Nichts zum Einfügen");
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && cropState) {
@@ -10583,7 +10728,7 @@
     const typing = e.target && (e.target.isContentEditable || /^(INPUT|TEXTAREA)$/.test(e.target.tagName));
     if (!typing && !textEdit && selection.ids.size && !cropState && (e.key === "Delete" || e.key === "Backspace")) {
       e.preventDefault();
-      deleteSelection();
+      vanishSel(document.getElementById("btn-sel-delete"), "Gelöscht", deleteSelection);
     }
   });
 
@@ -12114,9 +12259,10 @@
 
   function recognizeSelection() {
     const burst = selectedHandwriting();
-    if (!burst.length) return;
+    if (!burst.length) return false;
     ensureEmnistLoaded();
     runRecognize(burst);
+    return true;
   }
 
   function positionInkChips() {
@@ -16192,7 +16338,17 @@
       return;
     }
     canvasShareSubmenu.classList.add("hidden");
+    document.getElementById("canvas-menu-find")?.classList.toggle("hidden", !boardEditId);
     canvasMenu.classList.toggle("hidden");
+  });
+  document.getElementById("canvas-menu-find")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeCanvasMenus();
+    if (!boardEditId) {
+      showToast("Zurückfinden gibt es im Board");
+      return;
+    }
+    findBoardHome();
   });
   document.getElementById("canvas-menu-download")?.addEventListener("click", () => {
     closeCanvasMenus();
@@ -16307,6 +16463,10 @@
       };
       requestAnimationFrame(step);
     }
+    window.sofiaAnimateView = animateView;
+    window.sofiaCancelViewAnim = () => {
+      viewAnim = null;
+    };
     canvas.addEventListener("pointerdown", () => (viewAnim = null), true);
     function fitPage(i, animate) {
       const v = viewFor(i);

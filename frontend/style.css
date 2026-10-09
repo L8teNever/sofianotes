@@ -1072,6 +1072,47 @@ button {
   background: #0b57d0;
   color: #fff;
 }
+.selection-toolbar button {
+  transition: transform 0.12s ease, background-color 0.2s ease, filter 0.12s ease;
+}
+.selection-toolbar button.is-pressed,
+.selection-toolbar button:active {
+  transform: scale(0.9);
+}
+.selection-toolbar button.sel-ok,
+.lib-add-opt.sel-ok {
+  animation: sel-ok 0.42s ease;
+}
+.selection-toolbar button.sel-bad,
+.lib-add-opt.sel-bad {
+  animation: sel-bad 0.42s ease;
+}
+.selection-toolbar.sel-leaving {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+@keyframes sel-ok {
+  0% { transform: scale(0.9); }
+  45% { transform: scale(1.08); background: #c8e6c9; color: #1b5e20; }
+  100% { transform: scale(1); }
+}
+@keyframes sel-bad {
+  0% { transform: scale(0.9); }
+  30% { transform: translateX(-3px); background: #ffdad6; color: #ba1a1a; }
+  60% { transform: translateX(3px); background: #ffdad6; color: #ba1a1a; }
+  100% { transform: none; }
+}
+html[data-theme="dark"] .selection-toolbar button.sel-ok {
+  color: #e8f5e9;
+}
+html[data-theme="dark"] .selection-toolbar button.sel-bad {
+  color: #ffdad6;
+}
+html[data-theme="dark"] .app-toast {
+  background: #ece6f0;
+  color: #1c1b1f;
+}
 
 .drag-guide {
   position: fixed;
@@ -4481,6 +4522,22 @@ button:active:not(:disabled):not(.is-busy),
 html[data-theme="dark"] button:active:not(:disabled):not(.is-busy),
 html[data-theme="dark"] [role="button"]:active:not(.is-busy) {
   filter: brightness(1.45);
+}
+html[data-theme="dark"] .selection-toolbar button {
+  background: #3a3350;
+  color: #e8def8;
+}
+html[data-theme="dark"] .selection-toolbar #btn-sel-ki {
+  background: #d0bcff;
+  color: #241b33;
+}
+html[data-theme="dark"] .selection-toolbar button.sel-ok {
+  background: #1b5e20;
+  color: #e8f5e9;
+}
+html[data-theme="dark"] .selection-toolbar button.sel-bad {
+  background: #5c2b32;
+  color: #ffdad6;
 }
 .is-busy,
 .busy {
