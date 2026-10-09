@@ -8254,19 +8254,16 @@
   //  - setzt der Stift auf, waehrend noch eine Finger-Geste laeuft, war das der Ballen:
   //    Ansicht auf den Stand vor der Geste zuruecksetzen
   const palmIds = new Set();
-  const PALM_CONTACT_PX = 38;
-  const PEN_GRACE_MS = 350; // kuerzer: direkt nach dem Schreiben/Wegkritzeln laesst sich wieder scrollen
+  const PALM_CONTACT_PX = 52;
   let lastPenActivity = -Infinity;
   let touchGestureView = null; // {scale, offsetX, offsetY} beim Start der Finger-Geste
-  // Groesse allein ist auf dem iPad unzuverlaessig (Finger melden teils grosse Flaechen):
-  // nur kurz nach Stift-Benutzung zaehlt eine breite Beruehrung als Handballen.
-  function penRecentlyUsed() {
-    return performance.now() - lastPenActivity < 1200;
-  }
+  // Handballen nur, solange der Stift wirklich auf dem Blatt liegt — nicht noch
+  // Sekunden danach, sonst geht Pinch-Zoom/Verschieben nach dem Schreiben nicht.
   function looksLikePalm(e) {
-    if (penRecentlyUsed() && ((e.width || 0) >= PALM_CONTACT_PX || (e.height || 0) >= PALM_CONTACT_PX)) return true;
-    for (const p of activePointers.values()) if (p.type === "pen") return true;
-    return performance.now() - lastPenActivity < PEN_GRACE_MS;
+    if (e.pointerType !== "touch") return false;
+    if (touchPointers.size >= 1) return false;
+    if (penIsDown()) return true;
+    return false;
   }
   function notePenActivity() {
     lastPenActivity = performance.now();
@@ -10676,18 +10673,20 @@
 
   canvas.addEventListener("pointermove", (e) => {
     if (palmIds.has(e.pointerId)) return;
-    if (e.pointerType === "touch" && penRecentlyUsed() && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
-      // Kontakt ist beim Auflegen gewachsen -> doch Handballen: Geste abbrechen
+    if (e.pointerType === "touch" && penIsDown() && (e.width || 0) >= PALM_CONTACT_PX * 1.3 && !currentStroke) {
+      // Stift liegt auf und der Kontakt ist sehr breit -> Handballen, Geste abbrechen
       palmIds.add(e.pointerId);
       penTookOverTouchOnly(e.pointerId);
       return;
     }
-    // Schwebender Stift (Apple Pencil Hover, buttons=0) zaehlt nicht als aufgelegt -
-    // sonst gilt jeder Finger als Handballen und Zoomen/Verschieben geht nicht.
-    const penHover = e.pointerType === "pen" && !e.buttons && !activePointers.has(e.pointerId);
-    if (e.pointerType === "pen" && !penHover) notePenActivity();
+    // Schwebender Stift oder losgelassener Zeiger zaehlt nicht als aufgelegt.
+    if (!(e.buttons & 1)) {
+      activePointers.delete(e.pointerId);
+    } else {
+      if (e.pointerType === "pen") notePenActivity();
+      activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
+    }
     notePasteHoldMove(e);
-    if (!penHover) activePointers.set(e.pointerId, { type: e.pointerType, x: e.clientX, y: e.clientY });
     if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
       if (e.pointerType === "touch") touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       moveZoomBoxDrag(e);
