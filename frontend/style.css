@@ -4243,3 +4243,138 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
 #gn-pick-zip .material-symbols-rounded { color: #1a73e8; font-size: 26px; }
 #gn-pick-dir.active,
 #gn-pick-zip.active { color: #1a73e8; }
+
+/* ---- Dunkelmodus: ganze App, dunkle Seiten, helle Schrift ---- */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f4f1f8;
+  --muted: #c8c2d0;
+  --paper: #141218;
+  --dock-bg: rgba(38, 35, 46, 0.94);
+  --dock-border: rgba(255, 255, 255, 0.1);
+  --chip-bg: #3a3350;
+  --chip-fg: #e8def8;
+  --accent: #a8c7fa;
+  --accent-soft: #243044;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+html[data-theme="dark"],
+html[data-theme="dark"] body,
+html[data-theme="dark"].pwa-standalone,
+html[data-theme="dark"].pwa-standalone body {
+  background: #121018;
+  color: #f4f1f8;
+}
+html[data-theme="dark"] .icon-btn,
+html[data-theme="dark"] .page-btn,
+html[data-theme="dark"] #canvas-filename,
+html[data-theme="dark"] .lib-add-opt,
+html[data-theme="dark"] .text-format-bar button {
+  color: #f4f1f8;
+}
+html[data-theme="dark"] #canvas-filename:focus { background: #2b2930; }
+html[data-theme="dark"] .file-icon { background: #243044; color: #a8c7fa; }
+html[data-theme="dark"] .library-backdrop,
+html[data-theme="dark"] .who-backdrop { background: #121018; }
+html[data-theme="dark"] .lib-page { background: #16141c; color: #f4f1f8; }
+html[data-theme="dark"] .lib-header { background: rgba(22, 20, 28, 0.9); }
+html[data-theme="dark"] .lib-title,
+html[data-theme="dark"] .pages-head strong,
+html[data-theme="dark"] .dlg .settings-modal-head h2,
+html[data-theme="dark"] .set-section-title { color: #f4f1f8; }
+html[data-theme="dark"] .lib-section-title,
+html[data-theme="dark"] .set-hint,
+html[data-theme="dark"] .set-nav-text small,
+html[data-theme="dark"] .set-radio button small,
+html[data-theme="dark"] .dlg-choice-text small,
+html[data-theme="dark"] .lib-card .meta { color: #c8c2d0; }
+html[data-theme="dark"] .lib-count { background: #3a3350; color: #e8def8; }
+html[data-theme="dark"] .library-item,
+html[data-theme="dark"] .lib-card.library-item,
+html[data-theme="dark"] .who-card,
+html[data-theme="dark"] .who-btn,
+html[data-theme="dark"] .lib-icon-btn,
+html[data-theme="dark"] .lib-add-menu,
+html[data-theme="dark"] .popover,
+html[data-theme="dark"] .tool-popover,
+html[data-theme="dark"] .settings-modal.dlg,
+html[data-theme="dark"] .dlg,
+html[data-theme="dark"] .bottom-sheet.dlg,
+html[data-theme="dark"] .pages-panel,
+html[data-theme="dark"] .history-panel,
+html[data-theme="dark"] .hw-panel,
+html[data-theme="dark"] .calc-win,
+html[data-theme="dark"] .zoom-pane,
+html[data-theme="dark"] .text-format-bar,
+html[data-theme="dark"] .selection-toolbar,
+html[data-theme="dark"] .media-toolbar,
+html[data-theme="dark"] .school-timer,
+html[data-theme="dark"] .page-menu {
+  background: #1c1b22;
+  color: #f4f1f8;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+html[data-theme="dark"] .lib-icon-btn:hover,
+html[data-theme="dark"] .lib-add-opt:hover,
+html[data-theme="dark"] .history-item:hover { background: #2b2930; }
+html[data-theme="dark"] .lib-row-icon,
+html[data-theme="dark"] .lib-card-board .lib-row-icon { background: #3a3350; color: #d0bcff; }
+html[data-theme="dark"] .lib-search-row input,
+html[data-theme="dark"] .m3-input,
+html[data-theme="dark"] .dlg input,
+html[data-theme="dark"] .dlg select,
+html[data-theme="dark"] .dlg textarea,
+html[data-theme="dark"] .set-dlg .version-card {
+  background: #2b2930;
+  color: #f4f1f8;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+html[data-theme="dark"] .set-navcol .set-nav,
+html[data-theme="dark"] .set-nav,
+html[data-theme="dark"] .set-dlg .setting-toggle.set-switch,
+html[data-theme="dark"] .set-check,
+html[data-theme="dark"] .set-radio button,
+html[data-theme="dark"] .set-seg,
+html[data-theme="dark"] .dlg-choice,
+html[data-theme="dark"] .set-dlg .btn-grid-style,
+html[data-theme="dark"] .set-dlg .btn-dock-quick,
+html[data-theme="dark"] .page-label,
+html[data-theme="dark"] .calc-tabs {
+  background: #2b2930;
+  color: #f4f1f8;
+}
+html[data-theme="dark"] .set-dlg .set-nav.active,
+html[data-theme="dark"] .set-radio button.active,
+html[data-theme="dark"] .dlg-choice.on,
+html[data-theme="dark"] .set-dlg .btn-grid-style.active,
+html[data-theme="dark"] .set-dlg .btn-dock-quick.active,
+html[data-theme="dark"] .history-item.active {
+  background: #3a3350;
+  color: #f4f1f8;
+  border-color: #d0bcff;
+}
+html[data-theme="dark"] .set-seg button { color: #c8c2d0; }
+html[data-theme="dark"] .set-seg button.active { background: #3a3350; color: #d0bcff; }
+html[data-theme="dark"] .set-group,
+html[data-theme="dark"] .set-sub,
+html[data-theme="dark"] .page-menu-head { color: #d0bcff; }
+html[data-theme="dark"] .set-paper-prev { background-color: #1c1b22; border-color: rgba(255, 255, 255, 0.12); }
+html[data-theme="dark"] .paper-graph {
+  background-image: linear-gradient(rgba(210, 200, 230, 0.28) 1px, transparent 1px), linear-gradient(90deg, rgba(210, 200, 230, 0.28) 1px, transparent 1px);
+}
+html[data-theme="dark"] .paper-dots { background-image: radial-gradient(rgba(226, 220, 240, 0.75) 1.2px, transparent 1.4px); }
+html[data-theme="dark"] .paper-lines { background-image: linear-gradient(rgba(210, 200, 230, 0.35) 1px, transparent 1px); }
+html[data-theme="dark"] .text-editor {
+  background: rgba(28, 27, 34, 0.72);
+  color: #f4f1f8;
+  caret-color: #d0bcff;
+}
+html[data-theme="dark"] .ink-chip {
+  background: rgba(36, 33, 46, 0.96);
+  color: #d0bcff;
+  border-color: rgba(168, 199, 250, 0.35);
+}
+html[data-theme="dark"] .ink-chip-edit { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .pages-panel { border-right-color: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .page-thumb-img { background: #1c1b22; }
+html[data-theme="dark"] .page-thumb-foot { color: #f4f1f8; }

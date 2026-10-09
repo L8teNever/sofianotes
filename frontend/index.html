@@ -463,6 +463,11 @@
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
       <div class="set-group">Ansicht</div>
+      <button type="button" class="set-nav" data-go="theme" data-title="Darstellung">
+        <span class="set-ico"><span class="material-symbols-rounded">dark_mode</span></span>
+        <span class="set-nav-text"><strong>Darstellung</strong><small id="set-sum-theme">Hell</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
       <button type="button" class="set-nav" data-go="bar" data-title="Werkzeugleiste">
         <span class="set-ico"><span class="material-symbols-rounded">tune</span></span>
         <span class="set-nav-text"><strong>Werkzeugleiste</strong><small id="set-sum-bar">Unten</small></span>
@@ -538,6 +543,15 @@
         <span class="set-nav-text"><strong>Nach Radieren zurück</strong><small>Danach automatisch wieder der Stift</small></span>
         <span class="set-knob"></span>
       </button>
+    </div>
+
+    <div class="set-page hidden" data-page="theme">
+      <div class="set-sub">Erscheinungsbild</div>
+      <p class="set-hint">Gilt für die ganze App und die Seiten. Dunkle Schrift wird im Dunkelmodus weiß, helle Schrift im Hellmodus dunkel. Bunte Stifte bleiben bunt.</p>
+      <div class="set-radio" id="set-theme">
+        <button type="button" data-theme="light"><strong>Hell</strong><small>Weiße Seiten, dunkle Schrift</small></button>
+        <button type="button" data-theme="dark"><strong>Dunkel</strong><small>Dunkle Seiten, weiße Schrift</small></button>
+      </div>
     </div>
 
     <div class="set-page hidden" data-page="bar">

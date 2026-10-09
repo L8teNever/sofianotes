@@ -52,7 +52,11 @@
     "sofianotes-school",
     "sofianotes-school-pos",
     "sofianotes-back-mode",
+    "sofianotes-theme",
   ];
+  let darkMode = false;
+  try { darkMode = localStorage.getItem("sofianotes-theme") === "dark"; } catch (err) {}
+  document.documentElement.dataset.theme = darkMode ? "dark" : "light";
   const PREF_META = "sofianotes-prefs-sync"; // {at, dirty}
   const prefSync = (() => {
     let meta = { at: 0, dirty: false };
@@ -202,12 +206,46 @@
   const NB_LINE = 8.5 * MM;
   const NB_LINE_TOP = 25 * MM;
   const NB_MARGIN = 20 * MM;
+  function parseHexColor(color) {
+    let c = String(color || "").trim();
+    if (c[0] !== "#") return null;
+    c = c.slice(1);
+    if (c.length === 3) c = c.split("").map((ch) => ch + ch).join("");
+    if (c.length !== 6 || /[^0-9a-f]/i.test(c)) return null;
+    return [parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16)];
+  }
+  // Dunkle Tinte wird im Dunkelmodus hell, helle Tinte im Hellmodus dunkel.
+  // Bunte Stifte und Marker bleiben.
+  function themeInk(color) {
+    const rgb = parseHexColor(color);
+    if (!rgb) return color || "#1E1F22";
+    const max = Math.max(rgb[0], rgb[1], rgb[2]);
+    const min = Math.min(rgb[0], rgb[1], rgb[2]);
+    if ((max - min) / 255 > 0.14) return color;
+    const y = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+    if (darkMode && y < 0.42) return "#F4F1F8";
+    if (!darkMode && y > 0.78) return "#1E1F22";
+    return color;
+  }
+  function pagePaperColor() {
+    return darkMode ? "#1c1b22" : "#ffffff";
+  }
+  function deskColor() {
+    if (darkMode) return "#121018";
+    return notebook ? "#e8e6ed" : "#f8f9fa";
+  }
+  function patternInk() {
+    return darkMode
+      ? { dot: "rgba(226,220,240,0.40)", line: "rgba(210,200,230,0.18)", bold: "rgba(210,200,230,0.34)", rule: "rgba(255,138,128,0.55)", gridDot: "rgba(226,220,240,0.32)" }
+      : { dot: "rgba(60,70,90,0.30)", line: "rgba(80,100,150,0.20)", bold: "rgba(80,100,150,0.30)", rule: "rgba(217,48,37,0.40)", gridDot: "rgba(0,0,0,0.16)" };
+  }
   function drawPagePattern(paper, r, target, unit) {
     if (paper === "blank") return;
     const ctx = target || window.__sofiaMainCtx;
     const scale = unit || currentScale();
+    const ink = patternInk();
     if (paper === "dots") {
-      ctx.fillStyle = "rgba(60,70,90,0.30)";
+      ctx.fillStyle = ink.dot;
       const rad = Math.max(0.55, 1.0 / scale);
       for (let x = r.x + NB_GRID; x < r.x + r.w - 1; x += NB_GRID)
         for (let y = r.y + NB_GRID; y < r.y + r.h - 1; y += NB_GRID) {
@@ -219,7 +257,7 @@
     }
     ctx.lineWidth = Math.max(0.35, 0.9 / scale);
     if (paper === "graph") {
-      ctx.strokeStyle = "rgba(80,100,150,0.20)";
+      ctx.strokeStyle = ink.line;
       ctx.beginPath();
       for (let x = r.x + NB_GRID; x < r.x + r.w - 1; x += NB_GRID) {
         ctx.moveTo(x, r.y);
@@ -233,14 +271,14 @@
       return;
     }
     // liniert
-    ctx.strokeStyle = "rgba(80,100,150,0.30)";
+    ctx.strokeStyle = ink.bold;
     ctx.beginPath();
     for (let y = r.y + NB_LINE_TOP; y < r.y + r.h - NB_LINE * 0.6; y += NB_LINE) {
       ctx.moveTo(r.x, y);
       ctx.lineTo(r.x + r.w, y);
     }
     ctx.stroke();
-    ctx.strokeStyle = "rgba(217,48,37,0.40)";
+    ctx.strokeStyle = ink.rule;
     ctx.beginPath();
     ctx.moveTo(r.x + NB_MARGIN, r.y);
     ctx.lineTo(r.x + NB_MARGIN, r.y + r.h);
@@ -453,7 +491,7 @@
       ctx.shadowColor = "rgba(0,0,0,0.16)";
       ctx.shadowBlur = 14 * scale * dpr;
       ctx.shadowOffsetY = 3 * scale * dpr;
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = pagePaperColor();
       ctx.fillRect(r.x, r.y, r.w, r.h);
       ctx.restore();
       ctx.save();
@@ -1062,6 +1100,7 @@
   }
 
   function drawPolylineStroke(c, pts, size, color, alpha, constantWidth, smooth, dash) {
+    color = themeInk(color);
     c.save();
     c.globalAlpha = alpha;
     c.strokeStyle = color;
@@ -1103,7 +1142,7 @@
     const heads = (stroke.extra && stroke.extra.arrowHeads) || "end";
     c.save();
     c.globalAlpha = alpha == null ? 1 : alpha;
-    c.strokeStyle = stroke.color;
+    c.strokeStyle = themeInk(stroke.color);
     c.lineWidth = stroke.size;
     c.lineCap = "round";
     c.lineJoin = "round";
@@ -1130,7 +1169,7 @@
       if (!label) return;
       c.save();
       c.globalAlpha = 1;
-      c.fillStyle = stroke.color || "#0b57d0";
+      c.fillStyle = themeInk(stroke.color || "#0b57d0");
       c.font = `600 ${Math.max(14, stroke.size || 22)}px Inter, sans-serif`;
       c.textBaseline = "alphabetic";
       c.textAlign = "left";
@@ -1152,7 +1191,7 @@
       c.save();
       c.globalAlpha = alpha;
       c.beginPath();
-      c.fillStyle = stroke.color;
+      c.fillStyle = themeInk(stroke.color);
       c.arc(p.x, p.y, stroke.size / 2, 0, Math.PI * 2);
       c.fill();
       c.restore();
@@ -1361,8 +1400,9 @@
     const startX = Math.floor(topLeft.x / GRID_SIZE) * GRID_SIZE;
     const startY = Math.floor(topLeft.y / GRID_SIZE) * GRID_SIZE;
 
+    const ink = patternInk();
     if (gridStyle === "dots") {
-      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      ctx.fillStyle = ink.gridDot;
       const r = 1.15 / unit;
       for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
         for (let y = startY; y <= bottomRight.y; y += GRID_SIZE) {
@@ -1378,7 +1418,7 @@
     if (gridStyle !== "lines") {
       for (let x = startX; x <= bottomRight.x; x += GRID_SIZE) {
         const bold = Math.round(x / GRID_SIZE) % 4 === 0;
-        ctx.strokeStyle = bold ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
+        ctx.strokeStyle = bold ? ink.bold : ink.line;
         ctx.beginPath();
         ctx.moveTo(x, topLeft.y);
         ctx.lineTo(x, bottomRight.y);
@@ -1387,7 +1427,7 @@
     }
     for (let y = startY; y <= bottomRight.y; y += GRID_SIZE) {
       const bold = Math.round(y / GRID_SIZE) % 4 === 0;
-      ctx.strokeStyle = bold ? "rgba(70,90,150,0.22)" : "rgba(70,90,150,0.10)";
+      ctx.strokeStyle = bold ? ink.bold : ink.line;
       ctx.beginPath();
       ctx.moveTo(topLeft.x, y);
       ctx.lineTo(bottomRight.x, y);
@@ -1569,7 +1609,7 @@
       ctx.rect((clip.x0 - canvasLeft) * dpr, 0, (clip.x1 - clip.x0) * dpr, canvas.height);
       ctx.clip();
     }
-    ctx.fillStyle = notebook ? "#e8e6ed" : "#f8f9fa";
+    ctx.fillStyle = deskColor();
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
@@ -1885,7 +1925,7 @@
       dot.style.height = px + "px";
       if (currentTool === "marker" && !usingSel) dot.style.background = hexToRgba(currentColor, 0.55);
       else if (currentTool === "eraser") dot.style.background = "#94a3b8";
-      else dot.style.background = currentColor;
+      else dot.style.background = themeInk(currentColor);
       btn.appendChild(dot);
       const lab = document.createElement("span");
       lab.textContent = names[i] || String(preset);
@@ -1910,7 +1950,7 @@
       popoverPreview.style.background = hexToRgba(currentColor, 0.55);
       popoverPreview.style.border = "none";
     } else {
-      popoverPreview.style.background = currentColor;
+      popoverPreview.style.background = themeInk(currentColor);
       popoverPreview.style.border = "none";
     }
     const clearRow = document.getElementById("eraser-clear-row");
@@ -2499,7 +2539,23 @@
     const st = document.getElementById("settings-version-status-text");
     set("set-sum-app", (document.getElementById("settings-version-label")?.textContent || "") + (st ? " · " + st.textContent : ""));
     set("set-sum-import", "GoodNotes-Ordner als PDFs");
+    set("set-sum-theme", darkMode ? "Dunkel" : "Hell");
+    document.querySelectorAll("#set-theme [data-theme]").forEach((b) => b.classList.toggle("active", (b.dataset.theme === "dark") === darkMode));
   }
+  function applyTheme(mode) {
+    darkMode = mode === "dark";
+    document.documentElement.dataset.theme = darkMode ? "dark" : "light";
+    try { localStorage.setItem("sofianotes-theme", darkMode ? "dark" : "light"); } catch (err) {}
+    syncSettingsSummary();
+    if (typeof requestRedraw === "function") requestRedraw();
+    if (window.sofiaRepaintPages) window.sofiaRepaintPages();
+  }
+  document.querySelectorAll("#set-theme [data-theme]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyTheme(b.dataset.theme);
+    })
+  );
   if (settingsPopover) {
     settingsPopover.querySelectorAll(".set-nav").forEach((b) =>
       b.addEventListener("click", (e) => {
@@ -5517,8 +5573,8 @@
     const width = s.extra && s.extra.width ? s.extra.width : null;
     const lay = layoutRuns(strokeRuns(s), s.size, width);
     c.save();
-    c.fillStyle = s.color || "#1E1F22";
-    c.strokeStyle = s.color || "#1E1F22";
+    c.fillStyle = themeInk(s.color || "#1E1F22");
+    c.strokeStyle = themeInk(s.color || "#1E1F22");
     c.lineWidth = Math.max(0.5, s.size * 0.06);
     c.textBaseline = "alphabetic";
     c.textAlign = "left";
@@ -5585,9 +5641,9 @@
     const g = tableGeom(t);
     const cells = (t.extra && t.extra.cells) || {};
     c.save();
-    c.fillStyle = "rgba(255,255,255,0.92)";
+    c.fillStyle = darkMode ? "rgba(28,27,34,0.94)" : "rgba(255,255,255,0.92)";
     c.fillRect(g.x0, g.y0, g.W, g.H);
-    c.strokeStyle = t.color || "#5f6368";
+    c.strokeStyle = themeInk(t.color || "#5f6368");
     c.lineWidth = Math.max(1 / scale, t.size * 0.05);
     c.beginPath();
     for (const x of g.xs) {
@@ -5599,7 +5655,7 @@
       c.lineTo(g.x0 + g.W, y);
     }
     c.stroke();
-    c.fillStyle = "#1E1F22";
+    c.fillStyle = themeInk("#1E1F22");
     c.font = textFont(t.size);
     c.textBaseline = "alphabetic";
     const pad = cellPad(t);
@@ -5899,7 +5955,7 @@
     c.setTransform(d, 0, 0, d, 0, 0);
     c.clearRect(0, 0, L.r.width, L.r.height);
     const x0 = L.xs[0], x1 = L.xs[L.xs.length - 1], y0 = L.ys[0], y1 = L.ys[L.ys.length - 1];
-    c.fillStyle = "#fff";
+    c.fillStyle = pagePaperColor();
     c.fillRect(x0, y0, x1 - x0, y1 - y0);
     // Text wie auf dem Blatt (gleicher Umbruch, nur verkleinert)
     const size = tdState.size;
@@ -5907,7 +5963,7 @@
     const lh = size * TEXT_LINE;
     c.save();
     c.scale(L.f, L.f);
-    c.fillStyle = "#1E1F22";
+    c.fillStyle = themeInk("#1E1F22");
     c.font = textFont(size);
     c.textBaseline = "alphabetic";
     for (let r = 0; r < tdState.rh.length; r++) {
@@ -6318,13 +6374,13 @@
       width = (g.xs[textEdit.c + 1] - g.xs[textEdit.c] - pad * 2) * scale;
       minH = (g.ys[textEdit.r + 1] - g.ys[textEdit.r] - pad * 2) * scale;
       size = t.size * scale;
-      color = "#1E1F22";
+      color = themeInk("#1E1F22");
     } else {
       const p = worldToScreen(textEdit.x, textEdit.y - textEdit.size * 0.95);
       left = p.x;
       top = p.y;
       size = textEdit.size * scale;
-      color = textEdit.color;
+      color = themeInk(textEdit.color);
       if (textEdit.width) width = textEdit.width * scale;
       else {
         measureCtx.font = textFont(size);
@@ -7318,7 +7374,7 @@
     zctx.setTransform(k * d, 0, 0, k * d, -ox * k * d, -oy * k * d);
     if (notebook) {
       // Notizbuch: die echte Seite (Hintergrund und Raster), daneben grau
-      zctx.fillStyle = "#e8e6ed";
+      zctx.fillStyle = deskColor();
       zctx.fillRect(ox, oy, wWorld, hWorld);
       for (const r of pageRects(notebook)) {
         if (r.x > ox + wWorld || r.x + r.w < ox || r.y > oy + hWorld || r.y + r.h < oy) continue;
@@ -7326,7 +7382,7 @@
         zctx.beginPath();
         zctx.rect(r.x, r.y, r.w, r.h);
         zctx.clip();
-        zctx.fillStyle = "#ffffff";
+        zctx.fillStyle = pagePaperColor();
         zctx.fillRect(r.x, r.y, r.w, r.h);
         const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
         if (img && img.complete && img.naturalWidth) drawPageMedia(zctx, img, r);
@@ -7370,7 +7426,7 @@
     const h = zoomBoxH();
     const r = zoomPaneRect();
     zctx.setTransform(1, 0, 0, 1, 0, 0);
-    zctx.fillStyle = "#ffffff";
+    zctx.fillStyle = pagePaperColor();
     zctx.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
     renderZoomRegion(zoomWin.x, zoomWin.y, zoomWin.w, h, k, d);
 
@@ -7405,7 +7461,7 @@
       if (zctx.roundRect) zctx.roundRect(0, 0, bw, r.height, 12);
       else zctx.rect(0, 0, bw, r.height);
       zctx.clip();
-      zctx.fillStyle = "#ffffff";
+      zctx.fillStyle = pagePaperColor();
       zctx.fillRect(0, 0, bw, r.height);
       renderZoomRegion(zoomNext.x, zoomNext.y, bw / k, h, k, d);
       zctx.setTransform(d, 0, 0, d, 0, 0);
@@ -16297,7 +16353,7 @@
     function pageSig(r, i) {
       const pg = r.page;
       const bk = thumbBuckets && thumbBuckets[i];
-      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0].join("|");
+      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0, darkMode ? "d" : "l"].join("|");
     }
     function thumbKey(r, i) {
       return (currentBoardId || "") + ":" + (r.id || "i" + i);
@@ -16309,7 +16365,7 @@
       const pts = st.points;
       if (!pts || !pts.length) return;
       c.globalAlpha = t === "marker" ? 0.38 : 1;
-      c.strokeStyle = st.color || "#000";
+      c.strokeStyle = themeInk(st.color || "#000");
       c.lineWidth = Math.max((st.size || 2) * (t === "marker" ? 1 : 0.9), 0.8 / k);
       c.beginPath();
       c.moveTo(pts[0].x, pts[0].y);
@@ -16346,7 +16402,7 @@
       cv.style.height = r.h * k + "px";
       const c = cv.getContext("2d");
       c.setTransform(d, 0, 0, d, 0, 0);
-      c.fillStyle = "#fff";
+      c.fillStyle = pagePaperColor();
       c.fillRect(0, 0, W, r.h * k);
       c.setTransform(k * d, 0, 0, k * d, -r.x * k * d, -r.y * k * d);
       let complete = true;
@@ -16837,7 +16893,7 @@
         const c = cv.getContext("2d");
         const k = W / (bg.w || A4_W);
         c.setTransform(d, 0, 0, d, 0, 0);
-        c.fillStyle = "#fff";
+        c.fillStyle = pagePaperColor();
         c.fillRect(0, 0, W, H);
         c.setTransform(k * d, 0, 0, k * d, 0, 0);
         const r = { x: 0, y: 0, w: bg.w || A4_W, h: bg.h || A4_H };
@@ -16895,6 +16951,9 @@
     // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste
     let lastCur = -1;
     let lastNb = null;
+    window.sofiaRepaintPages = () => {
+      if (panelOpen) renderPanel();
+    };
     window.sofiaPagesUi = () => {
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
       pagesBtn.classList.toggle("hidden", !show);
