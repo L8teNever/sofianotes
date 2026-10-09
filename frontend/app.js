@@ -9481,6 +9481,7 @@
         mediaId: im.mediaId,
         w: sz.w,
         h: sz.h,
+        read: true,
       };
     });
   }
@@ -15470,9 +15471,17 @@
       const ok = await askConfirm({ title: "Seite " + (i + 1) + " löschen?", text: "Alles, was auf dieser Seite steht, wird mitgelöscht.", ok: "Löschen" });
       if (!ok) return;
       const nb = clone();
+      const gone = nb.pages[i] && nb.pages[i].id;
       nb.pages.splice(i, 1);
+      if (gone) nb.bookmarks = (nb.bookmarks || []).filter((m) => m.pageId !== gone);
       withPageUndo(() => saveNotebook(nb, { moveStrokes: true }));
       fitPage(Math.min(i, nb.pages.length - 1));
+    }
+    function setPageRead(i, on) {
+      const nb = clone();
+      if (on) nb.pages[i].read = true;
+      else delete nb.pages[i].read;
+      withPageUndo(() => saveNotebook(nb));
     }
     function setPageBg(i, bg) {
       const nb = clone();
@@ -15667,7 +15676,13 @@
         return openMenu([{ head: "Seite " + (i + 1) }, { icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }], anchor);
       }
       // Drehen ganz oben, damit es schnell zu finden ist
-      const items = [{ head: "Seite " + (i + 1) }, { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) }, { head: "Hintergrund" }];
+      const items = [
+        { head: "Seite " + (i + 1) },
+        { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) },
+        { icon: "auto_stories", label: pg.read ? "Als Notizseite" : "Als Leseseite (nur Dokument)", active: !!pg.read, run: () => setPageRead(i, !pg.read) },
+        { icon: "bookmark", label: "Lesezeichen …", run: () => addBookmark(i) },
+        { head: "Hintergrund" },
+      ];
       for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
       for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBgSafe(i, { paper: "blank", mediaId: u.mediaId }) });
       items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
@@ -15850,6 +15865,111 @@
       e.stopPropagation();
       if (!menu.classList.contains("hidden")) return closeMenu();
       notebookMenu(e.currentTarget);
+    });
+    const marksEl = document.getElementById("pages-marks");
+    const marksBtn = document.getElementById("btn-bookmarks");
+    let marksOpen = false;
+    function notebookMarks() {
+      return (notebook && notebook.bookmarks) || [];
+    }
+    function pageIndexById(id) {
+      return notebook.pages.findIndex((p) => p.id === id);
+    }
+    async function addBookmark(i) {
+      if (!notebook || !fullRights()) return showToast("Nur wer bearbeiten darf, kann Lesezeichen setzen");
+      const pg = notebook.pages[i];
+      if (!pg) return;
+      const res = await openNameSheet({ title: "Lesezeichen", label: "Name", initial: "", placeholder: "z. B. Einleitung" });
+      const name = res && String(res.value || "").trim().slice(0, 80);
+      if (!name) return;
+      const nb = clone();
+      nb.bookmarks = (nb.bookmarks || []).concat([{ id: newId(), pageId: pg.id, name }]);
+      withPageUndo(() => saveNotebook(nb));
+      marksOpen = true;
+      renderMarks();
+    }
+    async function renameBookmark(id) {
+      const m = notebookMarks().find((x) => x.id === id);
+      if (!m) return;
+      const res = await openNameSheet({ title: "Lesezeichen umbenennen", label: "Name", initial: m.name });
+      const name = res && String(res.value || "").trim().slice(0, 80);
+      if (!name) return;
+      const nb = clone();
+      nb.bookmarks = (nb.bookmarks || []).map((x) => (x.id === id ? Object.assign({}, x, { name }) : x));
+      withPageUndo(() => saveNotebook(nb));
+      renderMarks();
+    }
+    function deleteBookmark(id) {
+      const nb = clone();
+      nb.bookmarks = (nb.bookmarks || []).filter((x) => x.id !== id);
+      withPageUndo(() => saveNotebook(nb));
+      renderMarks();
+    }
+    function jumpBookmark(m) {
+      const i = pageIndexById(m.pageId);
+      if (i < 0) return;
+      if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
+      fitPage(i);
+    }
+    function renderMarks() {
+      marksBtn?.classList.toggle("active", marksOpen);
+      if (!marksEl) return;
+      marksEl.classList.toggle("hidden", !marksOpen);
+      if (!marksOpen || !notebook) {
+        marksEl.innerHTML = "";
+        return;
+      }
+      marksEl.innerHTML = "";
+      if (fullRights()) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "pages-marks-add";
+        add.innerHTML = '<span class="material-symbols-rounded">bookmark</span><span>Lesezeichen auf dieser Seite</span>';
+        add.addEventListener("click", (e) => {
+          e.stopPropagation();
+          addBookmark(currentPage());
+        });
+        marksEl.appendChild(add);
+      }
+      for (const m of notebookMarks()) {
+        const i = pageIndexById(m.pageId);
+        const row = document.createElement("div");
+        row.className = "pages-mark";
+        row.innerHTML = '<span class="pages-mark-text"><strong></strong><small></small></span>';
+        row.querySelector("strong").textContent = m.name;
+        row.querySelector("small").textContent = i >= 0 ? "Seite " + (i + 1) : "Seite fehlt";
+        row.addEventListener("click", (e) => {
+          if (e.target.closest("button")) return;
+          jumpBookmark(m);
+        });
+        if (fullRights()) {
+          const more = document.createElement("button");
+          more.type = "button";
+          more.className = "hw-panel-btn";
+          more.title = "Umbenennen oder löschen";
+          more.innerHTML = '<span class="material-symbols-rounded">more_vert</span>';
+          more.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openMenu([
+              { icon: "edit", label: "Umbenennen", run: () => renameBookmark(m.id) },
+              { icon: "delete", label: "Löschen", danger: true, run: () => deleteBookmark(m.id) },
+            ], more);
+          });
+          row.appendChild(more);
+        }
+        marksEl.appendChild(row);
+      }
+      if (!notebookMarks().length && !fullRights()) {
+        const empty = document.createElement("div");
+        empty.className = "pap-hint";
+        empty.textContent = "Noch keine Lesezeichen";
+        marksEl.appendChild(empty);
+      }
+    }
+    marksBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      marksOpen = !marksOpen;
+      renderMarks();
     });
     panel.addEventListener("pointerdown", (e) => e.stopPropagation());
     addPop.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -16111,7 +16231,8 @@
     let renderedSig = "";
     function renderPanel() {
       if (!panelOpen || !notebook) return;
-      renderedSig = JSON.stringify(notebook.pages) + notebook.layout;
+      renderedSig = JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []);
+      renderMarks();
       const rects = pageRects(notebook);
       const cur = currentPage();
       thumbBuckets = bucketStrokes(rects);
@@ -16120,7 +16241,7 @@
       grid.innerHTML = "";
       rects.forEach((r, i) => {
         const cell = document.createElement("div");
-        cell.className = "page-thumb" + (i === cur ? " active" : "") + (pageAppear && pageAppear.ids.has(r.id) ? " page-thumb-enter" : "");
+        cell.className = "page-thumb" + (i === cur ? " active" : "") + (notebook.pages[i] && notebook.pages[i].read ? " read" : "") + (pageAppear && pageAppear.ids.has(r.id) ? " page-thumb-enter" : "");
         cell.dataset.index = i;
         const cv = document.createElement("canvas");
         cv.className = "page-thumb-img";
@@ -16128,7 +16249,11 @@
         const foot = document.createElement("div");
         foot.className = "page-thumb-foot";
         foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite: drehen, Hintergrund, löschen …"><span class="material-symbols-rounded">expand_more</span></button>';
-        foot.firstChild.textContent = i + 1;
+        if (notebook.pages[i] && notebook.pages[i].read) {
+          foot.firstChild.className = "page-thumb-kind";
+          foot.firstChild.innerHTML = '<span class="material-symbols-rounded">auto_stories</span><span></span>';
+          foot.firstChild.lastChild.textContent = i + 1;
+        } else foot.firstChild.textContent = i + 1;
         cell.appendChild(foot);
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -16168,7 +16293,7 @@
     // Nur bei geaenderten Seiten alles neu, sonst nur das Bild der aktuellen Seite (schnell)
     window.sofiaPagesChanged = (now) => {
       if (!panelOpen) return;
-      if (now && notebook && JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) {
+      if (now && notebook && JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []) !== renderedSig) {
         clearTimeout(thumbTimer);
         requestAnimationFrame(() => panelOpen && notebook && renderPanel());
         return;
@@ -16176,7 +16301,7 @@
       clearTimeout(thumbTimer);
       thumbTimer = setTimeout(() => {
         if (!panelOpen || !notebook) return;
-        if (JSON.stringify(notebook.pages) + notebook.layout !== renderedSig) return renderPanel();
+        if (JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []) !== renderedSig) return renderPanel();
         // nur Seiten mit Aenderungen neu zeichnen
         const rects = pageRects(notebook);
         thumbBuckets = bucketStrokes(rects);
@@ -16463,7 +16588,10 @@
       b.addEventListener("click", (e) => {
         e.stopPropagation();
         addPop.classList.add("hidden");
-        if (b.dataset.act === "photo") photoInput.click();
+        if (b.dataset.act === "read") {
+          const at = fullRights() ? currentPage() : notebook.pages.length - 1;
+          addPages(at, [{ id: newId(), paper: "blank", w: A4_W, h: A4_H, read: true }]);
+        } else if (b.dataset.act === "photo") photoInput.click();
         else if (b.dataset.act === "image") imageInput.click();
         else pdfInput.click();
       })

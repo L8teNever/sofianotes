@@ -3598,6 +3598,56 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .pages-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 8px 10px 12px; }
 .pages-head strong { font: 700 18px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; }
 .pages-head .hw-panel-btn { width: 44px; height: 44px; }
+.pages-marks {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 14px 10px;
+}
+.pages-marks.hidden { display: none; }
+.pages-marks-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-radius: 16px;
+  background: #fff;
+  color: #1c1b1f;
+  padding: 10px 12px;
+  font: 600 14px/1.2 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+  text-align: left;
+}
+.pages-marks-add .material-symbols-rounded { font-size: 20px; color: #6750a4; }
+.pages-mark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  background: #fff;
+  color: #1c1b1f;
+  padding: 8px 6px 8px 12px;
+  font: 500 14px/1.25 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+  text-align: left;
+}
+.pages-mark-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pages-mark-text strong { font: 600 14px/1.2 'Google Sans', 'Inter', sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pages-mark-text small { font: 500 11px/1 'Google Sans', 'Inter', sans-serif; color: #79747e; }
+.pages-mark .hw-panel-btn { width: 32px; height: 32px; }
+.page-thumb.read .page-thumb-img { outline: 2px solid rgba(103, 80, 164, 0.35); outline-offset: 1px; }
+.page-thumb-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font: 600 11px/1 'Google Sans', 'Inter', sans-serif;
+  color: #6750a4;
+}
+.page-thumb-kind .material-symbols-rounded { font-size: 14px; }
 .pages-grid {
   flex: 1;
   overflow-y: auto;
@@ -3849,6 +3899,9 @@ html, body { background: #e8e6ed; }
 .tsb-title { font: 600 15px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; padding: 0 12px; white-space: nowrap; }
 #top-side-bar .tsb-title, .tsb-close { display: none; }
 body.pages-open #top-side-bar .tsb-title { display: block; }
+#btn-bookmarks { display: none; }
+body.pages-open #btn-bookmarks { display: flex; }
+body.pages-open #btn-bookmarks.active { background: #eaddff; color: #6750a4; }
 body.pages-open .tsb-close { display: flex; border-radius: 50%; background: #ece6f0; }
 body.pages-open .tsb-close:hover { background: #e2dbe8; }
 body.pages-open #btn-pages,

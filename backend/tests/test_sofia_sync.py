@@ -365,8 +365,10 @@ class NotebookTests(unittest.TestCase):
 
                 async def run():
                     b = await db.create_board("simon", "Heft", None)
-                    nb = db.clean_notebook({"layout": "horizontal", "template": {"paper": "lines"}, "pages": [{"id": "p1"}, {"id": "p2", "paper": "dots", "mediaId": mid, "w": 900, "h": 600}, {"bad": 1}]})
+                    nb = db.clean_notebook({"layout": "horizontal", "template": {"paper": "lines"}, "pages": [{"id": "p1"}, {"id": "p2", "paper": "dots", "mediaId": mid, "w": 900, "h": 600, "read": True}, {"bad": 1}], "bookmarks": [{"id": "m1", "pageId": "p2", "name": " Kapitel "}, {"pageId": "gone", "name": "x"}]})
                     self.assertEqual(len(nb["pages"]), 2)
+                    self.assertTrue(nb["pages"][1]["read"])
+                    self.assertEqual(nb["bookmarks"], [{"id": "m1", "pageId": "p2", "name": "Kapitel"}])
                     await db.set_board_notebook(b["id"], nb)
                     board = await db.get_board(b["id"])
                     self.assertEqual(board["notebook"]["layout"], "horizontal")
