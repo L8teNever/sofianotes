@@ -66,6 +66,14 @@ function isHtmlPath(pathname) {
   return pathname === "/" || pathname === "/index.html";
 }
 
+// Ein als Skript gecachter HTML-Fehler (Alter Cache, falscher Deploy) darf nicht
+// als app.js wieder ausgeliefert werden — sonst bleibt der Ladebildschirm stehen.
+function staleScript(response, url) {
+  if (!/\.js$/.test(url.pathname)) return false;
+  const ct = (response.headers.get("content-type") || "").toLowerCase();
+  return ct.includes("text/html");
+}
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET") return;
@@ -96,17 +104,16 @@ self.addEventListener("fetch", (event) => {
     (isCdn(url) && /@\d|\/\d+\.\d+\.\d+\//.test(url.pathname));
   if (immutable) {
     event.respondWith(
-      caches.match(event.request).then(
-        (hit) =>
-          hit ||
-          fetch(event.request).then((response) => {
-            if (response.ok) {
-              const copy = response.clone();
-              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-            }
-            return response;
-          })
-      )
+      caches.match(event.request).then((hit) => {
+        if (hit && hit.ok && !staleScript(hit, url)) return hit;
+        return fetch(event.request).then((response) => {
+          if (response.ok && !staleScript(response, url)) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          }
+          return response;
+        });
+      })
     );
     return;
   }
