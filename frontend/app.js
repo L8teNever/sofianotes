@@ -246,10 +246,41 @@
     ctx.lineTo(r.x + NB_MARGIN, r.y + r.h);
     ctx.stroke();
   }
+  // Sichtbare Seitengruppe (eine Seite, bzw. Doppelseite) in Weltkoordinaten
+  function pageGroupXBounds() {
+    const rects = pageRects(notebook);
+    if (!rects.length) return null;
+    let i = 0;
+    if (typeof window.sofiaCurrentPage === "function") i = window.sofiaCurrentPage();
+    i = Math.max(0, Math.min(rects.length - 1, i | 0));
+    if (window.sofiaNbSpread && window.sofiaNbSpread()) {
+      const a = i - (i % 2);
+      const b = Math.min(rects.length - 1, a + 1);
+      return { x0: Math.min(rects[a].x, rects[b].x), x1: Math.max(rects[a].x + rects[a].w, rects[b].x + rects[b].w) };
+    }
+    return { x0: rects[i].x, x1: rects[i].x + rects[i].w };
+  }
+  function viewShiftToFit(lo, hi, a, b, extra, pulling) {
+    const m = 24;
+    if (!pulling && b - a <= hi - lo - m) return (lo + hi) / 2 - (a + b) / 2;
+    if (a > lo + m) return lo + m - a;
+    if (b < hi - extra) return hi - extra - b;
+    return 0;
+  }
+  // Vertikales Notizbuch: aktuelle Seite in der sichtbaren Breite halten (nicht die
+  // Bounding-Box aller Seiten — sonst sitzt eine schmalere Seite nach links).
+  function alignNotebookX(pulling) {
+    if (!notebook || notebook.layout === "horizontal") return;
+    const g = pageGroupXBounds();
+    if (!g) return;
+    const left = viewLeft;
+    const right = window.innerWidth - viewRight;
+    offsetX += viewShiftToFit(left, right, g.x0 * scale + offsetX, g.x1 * scale + offsetX, 24, !!pulling);
+  }
   // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
   function clampNotebookView() {
-    // Waehrend Pan/Pinch/Animation/Schwung nicht gegen die Bewegung arbeiten (sonst Flackern)
-    if (panState || pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy())) return;
+    const animBusy = pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy());
+    if (animBusy) return;
     const rects = pageRects(notebook);
     if (!rects.length) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0, maxH = 0;
@@ -267,29 +298,29 @@
     const bottom = window.innerHeight - 20;
     const availW = right - left;
     const availH = bottom - top;
+    const panning = !!panState;
+    const wheelBusy = !!(wheelPan && wheelPan.t && performance.now() - wheelPan.t < 180);
     // hoechstens so weit raus, dass eine ganze Seite drauf passt
     const spreadW = window.sofiaNbSpread && window.sofiaNbSpread() ? maxW * 2 + PAGE_GAP : maxW;
     const minScale = Math.max(MIN_ZOOM, Math.min(availW / spreadW, availH / maxH) * 0.92);
-    if (scale < minScale) {
+    if (!panning && !wheelBusy && scale < minScale) {
       const c = screenToWorld(left + availW / 2, top + availH / 2);
       scale = minScale;
       offsetX = left + availW / 2 - c.x * scale;
       offsetY = top + availH / 2 - c.y * scale;
     }
     const horiz = notebook.layout === "horizontal";
-    // Beim Weiterziehen hinter der letzten Seite extra Platz; in Ruhe mittig / am Rand.
     const pulling = !!(panState && !pinchState && !currentStroke);
     const endRoom = pulling ? 128 : 24;
-    const fit = (lo, hi, a, b, extra) => {
-      // a..b = Inhalt am Bildschirm; lo..hi = sichtbarer Bereich -> Verschiebung.
-      const m = 24;
-      if (!pulling && b - a <= hi - lo - m) return (lo + hi) / 2 - (a + b) / 2;
-      if (a > lo + m) return lo + m - a;
-      if (b < hi - extra) return hi - extra - b;
-      return 0;
-    };
-    offsetX += fit(left, right, minX * scale + offsetX, maxX * scale + offsetX, horiz ? endRoom : 24);
-    offsetY += fit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : endRoom);
+    if (horiz) {
+      if (!panning && !wheelBusy) {
+        offsetX += viewShiftToFit(left, right, minX * scale + offsetX, maxX * scale + offsetX, endRoom, pulling);
+      }
+    } else {
+      alignNotebookX(false);
+    }
+    if (panning || wheelBusy) return;
+    offsetY += viewShiftToFit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : endRoom, pulling);
   }
 
   // Seiten-Hintergrundbild, ggf. in Vierteldrehungen gedreht (page.rot = 0..3, im Uhrzeigersinn)
@@ -603,6 +634,7 @@
     viewRight = right;
     const newMid = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2;
     offsetX += newMid - oldMid;
+    if (typeof alignNotebookX === "function") alignNotebookX(false);
     document.documentElement.style.setProperty("--view-left", viewLeft + "px");
     document.documentElement.style.setProperty("--view-right", viewRight + "px");
     resizeCanvas();
@@ -6951,12 +6983,14 @@
   // Sichtbarer Teil des Hauptblatts: der groessere freie Bereich ober- oder unterhalb
   // der Schreibflaeche (je nachdem, wohin man sie geschoben hat)
   function visibleWorldArea() {
-    if (!zoomPaneEl) return { a: screenToWorld(0, 70), b: screenToWorld(window.innerWidth, window.innerHeight) };
+    const x0 = viewLeft;
+    const x1 = window.innerWidth - viewRight;
+    if (!zoomPaneEl) return { a: screenToWorld(x0, 70), b: screenToWorld(x1, window.innerHeight) };
     const r = zoomPaneEl.getBoundingClientRect();
     const above = r.top - 70;
     const below = window.innerHeight - 80 - r.bottom;
-    if (above >= below) return { a: screenToWorld(0, 70), b: screenToWorld(window.innerWidth, r.top - 10) };
-    return { a: screenToWorld(0, r.bottom + 10), b: screenToWorld(window.innerWidth, window.innerHeight - 80) };
+    if (above >= below) return { a: screenToWorld(x0, 70), b: screenToWorld(x1, r.top - 10) };
+    return { a: screenToWorld(x0, r.bottom + 10), b: screenToWorld(x1, window.innerHeight - 80) };
   }
 
   function openZoomWindow() {
@@ -8291,6 +8325,7 @@
   }
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
+  let wheelPan = { vx: 0, vy: 0, t: 0 };
   // Schwung: nach schnellem Wischen laeuft das Blatt weiter und bremst sanft ab
   let fling = null;
   function startFling(ps) {
@@ -11114,7 +11149,6 @@
     { passive: false }
   );
   let wheelSnapTimer = null;
-  let wheelPan = { vx: 0, vy: 0, t: 0 };
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   // Textfelder auf dem Blatt sind contenteditable - dort muss Markieren erlaubt bleiben
@@ -13541,6 +13575,7 @@
     scale = v.s;
     offsetX = v.x;
     offsetY = v.y;
+    if (typeof alignNotebookX === "function") alignNotebookX(false);
     requestRedraw();
     return true;
   }
