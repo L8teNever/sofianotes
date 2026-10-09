@@ -186,18 +186,30 @@
   let notebookBoardId = null;
   let notebook = null; // {layout, template: {paper, mediaId?}, pages: [{id, paper, mediaId?, w, h, board?}]}
   let boardEditId = null; // Seite, deren unendliches Board gerade offen ist
+  let pendingBoardTap = null; // Tippen auf eine schreibgeschuetzte Vorschau
+  let boardLastOpenTap = null;
   // Lage der Seiten in Weltkoordinaten (gleich wie auf dem Server fuer den PDF-Export)
+  const pageRectCache = new WeakMap();
   function pageRects(nb) {
-    const out = [];
-    if (!nb) return out;
+    if (!nb) return [];
+    const pages = nb.pages || [];
     const horiz = nb.layout === "horizontal";
+    let sig = horiz ? "h" : "v";
+    for (let i = 0; i < pages.length; i++) {
+      const pg = pages[i];
+      sig += "|" + (pg.id || i) + ":" + (pg.w || 0) + "x" + (pg.h || 0);
+    }
+    const hit = pageRectCache.get(nb);
+    if (hit && hit.sig === sig) return hit.rects;
+    const out = [];
     let pos = 0;
-    for (const pg of nb.pages || []) {
+    for (const pg of pages) {
       const w = pg.w || A4_W;
       const h = pg.h || A4_H;
       out.push(horiz ? { page: pg, id: pg.id, x: pos, y: 0, w, h } : { page: pg, id: pg.id, x: 0, y: pos, w, h });
       pos += (horiz ? w : h) + PAGE_GAP;
     }
+    pageRectCache.set(nb, { sig, rects: out });
     return out;
   }
   // Wie ein echter A4-Block: 5-mm-Kaestchen bzw. -Punkte, liniert mit ca. 8,5 mm,
@@ -323,7 +335,7 @@
   // rutscht die Ansicht ins Leere und ein spaeteres Einrasten holt sie zurueck.
   let zoomLock = null;
   function beginZoomLock() {
-    if (!notebook || !notebookZoomedIn()) return;
+    if (boardEditId || !notebook || !notebookZoomedIn()) return;
     if (zoomLock) return;
     const g = pageGroupBounds();
     if (g) zoomLock = { x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 };
@@ -338,7 +350,7 @@
     return 0;
   }
   function clampZoomLock() {
-    if (!notebook || !notebookZoomedIn()) return;
+    if (boardEditId || !notebook || !notebookZoomedIn()) return;
     const g = zoomLock || pageGroupBounds();
     if (!g) return;
     const left = viewLeft;
@@ -352,7 +364,7 @@
   // statt frei in die Luecke zu rutschen und danach zurueckzuspringen.
   let nbHold = null;
   function beginNbHold() {
-    if (nbHold || !notebook || pinchState || !notebookPagingOn() || notebookZoomedIn()) return;
+    if (boardEditId || nbHold || !notebook || pinchState || !notebookPagingOn() || notebookZoomedIn()) return;
     const i = window.sofiaCurrentPage ? window.sofiaCurrentPage() : 0;
     const v = window.sofiaViewFor && window.sofiaViewFor(i);
     if (!v) return;
@@ -372,7 +384,7 @@
   // Seite fuer Seite: quer exakt auf der Seite, laengs nur ein kleines Mitziehen.
   // Reingezoomt oder durchgehend: Raender, kein Wegdriften mit spaetem Ruecksprung.
   function holdNotebookInPages() {
-    if (!notebook || pinchState) return;
+    if (boardEditId || !notebook || pinchState) return;
     if (window.sofiaViewBusy && window.sofiaViewBusy()) return;
     const horiz = notebook.layout === "horizontal";
     if (notebookPagingOn() && !notebookZoomedIn() && nbHold) {
@@ -413,7 +425,7 @@
   }
   // Vertikales Notizbuch: aktuelle Seite in der sichtbaren Breite halten.
   function alignNotebookX() {
-    if (!notebook || notebook.layout === "horizontal") return;
+    if (boardEditId || !notebook || notebook.layout === "horizontal") return;
     if (nbHold && notebookPagingOn() && !notebookZoomedIn()) {
       offsetX = nbHold.ox;
       return;
@@ -502,7 +514,7 @@
       ctx.clip();
       const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
       if (img && img.complete && img.naturalWidth) drawPageMedia(ctx, img, r);
-      else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r);
+      else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r);
       ctx.restore();
       ctx.restore();
     }
@@ -1598,9 +1610,14 @@
   }
 
   function stampBoardPage(st) {
-    if (!boardEditId || !st) return;
-    if (st.extra && st.extra.boardPage) return;
-    st.extra = Object.assign({}, st.extra || {}, { boardPage: boardEditId });
+    if (!st || (st.extra && st.extra.boardPage)) return;
+    let pageId = boardEditId;
+    if (!pageId && notebook && st.points && st.points[0]) {
+      const hit = boardPageAt(st.points[0]);
+      if (hit) pageId = hit.page.boardOf || hit.id;
+    }
+    if (!pageId) return;
+    st.extra = Object.assign({}, st.extra || {}, { boardPage: pageId });
   }
   function strokesForBoard(pageId) {
     const list = [];
@@ -1610,107 +1627,333 @@
     if (currentStroke && currentStroke.extra && currentStroke.extra.boardPage === pageId) list.push(currentStroke);
     return list;
   }
-  function fitBoardOnto(rect, strokes) {
+  const BOARD_MIN_SCALE = 0.72;
+  const BOARD_MAX_TILES = 24;
+  const boardLayoutCache = new Map();
+  function boardStrokeBounds(st) {
+    if (!st) return null;
+    let b = null;
+    if (st.tool === "image") {
+      const corners = imageRotatedCorners(st);
+      if (corners.length) b = makeBBox(corners);
+    }
+    if (!b) b = st.bbox && Number.isFinite(st.bbox.minX) ? st.bbox : st.points && st.points.length ? makeBBox(st.points) : null;
+    if (!b || !Number.isFinite(b.minX)) return null;
+    if (st.tool === "text") {
+      const size = Math.max(14, st.size || 22);
+      const label = (st.points && st.points[0] && st.points[0].text) || "";
+      return {
+        minX: b.minX,
+        minY: b.minY - size,
+        maxX: b.maxX + Math.max(size, label.length * size * 0.56),
+        maxY: b.maxY + size * 0.35,
+      };
+    }
+    if (st.tool === "image" || st.tool === "table") return b;
+    const m = Math.max(1, (st.size || 2) / 2);
+    return { minX: b.minX - m, minY: b.minY - m, maxX: b.maxX + m, maxY: b.maxY + m };
+  }
+  function boardContentBounds(strokes) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const st of strokes) {
-      const b = st.bbox || (st.points && st.points.length ? makeBBox(st.points) : null);
-      if (!b || !Number.isFinite(b.minX)) continue;
-      minX = Math.min(minX, b.minX);
-      minY = Math.min(minY, b.minY);
-      maxX = Math.max(maxX, b.maxX);
-      maxY = Math.max(maxY, b.maxY);
+      const b = boardStrokeBounds(st);
+      if (!b) continue;
+      if (b.minX < minX) minX = b.minX;
+      if (b.minY < minY) minY = b.minY;
+      if (b.maxX > maxX) maxX = b.maxX;
+      if (b.maxY > maxY) maxY = b.maxY;
     }
     if (minX === Infinity) return null;
-    const pad = 28;
-    const bw = Math.max(1, maxX - minX);
-    const bh = Math.max(1, maxY - minY);
-    const sc = Math.min((rect.w - pad * 2) / bw, (rect.h - pad * 2) / bh);
-    return {
-      sc,
-      ox: rect.x + (rect.w - bw * sc) / 2 - minX * sc,
-      oy: rect.y + (rect.h - bh * sc) / 2 - minY * sc,
-    };
+    return { minX, minY, maxX, maxY };
   }
-  function drawBoardPagesFitted() {
-    if (!notebook) return;
-    for (const r of pageRects(notebook)) {
-      if (!r.page || !r.page.board) continue;
-      const list = strokesForBoard(r.id);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(r.x, r.y, r.w, r.h);
-      ctx.clip();
-      const fit = fitBoardOnto(r, list);
-      if (!fit) {
-        ctx.fillStyle = "rgba(103,80,164,0.72)";
-        ctx.font = "600 36px Inter, sans-serif";
-        ctx.fillText("Board", r.x + 40, r.y + 72);
-      } else {
-        ctx.translate(fit.ox, fit.oy);
-        ctx.scale(fit.sc, fit.sc);
-        for (const st of list) {
-          if (st === currentStroke) continue;
-          drawStroke(st, ctx, st.tool === "marker" ? { alpha: 0.38 } : undefined);
+  function layoutBoard(strokes, pageW, pageH) {
+    const pad = Math.min(28, pageW * 0.04, pageH * 0.04);
+    const innerW = Math.max(40, pageW - pad * 2);
+    const innerH = Math.max(40, pageH - pad * 2);
+    const bounds = boardContentBounds(strokes);
+    if (!bounds) return { empty: true, pad, scale: 1, cols: 1, rows: 1, tiles: [{ fit: true }], pageW, pageH };
+    const bw = Math.max(1, bounds.maxX - bounds.minX);
+    const bh = Math.max(1, bounds.maxY - bounds.minY);
+    const fit = Math.min(innerW / bw, innerH / bh);
+    let scale = fit;
+    let cols = 1;
+    let rows = 1;
+    if (fit < BOARD_MIN_SCALE) {
+      let lo = Math.min(fit, 1);
+      let hi = 1;
+      for (let i = 0; i < 18; i++) {
+        const mid = (lo + hi) / 2;
+        const c = Math.max(1, Math.ceil((bw * mid) / innerW - 1e-6));
+        const r = Math.max(1, Math.ceil((bh * mid) / innerH - 1e-6));
+        if (c * r <= BOARD_MAX_TILES) lo = mid;
+        else hi = mid;
+      }
+      scale = lo;
+      cols = Math.max(1, Math.ceil((bw * scale) / innerW - 1e-6));
+      rows = Math.max(1, Math.ceil((bh * scale) / innerH - 1e-6));
+      let guard = 0;
+      while (cols * rows > BOARD_MAX_TILES && guard++ < 12) {
+        scale *= 0.92;
+        cols = Math.max(1, Math.ceil((bw * scale) / innerW - 1e-6));
+        rows = Math.max(1, Math.ceil((bh * scale) / innerH - 1e-6));
+      }
+    }
+    const tiles = [];
+    if (cols === 1 && rows === 1) {
+      tiles.push({ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh });
+    } else {
+      const viewW = innerW / scale;
+      const viewH = innerH / scale;
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          tiles.push({
+            col,
+            row,
+            wx: bounds.minX + col * viewW,
+            wy: bounds.minY + row * viewH,
+            viewW,
+            viewH,
+          });
         }
       }
-      ctx.restore();
     }
+    return { empty: false, pad, scale, cols, rows, tiles, bounds, pageW, pageH };
+  }
+  function layoutForBoard(primaryId, pageW, pageH) {
+    const list = strokesForBoard(primaryId);
+    let sig = pageW + "x" + pageH + "#" + list.length;
+    for (let i = 0; i < list.length; i++) {
+      const st = list[i];
+      const b = st.bbox;
+      sig += "|" + (st.id || i) + ":" + (st.tool || "") + ":" + (st.size || 0) + ":" + (b ? Math.round(b.minX + b.maxX + b.minY + b.maxY) : 0) + ":" + ((st.points && st.points.length) || 0);
+    }
+    const hit = boardLayoutCache.get(primaryId);
+    if (hit && hit.sig === sig) return hit.layout;
+    const layout = layoutBoard(list, pageW, pageH);
+    boardLayoutCache.set(primaryId, { sig, layout });
+    return layout;
+  }
+  function boardPrimaryOf(pg) {
+    if (!pg) return null;
+    if (pg.boardOf) return pg.boardOf;
+    if (pg.board) return pg.id;
+    return null;
+  }
+  function paintBoardPage(c, r) {
+    if (!r || !r.page) return;
+    const primary = boardPrimaryOf(r.page);
+    if (!primary) return;
+    const list = strokesForBoard(primary);
+    const layout = layoutForBoard(primary, r.w, r.h);
+    let idx = Number.isFinite(r.page.boardIndex) ? r.page.boardIndex : 0;
+    if (idx < 0) idx = 0;
+    const tile = layout.tiles[Math.min(idx, layout.tiles.length - 1)];
+    c.save();
+    c.beginPath();
+    c.rect(r.x, r.y, r.w, r.h);
+    c.clip();
+    c.fillStyle = pagePaperColor();
+    c.fillRect(r.x, r.y, r.w, r.h);
+    if (!tile || layout.empty) {
+      c.fillStyle = darkMode ? "#d0bcff" : "rgba(103,80,164,0.85)";
+      c.font = "600 36px Inter, sans-serif";
+      c.fillText("Board", r.x + 40, r.y + 80);
+      c.restore();
+      return;
+    }
+    const drawOne = (st) => {
+      if (st === currentStroke) return;
+      drawStroke(st, c, st.tool === "marker" ? { alpha: 0.38 } : undefined);
+    };
+    if (tile.fit) {
+      const sc = layout.scale;
+      c.translate(r.x + (r.w - tile.bw * sc) / 2 - tile.minX * sc, r.y + (r.h - tile.bh * sc) / 2 - tile.minY * sc);
+      c.scale(sc, sc);
+      for (const st of list) drawOne(st);
+    } else {
+      const sc = layout.scale;
+      const pad = layout.pad;
+      c.save();
+      c.beginPath();
+      c.rect(r.x + pad, r.y + pad, r.w - pad * 2, r.h - pad * 2);
+      c.clip();
+      c.translate(r.x + pad - tile.wx * sc, r.y + pad - tile.wy * sc);
+      c.scale(sc, sc);
+      const m = 80;
+      for (const st of list) {
+        const b = boardStrokeBounds(st);
+        if (b && (b.maxX < tile.wx - m || b.minX > tile.wx + tile.viewW + m || b.maxY < tile.wy - m || b.minY > tile.wy + tile.viewH + m)) continue;
+        drawOne(st);
+      }
+      c.restore();
+    }
+    c.restore();
+  }
+  function drawBoardPagesFitted() {
+    if (!notebook || boardEditId) return;
+    const a = screenToWorld(viewLeft, 0);
+    const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
+    for (const r of pageRects(notebook)) {
+      if (!r.page || (!r.page.board && !r.page.boardOf)) continue;
+      if (r.x > b.x || r.x + r.w < a.x || r.y > b.y || r.y + r.h < a.y) continue;
+      paintBoardPage(ctx, r);
+    }
+  }
+  let boardBarSig = "";
+  function syncBackButton() {
+    const btn = document.getElementById("btn-back");
+    const label = document.getElementById("btn-back-label");
+    const icon = btn && btn.querySelector(".material-symbols-rounded");
+    if (!btn) return;
+    const inBoard = !!boardEditId;
+    const title = inBoard ? "Zurück zum Notizbuch" : "Dokumente";
+    const text = inBoard ? "Zum Notizbuch" : "Dokumente";
+    const ico = inBoard ? "menu_book" : "folder";
+    let changed = btn.title !== title;
+    if (changed) btn.title = title;
+    if (label && label.textContent !== text) {
+      label.textContent = text;
+      changed = true;
+    }
+    if (icon && icon.textContent !== ico) {
+      icon.textContent = ico;
+      changed = true;
+    }
+    if (changed) layoutTopBar();
   }
   function syncBoardBar() {
     const bar = document.getElementById("board-mode-bar");
     if (!bar) return;
     const label = document.getElementById("board-mode-label");
     const btn = document.getElementById("board-mode-btn");
-    const onPage = !boardEditId && notebook && window.sofiaCurrentPage ? notebook.pages[window.sofiaCurrentPage()] : null;
-    const show = !!notebook && !libraryBackdrop.classList.contains("hidden") && (!!boardEditId || !!(onPage && onPage.board));
-    bar.classList.toggle("hidden", !show);
-    if (!show) return;
-    if (boardEditId) {
-      if (label) label.textContent = "Unendliches Board";
-      if (btn) btn.textContent = "Zur Seite";
-    } else {
-      if (label) label.textContent = "Board auf dieser Seite";
-      if (btn) btn.textContent = "Öffnen";
+    const libClosed = libraryBackdrop.classList.contains("hidden");
+    const show = !!notebook && libClosed && !!boardEditId;
+    const sig = (show ? "1" : "0") + (boardEditId || "");
+    if (sig !== boardBarSig) {
+      boardBarSig = sig;
+      bar.classList.toggle("hidden", !show);
+      if (show) {
+        if (label) label.textContent = "Unendliches Board";
+        if (btn) btn.textContent = "Fertig";
+      }
+      syncBackButton();
     }
+  }
+  const boardChipPool = [];
+  function placeBoardOpenChips() {
+    const host = document.getElementById("board-open-chips");
+    if (!host) return;
+    const libClosed = libraryBackdrop.classList.contains("hidden");
+    if (!notebook || boardEditId || !libClosed) {
+      if (!host.classList.contains("hidden")) host.classList.add("hidden");
+      return;
+    }
+    const rects = pageRects(notebook);
+    const a = screenToWorld(viewLeft, 0);
+    const bpt = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
+    const vis = [];
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (!r.page || (!r.page.board && !r.page.boardOf)) continue;
+      if (r.x > bpt.x || r.x + r.w < a.x || r.y > bpt.y || r.y + r.h < a.y) continue;
+      vis.push(r);
+    }
+    host.classList.toggle("hidden", vis.length === 0);
+    while (boardChipPool.length < vis.length) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "board-open-chip";
+      btn.innerHTML = '<span class="material-symbols-rounded">open_in_full</span><span>Öffnen</span>';
+      btn.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.dataset.pageId) enterBoardPage(btn.dataset.pageId);
+      });
+      host.appendChild(btn);
+      boardChipPool.push(btn);
+    }
+    for (let i = 0; i < boardChipPool.length; i++) {
+      const btn = boardChipPool[i];
+      if (i >= vis.length) {
+        btn.classList.add("hidden");
+        continue;
+      }
+      const r = vis[i];
+      const p = worldToScreen(r.x + r.w / 2, r.y + Math.min(72, r.h * 0.08));
+      const top = Math.max(p.y, 76);
+      const left = Math.round(p.x);
+      const pageId = r.page.boardOf || r.id;
+      btn.classList.remove("hidden");
+      if (btn.dataset.pageId !== pageId) btn.dataset.pageId = pageId;
+      if (btn._px !== left || btn._py !== Math.round(top)) {
+        btn._px = left;
+        btn._py = Math.round(top);
+        btn.style.left = left + "px";
+        btn.style.top = Math.round(top) + "px";
+      }
+    }
+  }
+  function rememberBoardTap(pageId, x, y) {
+    const now = performance.now();
+    const prev = boardLastOpenTap;
+    if (prev && prev.pageId === pageId && now - prev.t < 380 && Math.hypot(x - prev.x, y - prev.y) < 30) {
+      boardLastOpenTap = null;
+      enterBoardPage(pageId);
+      return;
+    }
+    boardLastOpenTap = { t: now, x, y, pageId };
   }
   function enterBoardPage(id) {
     if (!notebook || !id) return;
     const pg = notebook.pages.find((p) => p.id === id);
-    if (!pg || !pg.board) return;
-    boardEditId = id;
-    const list = strokesForBoard(id);
-    if (list.length) {
-      const b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-      for (const st of list) {
-        const bb = st.bbox || makeBBox(st.points || []);
-        if (!bb) continue;
-        b.minX = Math.min(b.minX, bb.minX);
-        b.minY = Math.min(b.minY, bb.minY);
-        b.maxX = Math.max(b.maxX, bb.maxX);
-        b.maxY = Math.max(b.maxY, bb.maxY);
-      }
+    const primary = boardPrimaryOf(pg) || (pg && pg.board ? pg.id : null);
+    if (!primary) return;
+    const target = notebook.pages.find((p) => p.id === primary);
+    if (!target || !target.board) return;
+    if (boardEditId && boardEditId !== primary) {
+      const prev = boardEditId;
+      boardEditId = null;
+      boardLayoutCache.delete(prev);
+      if (window.sofiaSyncBoardSpread) window.sofiaSyncBoardSpread(prev);
+    }
+    if (typeof closeZoomWindow === "function") closeZoomWindow();
+    endZoomLock();
+    endNbHold();
+    boardEditId = primary;
+    pendingBoardTap = null;
+    const list = strokesForBoard(primary);
+    const bounds = boardContentBounds(list);
+    if (bounds) {
       const availW = Math.max(200, window.innerWidth - viewLeft - viewRight - 48);
       const availH = Math.max(200, window.innerHeight - 120);
-      const sc = clampZoom(Math.min(availW / Math.max(1, b.maxX - b.minX), availH / Math.max(1, b.maxY - b.minY), 2));
+      const sc = clampZoom(Math.min(availW / Math.max(1, bounds.maxX - bounds.minX), availH / Math.max(1, bounds.maxY - bounds.minY), 2));
       scale = sc;
-      offsetX = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2 - ((b.minX + b.maxX) / 2) * sc;
-      offsetY = window.innerHeight / 2 - ((b.minY + b.maxY) / 2) * sc;
+      offsetX = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2 - ((bounds.minX + bounds.maxX) / 2) * sc;
+      offsetY = window.innerHeight / 2 - ((bounds.minY + bounds.maxY) / 2) * sc;
     } else {
       scale = 1;
       offsetX = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2;
       offsetY = window.innerHeight / 2;
     }
     if (window.sofiaCancelViewAnim) window.sofiaCancelViewAnim();
+    boardBarSig = "";
     syncBoardBar();
     requestRedraw();
   }
-  function exitBoardPage() {
+  function exitBoardPage(opts) {
     if (!boardEditId) return false;
     const id = boardEditId;
     boardEditId = null;
+    pendingBoardTap = null;
+    endZoomLock();
+    endNbHold();
+    boardLayoutCache.delete(id);
+    if (window.sofiaSyncBoardSpread) window.sofiaSyncBoardSpread(id);
+    boardBarSig = "";
     syncBoardBar();
+    const fit = !opts || opts.fit !== false;
     const i = notebook ? notebook.pages.findIndex((p) => p.id === id) : -1;
-    if (i >= 0 && window.sofiaFitPage) window.sofiaFitPage(i);
+    if (fit && i >= 0 && window.sofiaFitPage) window.sofiaFitPage(i);
     else requestRedraw();
     return true;
   }
@@ -1853,6 +2096,7 @@
 
     ctx.restore();
     syncBoardBar();
+    placeBoardOpenChips();
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
     drawZoomPane();
@@ -4137,6 +4381,7 @@
           boardStrokes.set(s.id, s);
           if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
         }
+        if (notebook && window.sofiaSyncAllBoards && !window.sofiaSplitBg && !boardEditId) window.sofiaSyncAllBoards();
         requestRedraw();
         scheduleSaveBoard();
         break;
@@ -7521,7 +7766,8 @@
         zctx.fillRect(r.x, r.y, r.w, r.h);
         const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
         if (img && img.complete && img.naturalWidth) drawPageMedia(zctx, img, r);
-        else if (!r.page.mediaId) drawPagePattern(r.page.paper || "graph", r, zctx, k);
+        else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, zctx, k);
+        if (!boardEditId && (r.page.board || r.page.boardOf)) paintBoardPage(zctx, r);
         zctx.restore();
       }
     } else drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
@@ -7529,7 +7775,12 @@
       const b = st.bbox || strokeWorldBBox(st);
       return !b || (b.maxX >= ox && b.minX <= ox + wWorld && b.maxY >= oy && b.minY <= oy + hWorld);
     };
-    const all = Array.from(boardStrokes.values()).filter(inView);
+    const all = Array.from(boardStrokes.values()).filter((st) => {
+      if (!inView(st)) return false;
+      const pageId = st.extra && st.extra.boardPage;
+      if (boardEditId) return pageId === boardEditId;
+      return !pageId;
+    });
     for (const st of all) if (st.tool === "image" || st.tool === "table") drawStroke(st, zctx);
     for (const st of all) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
     for (const st of remoteInProgress.values()) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
@@ -7660,6 +7911,10 @@
       if (textEdit) commitTextEditor();
       zoomPointer = e.pointerId;
       const w = paneToWorld(e.clientX, e.clientY);
+      if (boardPageAt(w)) {
+        zoomPointer = null;
+        return;
+      }
       if (currentTool === "eraser") {
         erasedThisGesture.clear();
         erasedStrokesThisGesture.clear();
@@ -8654,7 +8909,7 @@
     const age = performance.now() - (ps.t || 0);
     let vx = ps.vx || 0;
     let vy = ps.vy || 0;
-    if (notebook && notebookZoomedIn()) return;
+    if (notebook && !boardEditId && notebookZoomedIn()) return;
     if (age > 80 || Math.hypot(vx, vy) < 0.25) return;
     vx *= 1.15;
     vy *= 1.15;
@@ -9698,7 +9953,11 @@
       },
     };
     stampBoardPage(stroke);
-    stroke.bbox = makeBBox(stroke.points);
+    stroke.bbox = stroke.tool === "image" ? strokeWorldBBox(stroke) : makeBBox(stroke.points);
+    if (stroke.extra && stroke.extra.boardPage) {
+      boardLayoutCache.delete(stroke.extra.boardPage);
+      if (!boardEditId && window.sofiaSyncBoardSpread) window.sofiaSyncBoardSpread(stroke.extra.boardPage);
+    }
     boardStrokes.set(id, stroke);
     ensureMedia(mediaId);
     wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
@@ -10818,16 +11077,20 @@
   // Finger-Tap (ohne Finger-Zeichnen) im Auswahl-Werkzeug: auf einen Strich tippen waehlt ihn aus,
   // daneben tippen hebt die Auswahl auf, in die Auswahl tippen laesst sie stehen.
   function handleFingerTap(e) {
+    const world = screenToWorld(e.clientX, e.clientY);
+    const preview = boardPageAt(world);
+    if (preview) {
+      rememberBoardTap(preview.page.boardOf || preview.id, e.clientX, e.clientY);
+      return;
+    }
     if (currentTool === "text") {
       if (textTapSuppressed === e.pointerId) {
         textTapSuppressed = null;
         return;
       }
-      const world = screenToWorld(e.clientX, e.clientY);
       finishTextDrag({ startWorld: world, cur: world });
       return;
     }
-    const world = screenToWorld(e.clientX, e.clientY);
     if (currentTool !== "select") {
       // in jedem Werkzeug: Finger-Tipp neben die Auswahl (oder den Zuschnitt) hebt sie auf
       if ((selection.ids.size > 0 || cropState) && !selectionHitAt(world, "touch")) {
@@ -10845,11 +11108,26 @@
   function onSomePage(w) {
     return pageRects(notebook).some((r) => w.x >= r.x && w.x <= r.x + r.w && w.y >= r.y && w.y <= r.y + r.h);
   }
+  function boardPageAt(w) {
+    if (!notebook || boardEditId || !w) return null;
+    for (const r of pageRects(notebook)) {
+      if (!r.page || (!r.page.board && !r.page.boardOf)) continue;
+      if (w.x >= r.x && w.x <= r.x + r.w && w.y >= r.y && w.y <= r.y + r.h) return r;
+    }
+    return null;
+  }
   function dispatchPrimaryDown(e) {
     if (historyView || viewOnly) return;
     const world = screenToWorld(e.clientX, e.clientY);
-    // Notizbuch: neben den Seiten wird nicht geschrieben (Radierer und Lasso gehen ueberall)
-    if (notebook && currentTool !== "eraser" && currentTool !== "select" && !onSomePage(world)) return;
+    // Vorschau eines Boards: nichts schreiben, nur Doppeltipp merken
+    const preview = boardPageAt(world);
+    if (preview) {
+      pendingBoardTap = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), pageId: preview.page.boardOf || preview.id };
+      return;
+    }
+    // Notizbuch: neben den Seiten wird nicht geschrieben (Radierer und Lasso gehen ueberall).
+    // Im offenen Board gilt das nicht — die Fläche ist unendlich.
+    if (notebook && !boardEditId && currentTool !== "eraser" && currentTool !== "select" && !onSomePage(world)) return;
     lastPointerWorld = world;
     if (currentTool === "text") {
       if (tryGrabTextBox(e, world)) return;
@@ -11006,7 +11284,7 @@
           requestRedraw();
           return;
         }
-        if (fingerDrawEnabled && !pinchState) {
+        if (fingerDrawEnabled && !pinchState && !boardPageAt(screenToWorld(e.clientX, e.clientY))) {
           dispatchPrimaryDown(e);
           return;
         }
@@ -11275,6 +11553,12 @@
       palmIds.delete(e.pointerId);
       return;
     }
+    if (pendingBoardTap && pendingBoardTap.pointerId === e.pointerId) {
+      const tap = pendingBoardTap;
+      pendingBoardTap = null;
+      const moved = Math.hypot(e.clientX - tap.x, e.clientY - tap.y);
+      if (e.type === "pointerup" && performance.now() - tap.t <= 400 && moved <= 18) rememberBoardTap(tap.pageId, e.clientX, e.clientY);
+    }
     if (e.pointerType === "pen") notePenActivity();
     const consumed = pasteHoldConsumed;
     clearPasteHold();
@@ -11326,7 +11610,7 @@
       if (touchPointers.size === 0) {
         const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
         if (addedPage) panState = null;
-        else if (notebookZoomedIn()) {
+        else if (notebookZoomedIn() && !boardEditId) {
           panState = null;
           endZoomLock();
         } else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
@@ -11363,12 +11647,12 @@
       const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
       const snapPan = panState;
       panState = null;
-      if (notebookZoomedIn()) {
+      if (notebookZoomedIn() && !boardEditId) {
         endZoomLock();
         return;
       }
       if (!addedPage) {
-        if (notebook && window.sofiaPageSnap && window.sofiaPageSnap(snapPan || {})) return;
+        if (notebook && !boardEditId && window.sofiaPageSnap && window.sofiaPageSnap(snapPan || {})) return;
         if (e.type === "pointerup") startFling(snapPan);
       }
       endZoomLock();
@@ -11433,6 +11717,10 @@
     }
   }
   canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("dblclick", (e) => {
+    const hit = boardPageAt(screenToWorld(e.clientX, e.clientY));
+    if (hit) enterBoardPage(hit.page.boardOf || hit.id);
+  });
   canvas.addEventListener("pointercancel", endPointer);
   // Sicherheitsnetz: geht ein "Finger hoch" verloren (Pointer-Capture weg, Overlay,
   // iOS-Gesten), bliebe ein Geister-Finger in touchPointers haengen - dann gaebe es nie
@@ -12036,7 +12324,7 @@
   }
 
   function showLibrary(opts) {
-    if (boardEditId) boardEditId = null;
+    if (boardEditId) exitBoardPage({ fit: false });
     if (currentBoardId && libraryBackdrop.classList.contains("hidden")) saveView(currentBoardId);
     hideWho();
     if (window.sofiaSplitClose) window.sofiaSplitClose();
@@ -15788,6 +16076,73 @@
       requestRedraw();
     }
     window.sofiaFitPage = fitPage;
+    function activateNotebookPage(i) {
+      const pg = notebook && notebook.pages[i];
+      if (!pg) return;
+      if (!boardEditId) {
+        if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
+        fitPage(i);
+        return;
+      }
+      const target = pg.boardOf || (pg.board ? pg.id : null);
+      if (target && target !== boardEditId) {
+        exitBoardPage({ fit: false });
+        enterBoardPage(target);
+        return;
+      }
+      exitBoardPage({ fit: false });
+      fitPage(i);
+    }
+    function syncBoardSpread(primaryId) {
+      if (!notebook || !primaryId) return;
+      const src = notebook.pages.find((p) => p.id === primaryId);
+      if (!src || !src.board || src.boardOf) return;
+      const layout = layoutBoard(strokesForBoard(primaryId), src.w || A4_W, src.h || A4_H);
+      const need = Math.max(1, layout.tiles.length);
+      const nb = clone();
+      const i0 = nb.pages.findIndex((p) => p.id === primaryId);
+      if (i0 < 0) return;
+      let end = i0 + 1;
+      while (end < nb.pages.length && nb.pages[end].boardOf === primaryId) end++;
+      const have = end - i0;
+      if (have === need) {
+        let same = nb.pages[i0].boardIndex === 0 && !nb.pages[i0].boardOf;
+        for (let k = 1; k < need; k++) {
+          const pg = nb.pages[i0 + k];
+          if (!pg || pg.boardOf !== primaryId || pg.boardIndex !== k) same = false;
+        }
+        if (same) return;
+      }
+      if (have < need) {
+        const add = [];
+        for (let k = have; k < need; k++) {
+          add.push({ id: newId(), paper: "blank", w: nb.pages[i0].w, h: nb.pages[i0].h, board: true, boardOf: primaryId, boardIndex: k });
+        }
+        nb.pages.splice(end, 0, ...add);
+      } else if (have > need) {
+        nb.pages.splice(i0 + need, have - need);
+      }
+      nb.pages[i0].board = true;
+      nb.pages[i0].boardIndex = 0;
+      delete nb.pages[i0].boardOf;
+      for (let k = 1; k < need; k++) {
+        const pg = nb.pages[i0 + k];
+        pg.board = true;
+        pg.boardOf = primaryId;
+        pg.boardIndex = k;
+        pg.paper = pg.paper || "blank";
+      }
+      boardLayoutCache.delete(primaryId);
+      saveNotebook(nb);
+      if (window.sofiaRepaintPages) window.sofiaRepaintPages();
+    }
+    window.sofiaSyncBoardSpread = syncBoardSpread;
+    window.sofiaSyncAllBoards = () => {
+      if (!notebook) return;
+      const ids = [];
+      for (const pg of notebook.pages) if (pg.board && !pg.boardOf) ids.push(pg.id);
+      for (const id of ids) syncBoardSpread(id);
+    };
     window.sofiaCurrentPage = () => currentPage();
     window.sofiaNbPaging = nbPaging;
     window.sofiaViewFor = viewFor;
@@ -15975,12 +16330,22 @@
       fitPage(afterIndex + 1);
     }
     async function deletePage(i) {
-      if (notebook.pages.length <= 1) return showToast("Die letzte Seite kann nicht gelöscht werden");
+      const victim = notebook.pages[i];
+      if (victim && victim.boardOf) return showToast("Das ist eine Folgeseite des Boards. Die erste Board-Seite löscht das ganze Board.");
+      const remain = notebook.pages.filter((p) => p !== victim && !(victim && victim.board && p.boardOf === victim.id));
+      if (!remain.length) return showToast("Die letzte Seite kann nicht gelöscht werden");
       const ok = await askConfirm({ title: "Seite " + (i + 1) + " löschen?", text: "Alles, was auf dieser Seite steht, wird mitgelöscht.", ok: "Löschen" });
       if (!ok) return;
       const nb = clone();
       const gone = nb.pages[i] && nb.pages[i].id;
-      nb.pages.splice(i, 1);
+      const drop = [i];
+      if (victim && victim.board) {
+        for (let k = nb.pages.length - 1; k >= 0; k--) {
+          if (nb.pages[k].boardOf === gone) drop.push(k);
+        }
+      }
+      drop.sort((a, b) => b - a);
+      for (const k of drop) nb.pages.splice(k, 1);
       if (gone) {
         const ids = [];
         for (const st of boardStrokes.values()) {
@@ -16198,7 +16563,7 @@
       const items = [
         { head: "Seite " + (i + 1) },
       ];
-      if (pg.board) items.push({ icon: "open_in_full", label: "Board öffnen", run: () => enterBoardPage(pg.id) });
+      if (pg.board || pg.boardOf) items.push({ icon: "open_in_full", label: "Board öffnen", run: () => enterBoardPage(pg.boardOf || pg.id) });
       items.push(
         { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) },
         { icon: "auto_stories", label: pg.read ? "Als Notizseite" : "Als Leseseite (nur Dokument)", active: !!pg.read, run: () => setPageRead(i, !pg.read) },
@@ -16527,14 +16892,14 @@
       const pg = r.page;
       const bk = thumbBuckets && thumbBuckets[i];
       let boardSig = 0;
-      if (pg.board) {
-        for (const st of strokesForBoard(pg.id)) {
+      if (pg.board || pg.boardOf) {
+        for (const st of strokesForBoard(pg.boardOf || pg.id)) {
           const b = st.bbox;
           if (!b) continue;
           boardSig = (boardSig * 33 + Math.round(b.minX + b.maxX * 3 + b.minY * 5 + ((st.points && st.points.length) || 0))) % 2147483647;
         }
       }
-      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, pg.board ? 1 : 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0, boardSig, darkMode ? "d" : "l"].join("|");
+      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, pg.board ? 1 : 0, pg.boardOf || "", pg.boardIndex || 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0, boardSig, darkMode ? "d" : "l"].join("|");
     }
     function thumbKey(r, i) {
       return (currentBoardId || "") + ":" + (r.id || "i" + i);
@@ -16593,29 +16958,15 @@
           complete = false;
           waitMedia(r.page.mediaId, i);
         }
-      } else drawPagePattern(r.page.paper || "graph", r, c, k);
+      } else if (!r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, c, k);
       c.save();
       c.beginPath();
       c.rect(r.x, r.y, r.w, r.h);
       c.clip();
       c.lineCap = "round";
       c.lineJoin = "round";
-      if (r.page.board) {
-        const list = strokesForBoard(r.id);
-        const fit = fitBoardOnto(r, list);
-        if (!fit) {
-          c.fillStyle = "rgba(103,80,164,0.8)";
-          c.font = "600 42px Inter, sans-serif";
-          c.fillText("Board", r.x + 36, r.y + 80);
-        } else {
-          c.translate(fit.ox, fit.oy);
-          c.scale(fit.sc, fit.sc);
-          for (const st of list) {
-            try {
-              drawThumbStroke(c, st, k * fit.sc);
-            } catch (err) {}
-          }
-        }
+      if (r.page.board || r.page.boardOf) {
+        paintBoardPage(c, r);
         c.restore();
         if (complete && i != null) {
           const keep = document.createElement("canvas");
@@ -16808,10 +17159,11 @@
         const foot = document.createElement("div");
         foot.className = "page-thumb-foot";
         foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite: drehen, Hintergrund, löschen …"><span class="material-symbols-rounded">expand_more</span></button>';
-        if (notebook.pages[i] && notebook.pages[i].board) {
+        if (notebook.pages[i] && (notebook.pages[i].board || notebook.pages[i].boardOf)) {
           foot.firstChild.className = "page-thumb-kind";
           foot.firstChild.innerHTML = '<span class="material-symbols-rounded">open_in_full</span><span></span>';
-          foot.firstChild.lastChild.textContent = "Board";
+          const n = (notebook.pages[i].boardIndex || 0) + 1;
+          foot.firstChild.lastChild.textContent = n > 1 ? "Board " + n : "Board";
         } else if (notebook.pages[i] && notebook.pages[i].read) {
           foot.firstChild.className = "page-thumb-kind";
           foot.firstChild.innerHTML = '<span class="material-symbols-rounded">auto_stories</span><span></span>';
@@ -16821,8 +17173,7 @@
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
           if (thumbDrag && thumbDrag.done) return;
-          if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
-          fitPage(i);
+          activateNotebookPage(i);
         });
         cv.addEventListener("pointerdown", (e) => startThumbHold(e, i, cell));
         cv.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -17007,7 +17358,7 @@
         e.stopPropagation();
         setPref("sofianotes-nb-paging", b.dataset.paging);
         renderNbSettings();
-        if (notebook) fitPage(currentPage(), true);
+        if (notebook && !boardEditId) fitPage(currentPage(), true);
       })
     );
     document.querySelectorAll("#set-nb-spread [data-spread]").forEach((b) =>
@@ -17015,7 +17366,7 @@
         e.stopPropagation();
         setPref("sofianotes-nb-spread", b.dataset.spread);
         renderNbSettings();
-        if (notebook) fitPage(currentPage(), true);
+        if (notebook && !boardEditId) fitPage(currentPage(), true);
       })
     );
     document.getElementById("set-nb-tpl-add")?.addEventListener("click", (e) => {

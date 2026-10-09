@@ -4271,6 +4271,33 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
   font: 600 13px/1 inherit;
   cursor: pointer;
 }
+#board-open-chips { position: fixed; inset: 0; z-index: 45; pointer-events: none; }
+#board-open-chips.hidden { display: none; }
+.board-open-chip {
+  position: absolute;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: #6750a4;
+  color: #fff;
+  font: 700 15px/1 "Google Sans", Inter, sans-serif;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+}
+.board-open-chip .material-symbols-rounded { font-size: 20px; color: #fff; }
+.board-open-chip.hidden { display: none; }
+#btn-back {
+  width: auto;
+  padding: 0 12px 0 8px;
+  gap: 4px;
+  font: 600 13px/1 "Google Sans", Inter, sans-serif;
+}
+#btn-back-label { white-space: nowrap; }
 
 /* ---- Dunkelmodus: ganze App, dunkle Seiten, helle Schrift ---- */
 html[data-theme="dark"] {
@@ -4412,3 +4439,26 @@ html[data-theme="dark"] #board-mode-bar {
   border-color: rgba(255, 255, 255, 0.1);
 }
 html[data-theme="dark"] #board-mode-bar button { background: #3a3350; color: #d0bcff; }
+html[data-theme="dark"] .board-open-chip { background: #d0bcff; color: #241b33; }
+html[data-theme="dark"] .board-open-chip .material-symbols-rounded { color: #241b33; }
+html[data-theme="dark"] .icon-btn { color: #f4f1f8; }
+html[data-theme="dark"] .icon-btn:hover { background: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .tools-container { background: #2b2930; }
+html[data-theme="dark"] .tool-btn { color: #e6e0ea; }
+html[data-theme="dark"] .tool-btn.active { background: #d0bcff; color: #241b33; }
+html[data-theme="dark"] :is(
+  .lib-page, .dlg, .popover, .tool-popover, .pages-panel, .page-menu,
+  .bottom-sheet, .history-panel, .hw-panel, .calc-win, .zoom-pane,
+  .selection-toolbar, .media-toolbar, .text-format-bar, .who-card,
+  .lib-add-menu, .update-banner, #ruler-bar, .school-timer, .library-empty
+) :is(h1, h2, h3, h4, p, span, strong, em, small, label, li, button, a, td, th, legend, figcaption, summary) {
+  color: #f4f1f8;
+}
+html[data-theme="dark"] :is(.dlg, .lib-page, .popover, .pages-panel, .page-menu, .bottom-sheet, .history-panel, .hw-panel, .calc-win) :is(input, textarea, select) {
+  color: #f4f1f8;
+  background: #2b2930;
+}
+html[data-theme="dark"] :is(input, textarea)::placeholder { color: #b7b0c2; }
+html[data-theme="dark"] .conv-out { background: #3a3350; color: #f4f1f8; }
+html[data-theme="dark"] .m3-input::placeholder,
+html[data-theme="dark"] .lib-search-row input::placeholder { color: #b7b0c2; }

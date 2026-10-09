@@ -431,26 +431,71 @@ def _stroke_center(stroke: dict[str, Any]) -> tuple[float, float]:
     return (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
 
 
-def _fit_board(strokes: list[dict[str, Any]], w: float, h: float, pad: float = 28.0) -> tuple[float, float, float] | None:
-    """Inhalt eines unendlichen Boards gleichmäßig in die A4-Seite legen."""
+def _stroke_bounds(stroke: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    pts = stroke.get("points") or []
+    xs = [float(p.get("x", 0)) for p in pts]
+    ys = [float(p.get("y", 0)) for p in pts]
+    if not xs:
+        return None
+    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+    tool = stroke.get("tool")
+    if tool == "text":
+        size = max(14.0, float(stroke.get("size") or 22))
+        label = str((pts[0] or {}).get("text") or "")
+        return minx, miny - size, maxx + max(size, len(label) * size * 0.56), maxy + size * 0.35
+    if tool in ("image", "table"):
+        return minx, miny, maxx, maxy
+    m = max(1.0, float(stroke.get("size") or 2) / 2)
+    return minx - m, miny - m, maxx + m, maxy + m
+
+
+def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str, Any]:
+    """Wie im Frontend: kleine Inhalte auf eine Seite, große lesbar auf mehrere A4-Kacheln."""
+    pad = min(28.0, w * 0.04, h * 0.04)
+    inner_w = max(40.0, w - 2 * pad)
+    inner_h = max(40.0, h - 2 * pad)
     minx = miny = float("inf")
     maxx = maxy = float("-inf")
     for s in strokes:
-        for p in s.get("points") or []:
-            x = float(p.get("x", 0))
-            y = float(p.get("y", 0))
-            minx = min(minx, x)
-            miny = min(miny, y)
-            maxx = max(maxx, x)
-            maxy = max(maxy, y)
+        b = _stroke_bounds(s)
+        if not b:
+            continue
+        minx, miny = min(minx, b[0]), min(miny, b[1])
+        maxx, maxy = max(maxx, b[2]), max(maxy, b[3])
     if minx == float("inf"):
-        return None
+        return {"empty": True, "pad": pad, "scale": 1.0, "tiles": [{"fit": True}]}
     bw = max(1.0, maxx - minx)
     bh = max(1.0, maxy - miny)
-    sc = min((w - 2 * pad) / bw, (h - 2 * pad) / bh)
-    ox = (w - bw * sc) / 2 - minx * sc
-    oy = (h - bh * sc) / 2 - miny * sc
-    return sc, ox, oy
+    fit = min(inner_w / bw, inner_h / bh)
+    scale, cols, rows = fit, 1, 1
+    if fit < 0.72:
+        lo, hi = min(fit, 1.0), 1.0
+        for _ in range(18):
+            mid = (lo + hi) / 2
+            c = max(1, int((bw * mid) / inner_w + 0.999999))
+            r = max(1, int((bh * mid) / inner_h + 0.999999))
+            if c * r <= 24:
+                lo = mid
+            else:
+                hi = mid
+        scale = lo
+        cols = max(1, int((bw * scale) / inner_w + 0.999999))
+        rows = max(1, int((bh * scale) / inner_h + 0.999999))
+        guard = 0
+        while cols * rows > 24 and guard < 12:
+            scale *= 0.92
+            cols = max(1, int((bw * scale) / inner_w + 0.999999))
+            rows = max(1, int((bh * scale) / inner_h + 0.999999))
+            guard += 1
+    tiles: list[dict[str, Any]] = []
+    if cols == 1 and rows == 1:
+        tiles.append({"fit": True, "minX": minx, "minY": miny, "bw": bw, "bh": bh})
+    else:
+        view_w, view_h = inner_w / scale, inner_h / scale
+        for row in range(rows):
+            for col in range(cols):
+                tiles.append({"wx": minx + col * view_w, "wy": miny + row * view_h, "viewW": view_w, "viewH": view_h})
+    return {"empty": False, "pad": pad, "scale": scale, "tiles": tiles}
 
 
 def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
@@ -481,7 +526,7 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
                     c.drawImage(ImageReader(io.BytesIO(blob)), 0, 0, width=pw, height=ph)
             except Exception:  # noqa: BLE001
                 pass
-        else:
+        elif not pg.get("board"):
             # wie ein echter A4-Block: 5-mm-Kaestchen/Punkte, liniert ca. 8,5 mm mit Randlinie
             paper = pg.get("paper") or "graph"
             mm = 72.0 / 25.4
@@ -516,10 +561,25 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
                         x += step
                     y += step
         if pg.get("board"):
-            mine = [s for s in strokes if ((s.get("extra") or {}).get("boardPage") == pg.get("id"))]
-            fit = _fit_board(mine, w, h)
-            if fit:
-                bsc, box, boy = fit
+            primary = pg.get("boardOf") or pg.get("id")
+            mine = [s for s in strokes if ((s.get("extra") or {}).get("boardPage") == primary)]
+            layout = _board_layout(mine, w, h)
+            tiles = layout["tiles"]
+            try:
+                idx = int(pg.get("boardIndex") or 0)
+            except (TypeError, ValueError):
+                idx = 0
+            tile = tiles[min(max(idx, 0), len(tiles) - 1)] if tiles else None
+            if tile and not layout.get("empty"):
+                bsc = float(layout["scale"])
+                pad = float(layout["pad"])
+                if tile.get("fit"):
+                    bw, bh = float(tile["bw"]), float(tile["bh"])
+                    box = (w - bw * bsc) / 2 - float(tile["minX"]) * bsc
+                    boy = (h - bh * bsc) / 2 - float(tile["minY"]) * bsc
+                else:
+                    box = pad - float(tile["wx"]) * bsc
+                    boy = pad - float(tile["wy"]) * bsc
 
                 def tx(x: float, _sc=bsc, _ox=box, _ps=scale) -> float:
                     return (x * _sc + _ox) * _ps
