@@ -3103,10 +3103,26 @@ button {
 .hw-hint { font: 500 12px/1.4 'Google Sans', 'Inter', sans-serif; color: #79747e; }
 .hw-pill { touch-action: none; user-select: none; -webkit-user-select: none; }
 
-.hw-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.hw-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .hw-viewer.hidden { display: none; }
-.hw-viewer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: none; min-height: calc(var(--bar-h) + 12px); box-sizing: border-box; }
-.hw-viewer-name { flex: 1; min-width: 0; font: 600 13px 'Google Sans', 'Inter', sans-serif; color: #49454f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.hw-viewer-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: none;
+  min-height: calc(var(--bar-h) + 12px);
+  box-sizing: border-box;
+  background: transparent;
+  pointer-events: none;
+}
+.hw-viewer-bar > * { pointer-events: auto; }
+.hw-viewer-name { flex: 1; min-width: 0; font: 600 13px 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 6px 12px; border-radius: 999px; background: var(--dock-bg, rgba(255,255,255,0.94)); border: 1px solid var(--dock-border, rgba(0,0,0,0.06)); }
 .hw-viewer-stage {
   flex: 1;
   min-height: 0;
@@ -3682,8 +3698,8 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px 10px;
+  gap: 4px;
+  padding: 8px 10px 10px;
 }
 .pages-marks.hidden { display: none; }
 .pages-panel.marks-only .pages-grid { display: none; }
@@ -3696,15 +3712,16 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .pages-mark {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   border: none;
   border-radius: 10px;
   background: transparent;
   color: inherit;
-  padding: 5px 6px;
+  padding: 7px 8px;
   cursor: pointer;
   text-align: left;
+  min-height: 44px;
 }
 .pages-mark:hover { background: rgba(103, 80, 164, 0.08); }
 .pages-mark-thumb {
@@ -3720,7 +3737,7 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 600 14px/1.2 "Google Sans", Inter, sans-serif;
+  font: 600 15px/1.25 "Google Sans", Inter, sans-serif;
 }
 .page-thumb.read .page-thumb-img { outline: 2px solid rgba(103, 80, 164, 0.35); outline-offset: 1px; }
 .page-thumb-kind {
@@ -3968,13 +3985,13 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
 /* ---- Seiten-Leiste: links angedockt, rechts rund; oben liegen die Leisten "⋯" und "Seiten ✕" ---- */
 html, body { background: #e8e6ed; }
 .pages-panel {
-  top: 0;
+  top: 12px;
   left: 0;
-  bottom: 0;
+  bottom: 12px;
   border: none;
   border-right: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 0 28px 28px 0;
-  padding-top: calc(var(--safe-top) + var(--bar-h) + 14px);
+  padding-top: calc(var(--safe-top) + 8px);
   box-shadow: 4px 0 28px rgba(0, 0, 0, 0.12);
 }
 .pages-panel .pages-head { display: none; }
@@ -4049,6 +4066,8 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 :root { --sheet-bg: #f7f2fa; --sheet-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06); }
 /* Versionsverlauf: rechts angedockt, links rund */
 .history-panel {
+  top: 12px;
+  bottom: 12px;
   background: var(--sheet-bg);
   border: none;
   border-left: 1px solid rgba(0, 0, 0, 0.06);
@@ -4257,33 +4276,6 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
 #gn-pick-dir.active,
 #gn-pick-zip.active { color: #1a73e8; }
 
-#board-mode-bar {
-  position: fixed;
-  z-index: 80;
-  left: 50%;
-  top: calc(var(--safe-top, 0px) + 62px);
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-  font: 600 14px/1 "Google Sans", Inter, sans-serif;
-  color: #1c1b1f;
-}
-#board-mode-bar.hidden { display: none; }
-#board-mode-bar button {
-  border: none;
-  background: #eaddff;
-  color: #6750a4;
-  border-radius: 999px;
-  padding: 8px 12px;
-  font: 600 13px/1 inherit;
-  cursor: pointer;
-}
 #btn-board-open {
   background: #6750a4;
   color: #fff;
@@ -4292,16 +4284,16 @@ body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
 #btn-board-open .material-symbols-rounded { color: #fff; font-size: 20px; }
 #btn-board-open.hidden { display: none; }
 #btn-back {
-  width: auto;
-  padding: 0 12px 0 8px;
-  gap: 4px;
-  font: 600 13px/1 "Google Sans", Inter, sans-serif;
-}
-#btn-back.back-icon {
   width: var(--bar-btn);
   padding: 0;
   gap: 0;
 }
+#btn-back.in-board {
+  background: #6750a4;
+  color: #fff;
+}
+#btn-back.in-board:hover { background: #5a4590; }
+#btn-back.in-board .material-symbols-rounded { color: #fff; }
 #btn-back-label { white-space: nowrap; }
 #btn-back-label[hidden] { display: none; }
 
@@ -4439,12 +4431,10 @@ html[data-theme="dark"] .ink-chip-edit { background: #2b2930; color: #f4f1f8; }
 html[data-theme="dark"] .pages-panel { border-right-color: rgba(255, 255, 255, 0.08); }
 html[data-theme="dark"] .page-thumb-img { background: #1c1b22; }
 html[data-theme="dark"] .page-thumb-foot { color: #f4f1f8; }
-html[data-theme="dark"] #board-mode-bar {
-  background: rgba(38, 35, 46, 0.94);
-  color: #f4f1f8;
-  border-color: rgba(255, 255, 255, 0.1);
-}
-html[data-theme="dark"] #board-mode-bar button { background: #3a3350; color: #d0bcff; }
+html[data-theme="dark"] #btn-back.in-board { background: #d0bcff; color: #241b33; }
+html[data-theme="dark"] #btn-back.in-board:hover { background: #e8def8; }
+html[data-theme="dark"] #btn-back.in-board .material-symbols-rounded { color: #241b33; }
+html[data-theme="dark"] .pages-mark-thumb { background: #1c1b22; }
 html[data-theme="dark"] #btn-board-open { background: #d0bcff; color: #241b33; }
 html[data-theme="dark"] #btn-board-open .material-symbols-rounded { color: #241b33; }
 html[data-theme="dark"] .icon-btn { color: #f4f1f8; }

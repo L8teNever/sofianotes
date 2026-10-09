@@ -44,9 +44,6 @@
   <button type="button" id="btn-update-later" class="update-later">Später</button>
 </div>
 <canvas id="board"></canvas>
-<div id="board-mode-bar" class="hidden">
-  <button type="button" id="board-mode-btn">Fertig</button>
-</div>
 <div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
 <!-- zweite Leiste: erscheint, solange Lineal/Geodreieck an ist -->
@@ -173,9 +170,9 @@
 <!-- eigene kleine Leiste direkt neben der Kopfleiste: Seiten, geteilte Ansicht, Schau-Ansicht -->
 <!-- ganz links: grosser Zurueck-Pfeil (zurueck zur Ordner-Ansicht) -->
 <div id="top-back-bar" class="top-back-bar">
-  <button type="button" id="btn-back" class="icon-btn" title="Dokumente">
-    <span class="material-symbols-rounded">folder</span>
-    <span id="btn-back-label">Dokumente</span>
+  <button type="button" id="btn-back" class="icon-btn back-icon" title="Dokumente" aria-label="Dokumente">
+    <span class="material-symbols-rounded">arrow_back</span>
+    <span id="btn-back-label" hidden>Dokumente</span>
   </button>
 </div>
 <!-- Schliessen der Seiten-Leiste: eigener runder Knopf am rechten Rand der Leiste -->
@@ -493,6 +490,11 @@
         <span class="set-nav-text"><strong>Schul-Timer</strong><small id="set-sum-school">Restzeit der Stunde, Hinweise</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
+      <button type="button" class="set-nav hidden" id="set-nav-people" data-go="people" data-title="Personen">
+        <span class="set-ico"><span class="material-symbols-rounded">group</span></span>
+        <span class="set-nav-text"><strong>Personen</strong><small>Nur für Admins</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
       <button type="button" class="set-nav hidden" id="set-nav-sofia" data-go="sofia" data-title="Sofia">
         <span class="set-ico"><span class="material-symbols-rounded">cloud_upload</span></span>
         <span class="set-nav-text"><strong>Sofia &amp; Lösungen</strong><small id="set-sum-sofia">Automatisch teilen</small></span>
@@ -711,6 +713,15 @@
       <p class="set-hint" id="gn-import-status"></p>
     </div>
 
+    <div class="set-page hidden" data-page="people">
+      <p class="set-hint">Wer sich mit welcher Mail-Adresse anmeldet, landet automatisch bei der zugeordneten Person. Eine Person kann mehrere Mail-Adressen haben.</p>
+      <div id="admin-people-list" class="admin-people-list"></div>
+      <div class="admin-new-person-row">
+        <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" autocomplete="off" autocorrect="off" spellcheck="false" name="admin-person-input" />
+        <button type="button" id="btn-admin-new-person">Anlegen</button>
+      </div>
+    </div>
+
     <div class="set-page hidden" data-page="app">
       <div class="version-card">
         <div class="version-row">
@@ -752,23 +763,6 @@
   </div>
 </div>
 
-<div id="admin-backdrop" class="settings-backdrop dlg-scrim hidden">
-  <div class="settings-modal dlg" role="dialog" aria-modal="true">
-    <div class="settings-modal-head">
-      <h2>Personen</h2>
-      <button type="button" id="btn-admin-close" class="icon-btn" title="Schließen">
-        <span class="material-symbols-rounded">close</span>
-      </button>
-    </div>
-    <p class="share-hint">Wer sich mit welcher Mail-Adresse anmeldet, landet automatisch bei der zugeordneten Person. Eine Person kann mehrere Mail-Adressen haben.</p>
-    <div id="admin-people-list" class="admin-people-list"></div>
-    <div class="admin-new-person-row">
-      <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" autocomplete="off" autocorrect="off" spellcheck="false" name="admin-person-input" />
-      <button type="button" id="btn-admin-new-person">Anlegen</button>
-    </div>
-  </div>
-</div>
-
 <div id="library-backdrop" class="library-backdrop hidden">
   <div class="library-sheet lib-page">
     <div class="lib-header">
@@ -790,9 +784,6 @@
       </button>
       <button type="button" id="btn-library-search" class="lib-icon-btn" title="Suchen">
         <i data-lucide="search"></i>
-      </button>
-      <button type="button" id="btn-library-switch" class="lib-icon-btn" title="Person wechseln">
-        <i data-lucide="users"></i>
       </button>
       <div class="lib-add-wrap">
         <button type="button" id="btn-library-add" class="lib-new-btn" title="Neu">
@@ -1078,13 +1069,11 @@
     <div id="hw-panel-head" class="hw-panel-head" title="Ziehen, um die Leiste zu verschieben">
       <span id="hw-panel-subject" class="hw-subject-chip"></span>
       <span class="top-side-bar"><span class="tsb-title hw-panel-title">Aufgabe</span></span>
+      <button type="button" id="hw-panel-mode" class="hw-panel-btn hw-chrome-close" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
       <div class="hw-chrome-dock">
         <button type="button" id="hw-panel-share" class="hw-panel-btn hidden" title="Blatt jetzt als Lösung in Sofia teilen"><span class="material-symbols-rounded">cloud_upload</span></button>
         <button type="button" id="hw-panel-side" class="hw-panel-btn hidden" title="Seite wechseln"><span class="material-symbols-rounded">swap_horiz</span></button>
         <button type="button" id="hw-panel-min" class="hw-panel-btn" title="Minimieren"><span class="material-symbols-rounded">remove</span></button>
-      </div>
-      <div class="hw-chrome-dock">
-        <button type="button" id="hw-panel-mode" class="hw-panel-btn" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
         <button type="button" id="hw-panel-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
       </div>
     </div>
