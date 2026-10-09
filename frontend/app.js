@@ -1,6 +1,38 @@
 (() => {
   "use strict";
 
+  const TAP_SEL = "button, a, summary, label, select, [role='button'], .library-item, .page-thumb, .swatch, .set-nav, .hw-item, .history-item, .dlg-choice, .pap-card, .lib-add-opt, .pages-mark, .conv-menu-item, .calc-key, .preset-btn, .who-btn, .setting-toggle, .btn-grid-style, .export-opt, .export-person, .conv-select, .school-note, .lib-more-btn, .lib-star-btn, .page-thumb-add";
+  document.addEventListener("pointerdown", (e) => {
+    if (e.button > 0) return;
+    const el = e.target.closest(TAP_SEL);
+    if (!el || el.disabled || el.getAttribute("aria-disabled") === "true" || el.classList.contains("is-busy")) return;
+    el.classList.add("is-pressed");
+    const end = () => {
+      el.classList.remove("is-pressed");
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+    };
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+  }, true);
+  window.sofiaWithBusy = async (el, fn) => {
+    if (!el || el.classList.contains("is-busy")) return;
+    const icon = el.querySelector(".material-symbols-rounded");
+    const prev = icon ? icon.textContent : "";
+    el.classList.add("is-busy");
+    el.setAttribute("aria-busy", "true");
+    if (el.tagName === "BUTTON" || el.tagName === "SELECT") el.disabled = true;
+    if (icon) icon.textContent = "progress_activity";
+    try {
+      return await fn();
+    } finally {
+      el.classList.remove("is-busy");
+      el.removeAttribute("aria-busy");
+      if (el.tagName === "BUTTON" || el.tagName === "SELECT") el.disabled = false;
+      if (icon && icon.textContent === "progress_activity") icon.textContent = prev;
+    }
+  };
+
   const canvas = document.getElementById("board");
   const ctx = canvas.getContext("2d");
   window.__sofiaMainCtx = ctx;
@@ -1627,8 +1659,9 @@
     if (currentStroke && currentStroke.extra && currentStroke.extra.boardPage === pageId) list.push(currentStroke);
     return list;
   }
-  const BOARD_MIN_SCALE = 0.72;
-  const BOARD_MAX_TILES = 24;
+  const BOARD_PAGE_PAD = 36;
+  const BOARD_PAGE_MIN_H = 240;
+  const BOARD_PAGE_MAX_H = A4_H * 4;
   const boardLayoutCache = new Map();
   function boardStrokeBounds(st) {
     if (!st) return null;
@@ -1666,56 +1699,33 @@
     if (minX === Infinity) return null;
     return { minX, minY, maxX, maxY };
   }
+  function boardPreviewSize(bounds) {
+    if (!bounds) return { w: A4_W, h: A4_H };
+    const bw = Math.max(1, bounds.maxX - bounds.minX);
+    const bh = Math.max(1, bounds.maxY - bounds.minY);
+    const innerW = A4_W - BOARD_PAGE_PAD * 2;
+    let h = BOARD_PAGE_PAD * 2 + innerW * (bh / bw);
+    h = Math.max(BOARD_PAGE_MIN_H, Math.min(BOARD_PAGE_MAX_H, h));
+    return { w: A4_W, h: Math.round(h) };
+  }
   function layoutBoard(strokes, pageW, pageH) {
-    const pad = Math.min(28, pageW * 0.04, pageH * 0.04);
+    const pad = BOARD_PAGE_PAD;
     const innerW = Math.max(40, pageW - pad * 2);
     const innerH = Math.max(40, pageH - pad * 2);
     const bounds = boardContentBounds(strokes);
-    if (!bounds) return { empty: true, pad, scale: 1, cols: 1, rows: 1, tiles: [{ fit: true }], pageW, pageH };
+    if (!bounds) return { empty: true, pad, scale: 1, tiles: [{ fit: true }], pageW, pageH };
     const bw = Math.max(1, bounds.maxX - bounds.minX);
     const bh = Math.max(1, bounds.maxY - bounds.minY);
-    const fit = Math.min(innerW / bw, innerH / bh);
-    const occupied = (scale) => {
-      const viewW = innerW / scale;
-      const viewH = innerH / scale;
-      const map = new Map();
-      for (const st of strokes) {
-        const b = boardStrokeBounds(st);
-        if (!b) continue;
-        const c0 = Math.max(0, Math.floor((b.minX - bounds.minX) / viewW));
-        const c1 = Math.floor((Math.max(b.minX, b.maxX) - bounds.minX) / viewW);
-        const r0 = Math.max(0, Math.floor((b.minY - bounds.minY) / viewH));
-        const r1 = Math.floor((Math.max(b.minY, b.maxY) - bounds.minY) / viewH);
-        for (let row = r0; row <= r1; row++) {
-          for (let col = c0; col <= c1; col++) {
-            map.set(col + ":" + row, {
-              col,
-              row,
-              wx: bounds.minX + col * viewW,
-              wy: bounds.minY + row * viewH,
-              viewW,
-              viewH,
-            });
-          }
-        }
-      }
-      return [...map.values()].sort((a, b) => a.row - b.row || a.col - b.col);
+    const scale = Math.min(innerW / bw, innerH / bh);
+    return {
+      empty: false,
+      pad,
+      scale,
+      tiles: [{ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh }],
+      bounds,
+      pageW,
+      pageH,
     };
-    let scale = fit;
-    let tiles;
-    if (fit >= BOARD_MIN_SCALE) {
-      tiles = [{ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh }];
-    } else {
-      scale = BOARD_MIN_SCALE;
-      tiles = occupied(scale);
-      let guard = 0;
-      while (tiles.length > BOARD_MAX_TILES && guard++ < 16) {
-        scale *= 0.86;
-        tiles = occupied(scale);
-      }
-      if (tiles.length <= 1) tiles = [{ fit: true, minX: bounds.minX, minY: bounds.minY, bw, bh }];
-    }
-    return { empty: false, pad, scale, cols: tiles.length, rows: 1, tiles, bounds, pageW, pageH };
   }
   function layoutForBoard(primaryId, pageW, pageH) {
     const list = strokesForBoard(primaryId);
@@ -1743,47 +1753,26 @@
     if (!primary) return;
     const list = strokesForBoard(primary);
     const layout = layoutForBoard(primary, r.w, r.h);
-    let idx = Number.isFinite(r.page.boardIndex) ? r.page.boardIndex : 0;
-    if (idx < 0) idx = 0;
-    const tile = layout.tiles[Math.min(idx, layout.tiles.length - 1)];
+    const tile = layout.tiles[0];
     c.save();
     c.beginPath();
     c.rect(r.x, r.y, r.w, r.h);
     c.clip();
     c.fillStyle = pagePaperColor();
     c.fillRect(r.x, r.y, r.w, r.h);
-    if (!tile || layout.empty) {
+    if (!tile || layout.empty || !tile.fit) {
       c.fillStyle = darkMode ? "#d0bcff" : "rgba(103,80,164,0.85)";
       c.font = "600 36px Inter, sans-serif";
       c.fillText("Board", r.x + 40, r.y + 80);
       c.restore();
       return;
     }
-    const drawOne = (st) => {
-      if (st === currentStroke) return;
+    const sc = layout.scale;
+    c.translate(r.x + (r.w - tile.bw * sc) / 2 - tile.minX * sc, r.y + (r.h - tile.bh * sc) / 2 - tile.minY * sc);
+    c.scale(sc, sc);
+    for (const st of list) {
+      if (st === currentStroke) continue;
       drawStroke(st, c, st.tool === "marker" ? { alpha: 0.38 } : undefined);
-    };
-    if (tile.fit) {
-      const sc = layout.scale;
-      c.translate(r.x + (r.w - tile.bw * sc) / 2 - tile.minX * sc, r.y + (r.h - tile.bh * sc) / 2 - tile.minY * sc);
-      c.scale(sc, sc);
-      for (const st of list) drawOne(st);
-    } else {
-      const sc = layout.scale;
-      const pad = layout.pad;
-      c.save();
-      c.beginPath();
-      c.rect(r.x + pad, r.y + pad, r.w - pad * 2, r.h - pad * 2);
-      c.clip();
-      c.translate(r.x + pad - tile.wx * sc, r.y + pad - tile.wy * sc);
-      c.scale(sc, sc);
-      const m = 80;
-      for (const st of list) {
-        const b = boardStrokeBounds(st);
-        if (b && (b.maxX < tile.wx - m || b.minX > tile.wx + tile.viewW + m || b.maxY < tile.wy - m || b.minY > tile.wy + tile.viewH + m)) continue;
-        drawOne(st);
-      }
-      c.restore();
     }
     c.restore();
   }
@@ -1805,24 +1794,22 @@
     if (!btn) return;
     const inBoard = !!boardEditId;
     const title = inBoard ? "Zurück zum Notizbuch" : "Dokumente";
-    const text = title;
+    const text = inBoard ? "" : "Dokumente";
     const ico = inBoard ? "menu_book" : "folder";
-    let changed = btn.title !== title;
-    if (changed) btn.title = title;
-    if (label && label.textContent !== text) {
-      label.textContent = text;
-      changed = true;
+    let changed = btn.title !== title || btn.classList.contains("back-icon") !== inBoard;
+    btn.title = title;
+    btn.setAttribute("aria-label", title);
+    btn.classList.toggle("back-icon", inBoard);
+    if (label) {
+      label.hidden = inBoard;
+      if (label.textContent !== text) label.textContent = text;
     }
-    if (icon && icon.textContent !== ico) {
-      icon.textContent = ico;
-      changed = true;
-    }
+    if (icon && icon.textContent !== ico) icon.textContent = ico;
     if (changed) layoutTopBar();
   }
   function syncBoardBar() {
     const bar = document.getElementById("board-mode-bar");
     if (!bar) return;
-    const label = document.getElementById("board-mode-label");
     const btn = document.getElementById("board-mode-btn");
     const libClosed = libraryBackdrop.classList.contains("hidden");
     const show = !!notebook && libClosed && !!boardEditId;
@@ -1830,67 +1817,32 @@
     if (sig !== boardBarSig) {
       boardBarSig = sig;
       bar.classList.toggle("hidden", !show);
-      if (show) {
-        if (label) label.textContent = "Unendliches Board";
-        if (btn) btn.textContent = "Fertig";
-      }
+      if (show && btn) btn.textContent = "Fertig";
       syncBackButton();
     }
+    syncBoardOpenBtn();
   }
-  const boardChipPool = [];
-  function placeBoardOpenChips() {
-    const host = document.getElementById("board-open-chips");
-    if (!host) return;
+  function syncBoardOpenBtn() {
+    const btn = document.getElementById("btn-board-open");
+    if (!btn) return;
     const libClosed = libraryBackdrop.classList.contains("hidden");
-    if (!notebook || boardEditId || !libClosed) {
-      if (!host.classList.contains("hidden")) host.classList.add("hidden");
-      return;
+    let pageId = "";
+    if (notebook && !boardEditId && libClosed && typeof window.sofiaCurrentPage === "function") {
+      const pg = notebook.pages[window.sofiaCurrentPage()];
+      if (pg && (pg.board || pg.boardOf)) pageId = pg.boardOf || pg.id;
     }
-    const rects = pageRects(notebook);
-    const a = screenToWorld(viewLeft, 0);
-    const bpt = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
-    const vis = [];
-    for (let i = 0; i < rects.length; i++) {
-      const r = rects[i];
-      if (!r.page || (!r.page.board && !r.page.boardOf)) continue;
-      if (r.x > bpt.x || r.x + r.w < a.x || r.y > bpt.y || r.y + r.h < a.y) continue;
-      vis.push(r);
-    }
-    host.classList.toggle("hidden", vis.length === 0);
-    while (boardChipPool.length < vis.length) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "board-open-chip";
-      btn.innerHTML = '<span class="material-symbols-rounded">open_in_full</span><span>Öffnen</span>';
-      btn.addEventListener("pointerdown", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (btn.dataset.pageId) enterBoardPage(btn.dataset.pageId);
-      });
-      host.appendChild(btn);
-      boardChipPool.push(btn);
-    }
-    for (let i = 0; i < boardChipPool.length; i++) {
-      const btn = boardChipPool[i];
-      if (i >= vis.length) {
-        btn.classList.add("hidden");
-        continue;
-      }
-      const r = vis[i];
-      const p = worldToScreen(r.x + r.w / 2, r.y + Math.min(72, r.h * 0.08));
-      const top = Math.max(p.y, 76);
-      const left = Math.round(p.x);
-      const pageId = r.page.boardOf || r.id;
-      btn.classList.remove("hidden");
-      if (btn.dataset.pageId !== pageId) btn.dataset.pageId = pageId;
-      if (btn._px !== left || btn._py !== Math.round(top)) {
-        btn._px = left;
-        btn._py = Math.round(top);
-        btn.style.left = left + "px";
-        btn.style.top = Math.round(top) + "px";
-      }
-    }
+    const show = !!pageId;
+    const was = !btn.classList.contains("hidden");
+    btn.classList.toggle("hidden", !show);
+    if (show) btn.dataset.pageId = pageId;
+    if (was !== show) layoutTopBar();
   }
+  document.getElementById("btn-board-open")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = e.currentTarget.dataset.pageId;
+    if (id) enterBoardPage(id);
+  });
   function rememberBoardTap(pageId, x, y) {
     const now = performance.now();
     const prev = boardLastOpenTap;
@@ -2094,12 +2046,11 @@
 
     ctx.restore();
     syncBoardBar();
-    placeBoardOpenChips();
+    syncBoardOpenBtn();
     zoomIndicatorEl.textContent = Math.round(scale * 100) + "%";
     repositionPresenceLabels();
     drawZoomPane();
     if (ruler.visible) positionRulerBar();
-    if (typeof positionObjectsBar === "function") positionObjectsBar();
   }
 
   function tick() {
@@ -8737,12 +8688,16 @@
 
   function setMode(mode) {
     if (textEdit) commitTextEditor();
-    if (mode !== "pen") setObjectKind(null);
+    if (mode === "shapes") {
+      if (!objectKind) objectKind = "rect";
+    } else objectKind = null;
     // Auswahl gehoert zu Lasso/Tabelle - beim Wechsel zu Stift/Text aufheben
     if (mode !== "lasso" && selection.ids.size) clearSelection();
     modeSyncing = true;
     try {
-      if (mode === "pen") {
+      if (mode === "shapes") {
+        if (currentTool !== "pen") setTool("pen");
+      } else if (mode === "pen") {
         if (!["pen", "marker"].includes(currentTool)) setTool(lastInkTool || "pen");
       } else if (mode === "eraser") {
         if (currentTool !== "eraser") setTool("eraser");
@@ -8756,6 +8711,7 @@
     }
     toolPopover.classList.add("hidden");
     showMode(mode);
+    if (typeof syncObjectsMenu === "function") syncObjectsMenu();
   }
 
   // Wird ein Werkzeug anders gewaehlt (Tastatur, Radierer-Ruecksprung, Tabelle einfuegen ...),
@@ -8763,12 +8719,17 @@
   function syncModeFromTool(tool) {
     if (modeSyncing || !toolbarEl.dataset) return;
     let mode = currentMode;
+    if (currentMode === "shapes" && (tool === "pen" || tool === "marker")) {
+      if (typeof syncObjectsMenu === "function") syncObjectsMenu();
+      return;
+    }
     if (tool === "pen" || tool === "marker") mode = "pen";
     else if (tool === "eraser") mode = "eraser";
     else if (tool === "text") mode = "text";
     else if (tool === "select") mode = "lasso";
-    if (tool !== "pen" && tool !== "marker") setObjectKind(null);
+    if (mode !== "shapes") objectKind = null;
     if (mode !== currentMode) showMode(mode);
+    if (typeof syncObjectsMenu === "function") syncObjectsMenu();
   }
 
   function syncModeBar() {
@@ -8803,6 +8764,13 @@
         if (!best || Math.abs(v - eraserSize) < Math.abs(Number(best.dataset.eraserSize) - eraserSize)) best = b;
       });
       toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) => b.classList.toggle("active", b === best));
+    } else if (mode === "shapes") {
+      let best = null;
+      toolbarEl.querySelectorAll(".stroke-size-btn").forEach((b) => {
+        const v = Number(b.dataset.stroke);
+        if (!best || Math.abs(v - penSize) < Math.abs(Number(best.dataset.stroke) - penSize)) best = b;
+      });
+      toolbarEl.querySelectorAll(".stroke-size-btn").forEach((b) => b.classList.toggle("active", b === best));
     }
   }
 
@@ -10218,86 +10186,39 @@
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
   }, true);
 
-  const objectsBar = document.getElementById("objects-bar");
   const objectsBtn = document.getElementById("btn-objects");
-  let objectsBarPos = null;
-  try {
-    const v = JSON.parse(localStorage.getItem("sofianotes-objectsbar-pos") || "null");
-    if (v && Number.isFinite(v.fx) && Number.isFinite(v.fy)) objectsBarPos = v;
-  } catch (err) {}
-  let objectsBarDrag = null;
-  function objectsBarOpen() {
-    return !!(objectsBar && !objectsBar.classList.contains("hidden"));
-  }
-  function objectsBarDefaultPos() {
-    const tb = toolbarEl.getBoundingClientRect();
-    const w = objectsBar.offsetWidth;
-    const h = objectsBar.offsetHeight;
-    const dock = currentDock();
-    let left = tb.left + tb.width / 2 - w / 2;
-    let top;
-    if (dock === "bottom") {
-      top = tb.top - 10 - h;
-      if (rulerBar && !rulerBar.classList.contains("hidden")) top -= rulerBar.offsetHeight + 8;
-    } else if (dock === "top") {
-      top = tb.bottom + 10;
-      if (rulerBar && !rulerBar.classList.contains("hidden")) top += rulerBar.offsetHeight + 8;
-    } else {
-      left = window.innerWidth / 2 - w / 2;
-      top = window.innerHeight - h - 20;
-      if (rulerBar && !rulerBar.classList.contains("hidden")) top -= rulerBar.offsetHeight + 8;
-    }
-    return { left, top };
-  }
-  function positionObjectsBar() {
-    if (!objectsBarOpen() || (objectsBarDrag && objectsBarDrag.live)) return;
-    const w = objectsBar.offsetWidth;
-    const h = objectsBar.offsetHeight;
-    if (objectsBarPos) {
-      const left = objectsBarPos.fx * window.innerWidth - w / 2;
-      const top = objectsBarPos.fy * window.innerHeight - h / 2;
-      objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, left)) + "px";
-      objectsBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, top)) + "px";
-      return;
-    }
-    const p = objectsBarDefaultPos();
-    objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, p.left)) + "px";
-    objectsBar.style.top = p.top + "px";
-  }
   function syncObjectsMenu() {
-    const open = objectsBarOpen();
-    document.getElementById("btn-objects")?.classList.toggle("active", open || !!objectKind);
-    if (objectsBar) objectsBar.dataset.kind = objectKind || "";
-    document.querySelectorAll("#objects-bar [data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
+    const on = currentMode === "shapes";
+    objectsBtn?.classList.toggle("active", on);
+    if (toolbarEl) toolbarEl.dataset.kind = on ? (objectKind || "") : "";
+    document.querySelectorAll("#shape-tools [data-obj]").forEach((b) => b.classList.toggle("active", b.dataset.obj === objectKind));
     document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => b.classList.toggle("active", (b.dataset.dash === "1") === objectDash));
     document.querySelectorAll("#obj-arrow [data-heads]").forEach((b) => b.classList.toggle("active", b.dataset.heads === objectArrowHeads));
-    positionObjectsBar();
-  }
-  function setObjectsBarVisible(on) {
-    if (!objectsBar) return;
-    objectsBar.classList.toggle("hidden", !on);
-    if (!on) objectKind = null;
-    syncObjectsMenu();
+    syncModeBar();
   }
   function setObjectKind(kind) {
     objectKind = kind || null;
-    if (objectKind && currentTool !== "pen" && currentTool !== "marker") setTool("pen");
-    if (objectKind) setObjectsBarVisible(true);
-    else syncObjectsMenu();
+    if (!objectKind) {
+      if (currentMode === "shapes") setMode("pen");
+      else syncObjectsMenu();
+      return;
+    }
+    if (currentMode !== "shapes") {
+      setMode("shapes");
+      return;
+    }
+    if (currentTool !== "pen" && currentTool !== "marker") setTool("pen");
+    syncObjectsMenu();
   }
   objectsBtn?.addEventListener("click", (e) => {
     e.stopPropagation();
     hidePopovers();
-    setObjectsBarVisible(!objectsBarOpen());
+    setMode(currentMode === "shapes" ? "pen" : "shapes");
   });
-  document.getElementById("objects-bar-close")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setObjectsBarVisible(false);
-  });
-  objectsBar?.querySelectorAll("[data-obj]").forEach((b) => {
+  document.querySelectorAll("#shape-tools [data-obj]").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      setObjectKind(objectKind === b.dataset.obj ? null : b.dataset.obj);
+      setObjectKind(b.dataset.obj);
     });
   });
   document.querySelectorAll("#obj-dash [data-dash]").forEach((b) => {
@@ -10320,72 +10241,14 @@
       syncObjectsMenu();
     });
   });
-  if (objectsBar) {
-    objectsBar.addEventListener("pointerdown", (e) => {
+  document.querySelectorAll("#shape-tools [data-stroke]").forEach((b) => {
+    b.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (e.pointerType === "mouse" && e.button !== 0) return;
-      const r = objectsBar.getBoundingClientRect();
-      objectsBarDrag = {
-        id: e.pointerId,
-        live: false,
-        dx: e.clientX - r.left,
-        dy: e.clientY - r.top,
-        sx: e.clientX,
-        sy: e.clientY,
-        timer: setTimeout(() => {
-          if (!objectsBarDrag) return;
-          objectsBarDrag.live = true;
-          objectsBar.classList.add("dragging");
-          try {
-            objectsBar.setPointerCapture(objectsBarDrag.id);
-          } catch (err) {}
-        }, DOCK_HOLD_MS),
-      };
+      penSize = Number(b.dataset.stroke);
+      savePrefs();
+      syncObjectsMenu();
     });
-    objectsBar.addEventListener("pointermove", (e) => {
-      const d = objectsBarDrag;
-      if (!d || d.id !== e.pointerId) return;
-      if (!d.live) {
-        if (Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > 10) {
-          clearTimeout(d.timer);
-          objectsBarDrag = null;
-        }
-        return;
-      }
-      const w = objectsBar.offsetWidth;
-      const h = objectsBar.offsetHeight;
-      objectsBar.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, e.clientX - d.dx)) + "px";
-      objectsBar.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, e.clientY - d.dy)) + "px";
-    });
-    const endObjBarDrag = (e) => {
-      const d = objectsBarDrag;
-      if (!d || d.id !== e.pointerId) return;
-      clearTimeout(d.timer);
-      objectsBarDrag = null;
-      if (!d.live) return;
-      objectsBar.classList.remove("dragging");
-      objectsBar.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        ev.preventDefault();
-      }, { capture: true, once: true });
-      const r = objectsBar.getBoundingClientRect();
-      const def = objectsBarDefaultPos();
-      if (Math.hypot(r.left - def.left, r.top - def.top) < 40) {
-        objectsBarPos = null;
-        try {
-          localStorage.removeItem("sofianotes-objectsbar-pos");
-        } catch (err) {}
-      } else {
-        objectsBarPos = { fx: (r.left + r.width / 2) / window.innerWidth, fy: (r.top + r.height / 2) / window.innerHeight };
-        try {
-          localStorage.setItem("sofianotes-objectsbar-pos", JSON.stringify(objectsBarPos));
-        } catch (err) {}
-      }
-      positionObjectsBar();
-    };
-    objectsBar.addEventListener("pointerup", endObjBarDrag);
-    objectsBar.addEventListener("pointercancel", endObjBarDrag);
-  }
+  });
   syncObjectsMenu();
   importFileInput?.addEventListener("change", () => importFiles(importFileInput.files));
   window.addEventListener("dragover", (e) => {
@@ -15181,18 +15044,20 @@
   adminBackdrop?.addEventListener("click", (e) => {
     if (e.target === adminBackdrop) closeAdminPanel();
   });
-  document.getElementById("btn-admin-new-person")?.addEventListener("click", async () => {
+  document.getElementById("btn-admin-new-person")?.addEventListener("click", async (e) => {
     const input = document.getElementById("admin-new-person-name");
     const name = input.value.trim();
     if (!name) return;
-    await api("/api/admin/people", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+    await window.sofiaWithBusy(e.currentTarget, async () => {
+      await api("/api/admin/people", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      input.value = "";
+      await loadAdminPeople();
+      await refreshPeople();
     });
-    input.value = "";
-    await loadAdminPeople();
-    await refreshPeople();
   });
 
   document.getElementById("btn-open-library")?.addEventListener("click", () => showLibrary());
@@ -15589,7 +15454,11 @@
     await refreshLibrary();
     const box = document.getElementById("gn-map-rows");
     const go = document.getElementById("gn-import-go");
-    if (go) go.disabled = true;
+    if (go) {
+      go.disabled = true;
+      go.classList.add("is-busy");
+      go.setAttribute("aria-busy", "true");
+    }
     const map = {};
     box?.querySelectorAll(".gn-map-row").forEach((row) => {
       map[row.dataset.key] = row.querySelector("select")?.value || "";
@@ -15659,7 +15528,11 @@
       gnSetStatus("Import hat nicht geklappt");
       showToast("Import hat nicht geklappt");
     }
-    if (go) go.disabled = false;
+    if (go) {
+      go.disabled = false;
+      go.classList.remove("is-busy");
+      go.removeAttribute("aria-busy");
+    }
   }
   document.getElementById("gn-pick-dir")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -15754,6 +15627,8 @@
     if (!sendState.to.size || !exportBoardId) return;
     const go = e.currentTarget;
     go.disabled = true;
+    go.classList.add("is-busy");
+    go.setAttribute("aria-busy", "true");
     go.textContent = "Sende…";
     try {
       await api("/api/boards/" + encodeURIComponent(exportBoardId) + "/send", {
@@ -15766,6 +15641,8 @@
       showToast("Gesendet an " + names);
     } catch (err) {
       showToast("Senden hat nicht geklappt");
+      go.classList.remove("is-busy");
+      go.removeAttribute("aria-busy");
       renderSendPane();
     }
   });
@@ -16090,46 +15967,42 @@
       fitPage(i);
     }
     function syncBoardSpread(primaryId) {
-      if (!notebook || !primaryId) return;
+      if (!notebook || !primaryId || boardEditId === primaryId) return;
       const src = notebook.pages.find((p) => p.id === primaryId);
       if (!src || !src.board || src.boardOf) return;
-      const layout = layoutBoard(strokesForBoard(primaryId), src.w || A4_W, src.h || A4_H);
-      const need = Math.max(1, layout.tiles.length);
+      const size = boardPreviewSize(boardContentBounds(strokesForBoard(primaryId)));
       const nb = clone();
+      const removed = [];
+      nb.pages = nb.pages.filter((p) => {
+        if (p.boardOf === primaryId) {
+          removed.push(p.id);
+          return false;
+        }
+        return true;
+      });
       const i0 = nb.pages.findIndex((p) => p.id === primaryId);
       if (i0 < 0) return;
-      let end = i0 + 1;
-      while (end < nb.pages.length && nb.pages[end].boardOf === primaryId) end++;
-      const have = end - i0;
-      if (have === need) {
-        let same = nb.pages[i0].boardIndex === 0 && !nb.pages[i0].boardOf;
-        for (let k = 1; k < need; k++) {
-          const pg = nb.pages[i0 + k];
-          if (!pg || pg.boardOf !== primaryId || pg.boardIndex !== k) same = false;
-        }
-        if (same) return;
-      }
-      if (have < need) {
-        const add = [];
-        for (let k = have; k < need; k++) {
-          add.push({ id: newId(), paper: "blank", w: nb.pages[i0].w, h: nb.pages[i0].h, board: true, boardOf: primaryId, boardIndex: k });
-        }
-        nb.pages.splice(end, 0, ...add);
-      } else if (have > need) {
-        nb.pages.splice(i0 + need, have - need);
-      }
-      nb.pages[i0].board = true;
-      nb.pages[i0].boardIndex = 0;
-      delete nb.pages[i0].boardOf;
-      for (let k = 1; k < need; k++) {
-        const pg = nb.pages[i0 + k];
-        pg.board = true;
-        pg.boardOf = primaryId;
-        pg.boardIndex = k;
-        pg.paper = pg.paper || "blank";
+      const primary = nb.pages[i0];
+      const sameSize = Math.round(primary.w || A4_W) === size.w && Math.round(primary.h || A4_H) === size.h;
+      if (!removed.length && sameSize && !primary.boardOf) return;
+      primary.w = size.w;
+      primary.h = size.h;
+      primary.board = true;
+      primary.boardIndex = 0;
+      delete primary.boardOf;
+      if (removed.length) {
+        const drop = new Set(removed);
+        const seen = new Set();
+        nb.bookmarks = (nb.bookmarks || []).filter((m) => {
+          if (drop.has(m.pageId)) m.pageId = primaryId;
+          const key = m.pageId + "\0" + m.name;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
       }
       boardLayoutCache.delete(primaryId);
-      saveNotebook(nb);
+      saveNotebook(nb, { moveStrokes: true });
       if (window.sofiaRepaintPages) window.sofiaRepaintPages();
     }
     window.sofiaSyncBoardSpread = syncBoardSpread;
@@ -16786,8 +16659,26 @@
       if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
       fitPage(i);
     }
+    let suppressMarkClick = false;
+    function paintMarkThumbs() {
+      if (!marksOpen || !marksEl || !notebook) return;
+      const rects = pageRects(notebook);
+      marksEl.querySelectorAll("canvas.pages-mark-thumb").forEach((cv) => {
+        const i = +cv.dataset.index;
+        const r = rects[i];
+        if (!r) return;
+        const maxW = 18;
+        const maxH = 24;
+        const sc = Math.min(maxW / r.w, maxH / r.h);
+        const w = Math.max(8, Math.round(r.w * sc));
+        renderThumb(cv, r, i, { cache: false, w });
+        cv.style.width = w + "px";
+        cv.style.height = Math.round(r.h * w / r.w) + "px";
+      });
+    }
     function renderMarks() {
       marksBtn?.classList.toggle("active", marksOpen);
+      panel?.classList.toggle("marks-only", !!marksOpen);
       if (!marksEl) return;
       marksEl.classList.toggle("hidden", !marksOpen);
       if (!marksOpen || !notebook) {
@@ -16795,51 +16686,73 @@
         return;
       }
       marksEl.innerHTML = "";
-      if (fullRights()) {
-        const add = document.createElement("button");
-        add.type = "button";
-        add.className = "pages-marks-add";
-        add.innerHTML = '<span class="material-symbols-rounded">bookmark</span><span>Lesezeichen auf dieser Seite</span>';
-        add.addEventListener("click", (e) => {
-          e.stopPropagation();
-          addBookmark(currentPage());
-        });
-        marksEl.appendChild(add);
-      }
-      for (const m of notebookMarks()) {
-        const i = pageIndexById(m.pageId);
-        const row = document.createElement("div");
-        row.className = "pages-mark";
-        row.innerHTML = '<span class="pages-mark-text"><strong></strong><small></small></span>';
-        row.querySelector("strong").textContent = m.name;
-        row.querySelector("small").textContent = i >= 0 ? "Seite " + (i + 1) : "Seite fehlt";
-        row.addEventListener("click", (e) => {
-          if (e.target.closest("button")) return;
-          jumpBookmark(m);
-        });
-        if (fullRights()) {
-          const more = document.createElement("button");
-          more.type = "button";
-          more.className = "hw-panel-btn";
-          more.title = "Umbenennen oder löschen";
-          more.innerHTML = '<span class="material-symbols-rounded">more_vert</span>';
-          more.addEventListener("click", (e) => {
-            e.stopPropagation();
-            openMenu([
-              { icon: "edit", label: "Umbenennen", run: () => renameBookmark(m.id) },
-              { icon: "delete", label: "Löschen", danger: true, run: () => deleteBookmark(m.id) },
-            ], more);
-          });
-          row.appendChild(more);
-        }
-        marksEl.appendChild(row);
-      }
-      if (!notebookMarks().length && !fullRights()) {
+      const marks = notebookMarks();
+      if (!marks.length) {
         const empty = document.createElement("div");
         empty.className = "pap-hint";
         empty.textContent = "Noch keine Lesezeichen";
         marksEl.appendChild(empty);
+        return;
       }
+      for (const m of marks) {
+        const i = pageIndexById(m.pageId);
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "pages-mark";
+        const cv = document.createElement("canvas");
+        cv.className = "pages-mark-thumb";
+        cv.dataset.index = String(i);
+        row.appendChild(cv);
+        const name = document.createElement("span");
+        name.className = "pages-mark-name";
+        name.textContent = m.name;
+        row.appendChild(name);
+        row.addEventListener("click", (e) => {
+          if (suppressMarkClick) {
+            suppressMarkClick = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          jumpBookmark(m);
+        });
+        row.addEventListener("pointerdown", (e) => {
+          if (e.button > 0) return;
+          const hold = { x: e.clientX, y: e.clientY, pid: e.pointerId, moved: false };
+          hold.timer = setTimeout(() => {
+            if (hold.moved || !fullRights()) return;
+            suppressMarkClick = true;
+            if (navigator.vibrate) navigator.vibrate(12);
+            openMenu([
+              { icon: "edit", label: "Umbenennen", run: () => renameBookmark(m.id) },
+              { icon: "delete", label: "Löschen", danger: true, run: () => deleteBookmark(m.id) },
+            ], row);
+          }, 450);
+          const move = (ev) => {
+            if (ev.pointerId !== hold.pid) return;
+            if (Math.hypot(ev.clientX - hold.x, ev.clientY - hold.y) > 8) {
+              hold.moved = true;
+              clearTimeout(hold.timer);
+            }
+          };
+          const up = (ev) => {
+            if (ev.pointerId !== hold.pid) return;
+            clearTimeout(hold.timer);
+            row.removeEventListener("pointermove", move);
+            row.removeEventListener("pointerup", up);
+            row.removeEventListener("pointercancel", up);
+            if (hold.moved) {
+              suppressMarkClick = true;
+              setTimeout(() => { suppressMarkClick = false; }, 0);
+            }
+          };
+          row.addEventListener("pointermove", move);
+          row.addEventListener("pointerup", up);
+          row.addEventListener("pointercancel", up);
+        });
+        marksEl.appendChild(row);
+      }
+      paintMarkThumbs();
     }
     marksBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -16926,8 +16839,9 @@
       const im = id && ensureMedia(id);
       return !!(im && im.complete && im.naturalWidth);
     };
-    function renderThumb(cv, r, i) {
-      const W = cv.clientWidth || 120;
+    function renderThumb(cv, r, i, opts) {
+      const W = (opts && opts.w) || cv.clientWidth || 120;
+      const store = !opts || opts.cache !== false;
       const k = W / r.w;
       const d = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
       cv.width = Math.round(W * d);
@@ -16955,7 +16869,7 @@
       if (r.page.board || r.page.boardOf) {
         paintBoardPage(c, r);
         c.restore();
-        if (complete && i != null) {
+        if (store && complete && i != null) {
           const keep = document.createElement("canvas");
           keep.width = cv.width;
           keep.height = cv.height;
@@ -16981,7 +16895,7 @@
       }
       c.restore();
       // fertiges Bild merken (nur wenn alle Bilder schon da waren)
-      if (complete && i != null) {
+      if (store && complete && i != null) {
         const keep = document.createElement("canvas");
         keep.width = cv.width;
         keep.height = cv.height;
@@ -17032,7 +16946,10 @@
       const set = thumbWaitMedia.get(id);
       if (!set) return;
       thumbWaitMedia.delete(id);
-      if (panelOpen) queueThumbs(Array.from(set));
+      if (panelOpen) {
+        queueThumbs(Array.from(set));
+        paintMarkThumbs();
+      }
     };
     // Lange druecken: Seite wird ausgewaehlt und haengt am Finger; loslassen = neue Stelle
     let thumbDrag = null; // {from, cell, ghost, to, timer, x0, y0, active, done}
@@ -17189,6 +17106,7 @@
       const miss = [];
       for (const [cv, r, i] of todo) if (!showCachedThumb(cv, r, i)) miss.push(i);
       queueThumbs(miss);
+      paintMarkThumbs();
     }
     // nach Aenderungen die Vorschaubilder kurz verzoegert neu zeichnen
     // Nur bei geaenderten Seiten alles neu, sonst nur das Bild der aktuellen Seite (schnell)
@@ -17212,6 +17130,7 @@
           if (!hit || hit.sig !== pageSig(r, i)) changed.push(i);
         });
         queueThumbs(changed);
+        paintMarkThumbs();
       }, 900);
     };
 

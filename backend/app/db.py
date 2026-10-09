@@ -742,7 +742,7 @@ def clean_notebook(nb: Any) -> dict[str, Any] | None:
         except (TypeError, ValueError):
             w, h = 794.0, 1123.0
         item["w"] = max(200.0, min(4000.0, w))
-        item["h"] = max(200.0, min(4000.0, h))
+        item["h"] = max(200.0, min(5000.0, h))
         try:
             rot = int(pg.get("rot") or 0) % 4
         except (TypeError, ValueError):

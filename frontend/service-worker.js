@@ -10,11 +10,12 @@ const APP_SHELL = [
   "/updates.js?v=" + BUILD,
   "/app.js?v=" + BUILD,
   "/manifest.json",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/icon-512-maskable.png",
-  "/icons/apple-touch-icon.png",
-  "/icons/favicon.png",
+  "/icons/icon.svg?v=" + BUILD,
+  "/icons/icon-192.png?v=" + BUILD,
+  "/icons/icon-512.png?v=" + BUILD,
+  "/icons/icon-512-maskable.png?v=" + BUILD,
+  "/icons/apple-touch-icon.png?v=" + BUILD,
+  "/icons/favicon.png?v=" + BUILD,
 ];
 
 self.addEventListener("install", (event) => {
@@ -91,7 +92,7 @@ self.addEventListener("fetch", (event) => {
   // Versionierte eigene Dateien (?v=BUILD), feste CDN-Versionen und Modelle aendern sich nie:
   // direkt aus dem Cache, ohne erst beim Server nachzufragen (schneller Start)
   const immutable =
-    (url.origin === self.location.origin && (url.searchParams.has("v") || url.pathname.startsWith("/models/") || url.pathname.startsWith("/icons/"))) ||
+    (url.origin === self.location.origin && (url.searchParams.has("v") || url.pathname.startsWith("/models/"))) ||
     (isCdn(url) && /@\d|\/\d+\.\d+\.\d+\//.test(url.pathname));
   if (immutable) {
     event.respondWith(

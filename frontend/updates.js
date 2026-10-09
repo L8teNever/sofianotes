@@ -72,6 +72,16 @@
   }
 
   async function applyUpdate() {
+    if (applyBtn) {
+      applyBtn.classList.add("is-busy");
+      applyBtn.setAttribute("aria-busy", "true");
+      applyBtn.disabled = true;
+    }
+    if (bannerBtn) {
+      bannerBtn.classList.add("is-busy");
+      bannerBtn.setAttribute("aria-busy", "true");
+      bannerBtn.disabled = true;
+    }
     try {
       let sw = pendingWorker || (await waitingWorker());
       if (sw) {
@@ -97,6 +107,11 @@
   async function checkForUpdates(manual) {
     if (checking) return;
     checking = true;
+    if (manual && checkBtn) {
+      checkBtn.classList.add("is-busy");
+      checkBtn.setAttribute("aria-busy", "true");
+      checkBtn.disabled = true;
+    }
     if (manual && checkLabel) checkLabel.textContent = "Prüfe…";
     if (manual && descEl) descEl.textContent = "Suche nach einer neuen Version…";
     try {
@@ -155,6 +170,11 @@
       if (descEl) descEl.textContent = "Update-Prüfung fehlgeschlagen.";
     } finally {
       checking = false;
+      if (checkBtn) {
+        checkBtn.classList.remove("is-busy");
+        checkBtn.removeAttribute("aria-busy");
+        checkBtn.disabled = false;
+      }
       if (checkLabel) checkLabel.textContent = "Nach Updates suchen";
     }
   }

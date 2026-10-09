@@ -97,6 +97,16 @@ async def index_file() -> HTMLResponse:
     return _index_html()
 
 
+@app.get("/manifest.json")
+async def web_manifest() -> Response:
+    raw = (FRONTEND_DIR / "manifest.json").read_text(encoding="utf-8")
+    return Response(
+        content=inject_build(raw, BUILD_TS),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
 @app.get("/service-worker.js")
 async def service_worker() -> Response:
     raw = (FRONTEND_DIR / "service-worker.js").read_text(encoding="utf-8")
