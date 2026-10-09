@@ -60,9 +60,27 @@
   }
 
   async function fetchVersion() {
-    const res = await fetch("/api/version", { cache: "no-store" });
+    const res = await fetch("/version.json", { cache: "no-store" });
     if (!res.ok) throw new Error("version");
     return res.json();
+  }
+
+  // Einmal neu laden, wenn der Server eine andere Version hat. Dieselbe
+  // sessionStorage-Marke wie das Inline-Skript, damit daraus keine Schleife wird.
+  function reloadForVersion(info) {
+    if (!info || !info.version) return false;
+    const remote = String(info.version);
+    const mine = clientVersion();
+    if (!remote || remote === mine) return false;
+    const key = "sofianotes-ver-reload";
+    try {
+      if (sessionStorage.getItem(key) === remote) return false;
+      sessionStorage.setItem(key, remote);
+    } catch (err) {
+      return false;
+    }
+    location.reload();
+    return true;
   }
 
   async function waitingWorker() {
@@ -150,6 +168,7 @@
 
       const info = await fetchVersion().catch(() => null);
       fillInfo(info);
+      if (reloadForVersion(info)) return;
       const mine = clientBuild();
       if (
         mine &&
@@ -192,6 +211,7 @@
       }
       const info = await fetchVersion();
       fillInfo(info);
+      if (reloadForVersion(info)) return;
       const mine = clientBuild();
       if (
         mine &&

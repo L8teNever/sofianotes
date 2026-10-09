@@ -66,8 +66,41 @@ function isHtmlPath(pathname) {
   return pathname === "/" || pathname === "/index.html";
 }
 
+// Diese Dateien duerfen nie cache-first sein: ein alter Stand (1.0.22/1.0.23)
+// hat sich sonst festgesetzt, obwohl der Server schon weiter ist.
+function isFreshPath(pathname) {
+  return (
+    isHtmlPath(pathname) ||
+    pathname === "/app.js" ||
+    pathname === "/style.css" ||
+    pathname === "/updates.js" ||
+    pathname === "/version.json"
+  );
+}
+
 // Ein als Skript gecachter HTML-Fehler (Alter Cache, falscher Deploy) darf nicht
 // als app.js wieder ausgeliefert werden — sonst bleibt der Ladebildschirm stehen.
+function networkFirst(request, url) {
+  // cache: "reload" umgeht den HTTP-Cache (immutable), ohne IndexedDB anzufassen.
+  // new Request(navigate) wirft im Browser, deshalb die URL neu anfragen.
+  const fresh = fetch(request.url, { cache: "reload", credentials: "same-origin", redirect: "follow" });
+  return fresh
+    .then((response) => {
+      if (response.ok && !staleScript(response, url)) {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+      }
+      return response;
+    })
+    .catch(() =>
+      caches.match(request).then((hit) => {
+        if (hit && !staleScript(hit, url)) return hit;
+        if (isHtmlPath(url.pathname)) return caches.match("/index.html");
+        return undefined;
+      })
+    );
+}
+
 function staleScript(response, url) {
   if (!/\.js$/.test(url.pathname)) return false;
   const ct = (response.headers.get("content-type") || "").toLowerCase();
@@ -79,6 +112,11 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   if (url.pathname.startsWith("/ws")) return;
   if (url.pathname === "/service-worker.js") return;
+
+  if (url.origin === self.location.origin && isFreshPath(url.pathname)) {
+    event.respondWith(networkFirst(event.request, url));
+    return;
+  }
 
   if (url.origin === self.location.origin && url.pathname.startsWith("/api/")) {
     if (url.pathname.startsWith("/api/media/")) {
@@ -97,10 +135,12 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Versionierte eigene Dateien (?v=BUILD), feste CDN-Versionen und Modelle aendern sich nie:
-  // direkt aus dem Cache, ohne erst beim Server nachzufragen (schneller Start)
+  // Andere versionierte Dateien (?v=BUILD), feste CDN-Versionen und Modelle:
+  // direkt aus dem Cache. app.js/style.css/HTML stehen oben und sind network-first.
   const immutable =
-    (url.origin === self.location.origin && (url.searchParams.has("v") || url.pathname.startsWith("/models/"))) ||
+    (url.origin === self.location.origin &&
+      !isFreshPath(url.pathname) &&
+      (url.searchParams.has("v") || url.pathname.startsWith("/models/"))) ||
     (isCdn(url) && /@\d|\/\d+\.\d+\.\d+\//.test(url.pathname));
   if (immutable) {
     event.respondWith(
