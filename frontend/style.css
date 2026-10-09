@@ -4816,3 +4816,8 @@ html[data-theme="dark"] .hw-panel.docked .hw-dock-edge::after { background: rgba
   background: currentColor;
 }
 #obj-dash [data-dash="1"] .angle-label { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px); }
+
+/* Dunkelmodus: "Blatt verlassen" bleibt rot (helles Rot wie die anderen Löschen-Knöpfe) */
+html[data-theme="dark"] #canvas-menu-leave,
+html[data-theme="dark"] #canvas-menu-leave .material-symbols-rounded { color: #ffb3b8 !important; }
+html[data-theme="dark"] #canvas-menu-leave { border-top-color: rgba(255, 255, 255, 0.1) !important; }
