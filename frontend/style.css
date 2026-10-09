@@ -1999,6 +1999,11 @@ html[data-theme="dark"] .app-toast {
 #toolbar[data-mode="eraser"] [data-modes]:not([data-modes~="eraser"]) { display: none; }
 #toolbar[data-mode="shapes"] [data-modes]:not([data-modes~="shapes"]) { display: none; }
 #obj-dash, #obj-arrow { display: flex; align-items: center; gap: 2px; }
+/* Senkrechte Leiste: Linienart und Pfeilspitzen untereinander, wie die Formen darueber */
+#toolbar.dock-left #obj-dash, #toolbar.dock-right #obj-dash,
+#toolbar.dock-left #obj-arrow, #toolbar.dock-right #obj-arrow,
+#toolbar.free-drag.orient-vertical #obj-dash, #toolbar.free-drag.orient-vertical #obj-arrow,
+#toolbar.zoom-inner.orient-vertical #obj-dash, #toolbar.zoom-inner.orient-vertical #obj-arrow { flex-direction: column; }
 #toolbar:not([data-kind="arrow"]) .obj-heads { display: none; }
 .stroke-dot { display: block; border-radius: 50%; background: currentColor; }
 .stroke-size-btn.active { background: var(--accent-soft); color: var(--accent); }
@@ -4798,3 +4803,16 @@ html[data-theme="dark"] .hw-file { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
 html[data-theme="dark"] .hw-file { background: #2b2930; }
 html[data-theme="dark"] .hw-file .material-symbols-rounded { color: #a8c7fa; }
 html[data-theme="dark"] .hw-panel.docked .hw-dock-edge::after { background: rgba(208, 188, 255, 0.55); }
+
+/* Linienart in der Formen-Leiste: echte Linie statt Gedankenstrich-Zeichen (liegt in jeder Ausrichtung gleich sauber) */
+#obj-dash .angle-label {
+  display: block;
+  width: 20px;
+  height: 3px;
+  font-size: 0;
+  line-height: 0;
+  border-radius: 2px;
+  color: inherit;
+  background: currentColor;
+}
+#obj-dash [data-dash="1"] .angle-label { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px); }
