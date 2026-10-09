@@ -2429,17 +2429,49 @@
     else openSettings();
   });
 
-  // Einstellungen: Startseite mit Bereichen, jeder Bereich als Unterseite
+  // Einstellungen: auf breiten Screens Übersicht links und Bereich rechts, auf dem Handy eine Seite nach der anderen
   const SET_TITLES = { main: "Einstellungen" };
+  const SETTINGS_WIDE_MQ = window.matchMedia("(min-width: 720px)");
+  let settingsSection = "paper";
+  function settingsWide() {
+    return SETTINGS_WIDE_MQ.matches;
+  }
   const GRID_NAMES = { graph: "Kariert", dots: "Punkte", lines: "Liniert", blank: "Blanko" };
   const DOCK_NAMES = { top: "Oben", bottom: "Unten", left: "Links", right: "Rechts" };
   function showSettingsPage(page) {
     if (!settingsPopover) return;
-    settingsPopover.querySelectorAll(".set-page").forEach((el) => el.classList.toggle("hidden", el.dataset.page !== page));
-    const nav = settingsPopover.querySelector('.set-nav[data-go="' + page + '"]');
-    document.getElementById("settings-title").textContent = page === "main" ? SET_TITLES.main : nav ? nav.dataset.title : "";
-    document.getElementById("btn-settings-back")?.classList.toggle("hidden", page === "main");
-    settingsPopover.dataset.page = page;
+    const wide = settingsWide();
+    const asked = page || "main";
+    if (asked !== "main") settingsSection = asked;
+    const show = wide ? (asked === "main" ? settingsSection : asked) : asked;
+    settingsPopover.classList.toggle("set-split", wide);
+    settingsPopover.querySelectorAll(".set-page").forEach((el) => {
+      if (el.classList.contains("set-navcol")) {
+        el.classList.toggle("hidden", !wide && show !== "main");
+        return;
+      }
+      el.classList.toggle("hidden", el.dataset.page !== show);
+    });
+    settingsPopover.querySelectorAll(".set-nav[data-go]").forEach((b) => {
+      b.classList.toggle("active", wide && b.dataset.go === show);
+      if (wide && b.dataset.go === show) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
+    const nav = settingsPopover.querySelector('.set-nav[data-go="' + show + '"]');
+    const titleEl = document.getElementById("settings-title");
+    if (titleEl) titleEl.textContent = wide || show === "main" ? SET_TITLES.main : nav && nav.dataset.title ? nav.dataset.title : SET_TITLES.main;
+    const sec = document.getElementById("set-section-title");
+    if (sec) {
+      sec.textContent = nav && nav.dataset.title ? nav.dataset.title : "";
+      sec.classList.toggle("hidden", !wide || show === "main");
+    }
+    document.getElementById("btn-settings-back")?.classList.toggle("hidden", wide || show === "main");
+    const content = settingsPopover.querySelector(".set-content");
+    if (content) {
+      content.classList.toggle("hidden", !wide && show === "main");
+      if (wide) content.scrollTop = 0;
+    }
+    settingsPopover.dataset.page = wide ? show : asked;
     syncSettingsSummary();
   }
   function syncSettingsSummary() {
@@ -2472,9 +2504,14 @@
     settingsPopover.querySelectorAll(".set-nav").forEach((b) =>
       b.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (!b.dataset.go) return;
         showSettingsPage(b.dataset.go);
       })
     );
+    SETTINGS_WIDE_MQ.addEventListener("change", () => {
+      if (!settingsBackdrop || settingsBackdrop.classList.contains("hidden")) return;
+      showSettingsPage(settingsPopover.dataset.page || "main");
+    });
     document.getElementById("btn-settings-back")?.addEventListener("click", (e) => {
       e.stopPropagation();
       showSettingsPage("main");
@@ -4389,7 +4426,7 @@
     if (typing) return;
     if (e.key === "Escape" && settingsBackdrop && !settingsBackdrop.classList.contains("hidden")) {
       e.preventDefault();
-      if (settingsPopover && settingsPopover.dataset.page && settingsPopover.dataset.page !== "main") showSettingsPage("main");
+      if (settingsPopover && !settingsPopover.classList.contains("set-split") && settingsPopover.dataset.page && settingsPopover.dataset.page !== "main") showSettingsPage("main");
       else hideSettings();
       return;
     }

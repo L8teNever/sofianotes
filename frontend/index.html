@@ -444,7 +444,9 @@
       </button>
     </div>
 
-    <div class="set-page" data-page="main">
+    <div class="set-body">
+    <nav class="set-page set-navcol" data-page="main" aria-label="Bereiche">
+      <div class="set-group">Blatt</div>
       <button type="button" class="set-nav" data-go="paper" data-title="Papier">
         <span class="set-ico"><span class="material-symbols-rounded">grid_4x4</span></span>
         <span class="set-nav-text"><strong>Papier</strong><small id="set-sum-paper">Kariert</small></span>
@@ -455,19 +457,15 @@
         <span class="set-nav-text"><strong>Schreiben &amp; Erkennung</strong><small id="set-sum-write">Formen, Rechnungen, Finger</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
-      <button type="button" class="set-nav" data-go="bar" data-title="Werkzeugleiste">
-        <span class="set-ico"><span class="material-symbols-rounded">tune</span></span>
-        <span class="set-nav-text"><strong>Werkzeugleiste</strong><small id="set-sum-bar">Unten</small></span>
-        <span class="material-symbols-rounded set-chev">chevron_right</span>
-      </button>
       <button type="button" class="set-nav" data-go="notebook" data-title="Notizbuch">
         <span class="set-ico"><span class="material-symbols-rounded">auto_stories</span></span>
         <span class="set-nav-text"><strong>Notizbuch</strong><small id="set-sum-notebook">Seiten, Blättern, Vorlagen</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
-      <button type="button" class="set-nav" data-go="school" data-title="Schul-Timer">
-        <span class="set-ico"><span class="material-symbols-rounded">timer</span></span>
-        <span class="set-nav-text"><strong>Schul-Timer</strong><small id="set-sum-school">Restzeit der Stunde, Hinweise</small></span>
+      <div class="set-group">Ansicht</div>
+      <button type="button" class="set-nav" data-go="bar" data-title="Werkzeugleiste">
+        <span class="set-ico"><span class="material-symbols-rounded">tune</span></span>
+        <span class="set-nav-text"><strong>Werkzeugleiste</strong><small id="set-sum-bar">Unten</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
       <button type="button" class="set-nav" data-go="zoom" data-title="Zoom-Fenster">
@@ -475,11 +473,18 @@
         <span class="set-nav-text"><strong>Zoom-Fenster</strong><small id="set-sum-zoom">1 Kästchen hoch</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
+      <div class="set-group">Schule</div>
+      <button type="button" class="set-nav" data-go="school" data-title="Schul-Timer">
+        <span class="set-ico"><span class="material-symbols-rounded">timer</span></span>
+        <span class="set-nav-text"><strong>Schul-Timer</strong><small id="set-sum-school">Restzeit der Stunde, Hinweise</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
       <button type="button" class="set-nav hidden" id="set-nav-sofia" data-go="sofia" data-title="Sofia">
         <span class="set-ico"><span class="material-symbols-rounded">cloud_upload</span></span>
         <span class="set-nav-text"><strong>Sofia &amp; Lösungen</strong><small id="set-sum-sofia">Automatisch teilen</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
+      <div class="set-group">Daten</div>
       <button type="button" class="set-nav" data-go="import" data-title="Import">
         <span class="set-ico"><span class="material-symbols-rounded">upload_file</span></span>
         <span class="set-nav-text"><strong>Import</strong><small id="set-sum-import">GoodNotes-Ordner als PDFs</small></span>
@@ -490,7 +495,9 @@
         <span class="set-nav-text"><strong>App &amp; Version</strong><small id="set-sum-app">Updates</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
-    </div>
+    </nav>
+    <div class="set-content">
+      <h3 id="set-section-title" class="set-section-title hidden">Papier</h3>
 
     <div class="set-page hidden" data-page="paper">
       <div class="set-sub">Dieses Blatt</div>
@@ -708,6 +715,8 @@
           </button>
         </div>
       </div>
+    </div>
+    </div>
     </div>
   </div>
 </div>
