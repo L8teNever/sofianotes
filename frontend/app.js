@@ -424,7 +424,7 @@
       const along = horiz ? offsetX - nbHold.ox : offsetY - nbHold.oy;
       let lo = -48;
       let hi = 48;
-      if (nbHold.i >= n - 1) lo = -160;
+      if (nbHold.i >= n - 1) lo = -180;
       if (nbHold.i <= 0) hi = 160;
       const c = Math.max(lo, Math.min(hi, along));
       if (horiz) {
@@ -451,8 +451,9 @@
       maxX = Math.max(maxX, r.x + r.w);
       maxY = Math.max(maxY, r.y + r.h);
     }
-    const pulling = !!(panState && !pinchState && !currentStroke);
-    const endRoom = pulling ? 128 : 24;
+    const wheelLive = !!(wheelPan && wheelPan.t && performance.now() - wheelPan.t < 420);
+    const pulling = !!(pagePull || (panState && !pinchState && !currentStroke) || wheelLive);
+    const endRoom = pulling ? 180 : 24;
     shiftBothAxes(minX, minY, maxX, maxY, horiz ? (horiz ? endRoom : 24) : endRoom, pulling);
   }
   // Vertikales Notizbuch: aktuelle Seite in der sichtbaren Breite halten.
@@ -1747,6 +1748,12 @@
     if (pg.board) return pg.id;
     return null;
   }
+  function paintBoardGrid(c, area) {
+    if (!area || gridStyle === "blank") return;
+    const m = c.getTransform();
+    const unit = Math.max(0.001, Math.hypot(m.a, m.b));
+    drawGrid(c, area, unit);
+  }
   function paintBoardPage(c, r) {
     if (!r || !r.page) return;
     const primary = boardPrimaryOf(r.page);
@@ -1761,6 +1768,7 @@
     c.fillStyle = pagePaperColor();
     c.fillRect(r.x, r.y, r.w, r.h);
     if (!tile || layout.empty || !tile.fit) {
+      paintBoardGrid(c, { minX: r.x, minY: r.y, maxX: r.x + r.w, maxY: r.y + r.h });
       c.fillStyle = darkMode ? "#d0bcff" : "rgba(103,80,164,0.85)";
       c.font = "600 36px Inter, sans-serif";
       c.fillText("Board", r.x + 40, r.y + 80);
@@ -1768,8 +1776,16 @@
       return;
     }
     const sc = layout.scale;
-    c.translate(r.x + (r.w - tile.bw * sc) / 2 - tile.minX * sc, r.y + (r.h - tile.bh * sc) / 2 - tile.minY * sc);
+    const tx = r.x + (r.w - tile.bw * sc) / 2 - tile.minX * sc;
+    const ty = r.y + (r.h - tile.bh * sc) / 2 - tile.minY * sc;
+    c.translate(tx, ty);
     c.scale(sc, sc);
+    paintBoardGrid(c, {
+      minX: (r.x - tx) / sc,
+      minY: (r.y - ty) / sc,
+      maxX: (r.x + r.w - tx) / sc,
+      maxY: (r.y + r.h - ty) / sc,
+    });
     for (const st of list) {
       if (st === currentStroke) continue;
       drawStroke(st, c, st.tool === "marker" ? { alpha: 0.38 } : undefined);
@@ -1794,30 +1810,22 @@
     if (!btn) return;
     const inBoard = !!boardEditId;
     const title = inBoard ? "Zurück zum Notizbuch" : "Dokumente";
-    const text = inBoard ? "" : "Dokumente";
-    const ico = inBoard ? "menu_book" : "folder";
-    let changed = btn.title !== title || btn.classList.contains("back-icon") !== inBoard;
+    const ico = inBoard ? "menu_book" : "arrow_back";
+    const changed = btn.title !== title || btn.classList.contains("in-board") !== inBoard;
     btn.title = title;
     btn.setAttribute("aria-label", title);
-    btn.classList.toggle("back-icon", inBoard);
-    if (label) {
-      label.hidden = inBoard;
-      if (label.textContent !== text) label.textContent = text;
-    }
+    btn.classList.add("back-icon");
+    btn.classList.toggle("in-board", inBoard);
+    if (label) label.hidden = true;
     if (icon && icon.textContent !== ico) icon.textContent = ico;
     if (changed) layoutTopBar();
   }
   function syncBoardBar() {
-    const bar = document.getElementById("board-mode-bar");
-    if (!bar) return;
-    const btn = document.getElementById("board-mode-btn");
     const libClosed = libraryBackdrop.classList.contains("hidden");
     const show = !!notebook && libClosed && !!boardEditId;
     const sig = (show ? "1" : "0") + (boardEditId || "");
     if (sig !== boardBarSig) {
       boardBarSig = sig;
-      bar.classList.toggle("hidden", !show);
-      if (show && btn) btn.textContent = "Fertig";
       syncBackButton();
     }
     syncBoardOpenBtn();
@@ -1861,10 +1869,13 @@
     const target = notebook.pages.find((p) => p.id === primary);
     if (!target || !target.board) return;
     if (boardEditId && boardEditId !== primary) {
+      saveBoardView(boardEditId);
       const prev = boardEditId;
       boardEditId = null;
       boardLayoutCache.delete(prev);
       if (window.sofiaSyncBoardSpread) window.sofiaSyncBoardSpread(prev);
+    } else if (!boardEditId && currentBoardId) {
+      saveView(currentBoardId);
     }
     if (typeof closeZoomWindow === "function") closeZoomWindow();
     endZoomLock();
@@ -1873,14 +1884,14 @@
     pendingBoardTap = null;
     const list = strokesForBoard(primary);
     const bounds = boardContentBounds(list);
-    if (bounds) {
+    if (!restoreBoardView(primary) && bounds) {
       const availW = Math.max(200, window.innerWidth - viewLeft - viewRight - 48);
       const availH = Math.max(200, window.innerHeight - 120);
       const sc = clampZoom(Math.min(availW / Math.max(1, bounds.maxX - bounds.minX), availH / Math.max(1, bounds.maxY - bounds.minY), 2));
       scale = sc;
       offsetX = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2 - ((bounds.minX + bounds.maxX) / 2) * sc;
       offsetY = window.innerHeight / 2 - ((bounds.minY + bounds.maxY) / 2) * sc;
-    } else {
+    } else if (!restoreBoardView(primary)) {
       scale = 1;
       offsetX = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2;
       offsetY = window.innerHeight / 2;
@@ -1890,9 +1901,30 @@
     syncBoardBar();
     requestRedraw();
   }
+  function boardViewKey(pageId) {
+    return "sofianotes-boardview:" + (currentPersonId || "anon") + ":" + (currentBoardId || "") + ":" + pageId;
+  }
+  function saveBoardView(pageId) {
+    if (!pageId || !currentBoardId || historyView) return;
+    try {
+      localStorage.setItem(boardViewKey(pageId), JSON.stringify({ s: scale, x: offsetX, y: offsetY }));
+    } catch (err) {}
+  }
+  function restoreBoardView(pageId) {
+    let v = null;
+    try {
+      v = JSON.parse(lsGetRaw(boardViewKey(pageId)) || "null");
+    } catch (err) {}
+    if (!v || !Number.isFinite(v.s) || !Number.isFinite(v.x) || !Number.isFinite(v.y)) return false;
+    scale = clampZoom(v.s);
+    offsetX = v.x;
+    offsetY = v.y;
+    return true;
+  }
   function exitBoardPage(opts) {
     if (!boardEditId) return false;
     const id = boardEditId;
+    saveBoardView(id);
     boardEditId = null;
     pendingBoardTap = null;
     endZoomLock();
@@ -2039,6 +2071,7 @@
     drawLassoAndSelection();
     drawRuler();
     drawHoldHint();
+    drawShapeGuide();
     drawPagePullRing();
     positionTextEditor();
     positionInkChips();
@@ -2836,6 +2869,10 @@
     }
     settingsPopover.dataset.page = wide ? show : asked;
     syncSettingsSummary();
+    if (show === "people" && isAdmin && typeof loadAdminPeople === "function") {
+      loadAdminPeople();
+      if (typeof syncSofiaAdminHint === "function") syncSofiaAdminHint();
+    }
   }
   function syncSettingsSummary() {
     const set = (id, t) => {
@@ -4924,18 +4961,21 @@
     ctx.restore();
   }
 
+  const PAGE_PULL_MS = 1000;
   function drawPagePullRing() {
     if (!pagePull || pagePull.done) return;
-    const progress = Math.min(1, (performance.now() - pagePull.t0) / 1000);
-    const r = 20 / scale;
+    const progress = Math.min(1, (performance.now() - pagePull.t0) / PAGE_PULL_MS);
+    const r = 22 / scale;
     ctx.save();
     ctx.lineCap = "round";
     ctx.lineWidth = 4 / scale;
-    ctx.strokeStyle = "rgba(26,115,232,0.18)";
+    ctx.fillStyle = darkMode ? "rgba(28,27,34,0.88)" : "rgba(255,255,255,0.92)";
     ctx.beginPath();
     ctx.arc(pagePull.wx, pagePull.wy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = darkMode ? "rgba(208,188,255,0.28)" : "rgba(103,80,164,0.22)";
     ctx.stroke();
-    ctx.strokeStyle = "#1A73E8";
+    ctx.strokeStyle = darkMode ? "#d0bcff" : "#6750a4";
     ctx.beginPath();
     ctx.arc(pagePull.wx, pagePull.wy, r, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
     ctx.stroke();
@@ -8868,6 +8908,7 @@
   }
   let pinchState = null; // {initialDist, anchorWorld:{x,y}}
   let panState = null; // {lastX,lastY, pointerId|null}
+  let pullArm = null; // Stift/Maus: Wischen ueber die letzte Seite wird zur Seiten-Geste
   let wheelPan = { vx: 0, vy: 0, t: 0 };
   // Schwung: nach schnellem Wischen laeuft das Blatt weiter und bremst sanft ab
   let fling = null;
@@ -10435,54 +10476,148 @@
     return { x: a.x, y: b.y };
   }
 
+  let shapeGuide = null;
+  function shapeSnapTol(w, h) {
+    const span = Math.max(12, Math.min(Math.abs(w), Math.abs(h)));
+    return Math.max(8 / Math.max(scale, 0.25), span * 0.075);
+  }
   function fitObjectShape(kind, a, b, pressure) {
     const p = pressure == null ? 0.5 : pressure;
-    const minX = Math.min(a.x, b.x);
-    const maxX = Math.max(a.x, b.x);
-    const minY = Math.min(a.y, b.y);
-    const maxY = Math.max(a.y, b.y);
-    const w = Math.max(2, maxX - minX);
-    const h = Math.max(2, maxY - minY);
+    let w = b.x - a.x;
+    let h = b.y - a.y;
+    if (Math.abs(w) < 2) w = w < 0 ? -2 : 2;
+    if (Math.abs(h) < 2) h = h < 0 ? -2 : 2;
+    const tol = shapeSnapTol(w, h);
     if (kind === "rect") {
+      const square = Math.abs(Math.abs(w) - Math.abs(h)) <= tol;
+      if (square) {
+        const side = Math.max(Math.abs(w), Math.abs(h));
+        w = Math.sign(w) * side;
+        h = Math.sign(h) * side;
+      }
+      const x2 = a.x + w;
+      const y2 = a.y + h;
       return {
         type: "rectangle",
+        guide: square ? { kind: "square", x: a.x, y: a.y, w, h } : null,
         points: [
-          { x: minX, y: minY, p },
-          { x: maxX, y: minY, p },
-          { x: maxX, y: maxY, p },
-          { x: minX, y: maxY, p },
-          { x: minX, y: minY, p },
+          { x: a.x, y: a.y, p },
+          { x: x2, y: a.y, p },
+          { x: x2, y: y2, p },
+          { x: a.x, y: y2, p },
+          { x: a.x, y: a.y, p },
         ],
       };
     }
     if (kind === "circle") {
-      const side = Math.max(w, h);
-      const sx = b.x >= a.x ? 1 : -1;
-      const sy = b.y >= a.y ? 1 : -1;
-      const cx = a.x + (sx * side) / 2;
-      const cy = a.y + (sy * side) / 2;
-      const r = side / 2;
-      return { type: "circle", points: makeEllipsePoints(cx, cy, r, r, p, 96) };
+      const round = Math.abs(Math.abs(w) - Math.abs(h)) <= tol;
+      if (round) {
+        const side = Math.max(Math.abs(w), Math.abs(h));
+        w = Math.sign(w) * side;
+        h = Math.sign(h) * side;
+      }
+      const cx = a.x + w / 2;
+      const cy = a.y + h / 2;
+      const rx = Math.abs(w) / 2;
+      const ry = Math.abs(h) / 2;
+      return {
+        type: round ? "circle" : "ellipse",
+        guide: round ? { kind: "circle", cx, cy, r: rx } : null,
+        points: makeEllipsePoints(cx, cy, rx, ry, p, 96),
+      };
     }
     if (kind === "triangle") {
+      const aw = Math.abs(w);
+      const ah = Math.abs(h);
+      let right = Math.abs(ah - aw / 2) <= tol;
+      if (right) h = Math.sign(h) * (aw / 2);
+      const iso = true;
+      const apex = { x: a.x + w / 2, y: a.y };
+      const left = { x: a.x, y: a.y + h };
+      const rightPt = { x: a.x + w, y: a.y + h };
       return {
         type: "triangle",
+        guide: { kind: "triangle", apex, left, right: rightPt, rightAngle: right, iso },
         points: [
-          { x: (minX + maxX) / 2, y: minY, p },
-          { x: maxX, y: maxY, p },
-          { x: minX, y: maxY, p },
-          { x: (minX + maxX) / 2, y: minY, p },
+          { x: apex.x, y: apex.y, p },
+          { x: rightPt.x, y: rightPt.y, p },
+          { x: left.x, y: left.y, p },
+          { x: apex.x, y: apex.y, p },
         ],
       };
     }
     const end = snapCardinalFrom(a, b);
     return {
       type: kind === "arrow" ? "arrow" : "line",
+      guide: null,
       points: [
         { x: a.x, y: a.y, p },
         { x: end.x, y: end.y, p },
       ],
     };
+  }
+
+  function drawShapeGuide() {
+    const g = shapeGuide;
+    if (!g || !currentStroke || !currentStroke.objectKind) return;
+    const ink = darkMode ? "rgba(208,188,255,0.95)" : "rgba(103,80,164,0.95)";
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = ink;
+    ctx.fillStyle = ink;
+    ctx.lineWidth = 1.6 / scale;
+    const tick = (x, y, nx, ny) => {
+      const len = 7 / scale;
+      ctx.beginPath();
+      ctx.moveTo(x - nx * len, y - ny * len);
+      ctx.lineTo(x + nx * len, y + ny * len);
+      ctx.stroke();
+    };
+    if (g.kind === "square") {
+      const x0 = Math.min(g.x, g.x + g.w);
+      const y0 = Math.min(g.y, g.y + g.h);
+      const side = Math.abs(g.w);
+      ctx.setLineDash([5 / scale, 4 / scale]);
+      ctx.strokeRect(x0, y0, side, side);
+      ctx.setLineDash([]);
+      tick(x0 + side / 2, y0, 0, 1);
+      tick(x0, y0 + side / 2, 1, 0);
+    } else if (g.kind === "circle") {
+      ctx.setLineDash([5 / scale, 4 / scale]);
+      ctx.beginPath();
+      ctx.moveTo(g.cx - g.r, g.cy);
+      ctx.lineTo(g.cx + g.r, g.cy);
+      ctx.moveTo(g.cx, g.cy - g.r);
+      ctx.lineTo(g.cx, g.cy + g.r);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(g.cx, g.cy, 2.2 / scale, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (g.kind === "triangle") {
+      const mid = (p, q) => ({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+      const mark = (p, q) => {
+        const m = mid(p, q);
+        const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+        tick(m.x, m.y, -(q.y - p.y) / len, (q.x - p.x) / len);
+      };
+      if (g.iso) {
+        mark(g.apex, g.left);
+        mark(g.apex, g.right);
+      }
+      if (g.rightAngle) {
+        const s = 12 / scale;
+        const sx = Math.sign(g.left.x - g.apex.x) || 1;
+        const sy = Math.sign(g.left.y - g.apex.y) || 1;
+        ctx.beginPath();
+        ctx.moveTo(g.apex.x + sx * s, g.apex.y);
+        ctx.lineTo(g.apex.x + sx * s, g.apex.y + sy * s);
+        ctx.lineTo(g.apex.x, g.apex.y + sy * s);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   function applyObjectPreview(wx, wy, pressure) {
@@ -10493,6 +10628,7 @@
     s.points = built.points;
     s.unsent = [];
     s.shape = built.type;
+    shapeGuide = built.guide || null;
     s.extra = Object.assign({}, s.extra || {}, {
       shape: built.type,
       dash: objectDash || undefined,
@@ -10706,6 +10842,7 @@
   function endStroke() {
     if (!currentStroke) return;
     clearHoldTimer();
+    shapeGuide = null;
     // Durchstreichen loescht - aber nicht bei Lineal-Strichen (die sind immer gerade und
     // laufen oft absichtlich an anderer Tinte entlang)
     if (currentStroke.tool === "pen" && !currentStroke.locked && !currentStroke.rulerEdge && !currentStroke.objectKind) {
@@ -10754,6 +10891,7 @@
         wsSend({ type: "stroke_replace", strokeId: currentStroke.id, points: currentStroke.points, extra: currentStroke.extra });
       }
     }
+    shapeGuide = null;
     wsSend({ type: "stroke_end", strokeId: currentStroke.id, extra: currentStroke.extra || null });
     tagShape(currentStroke);
     currentStroke.bbox = makeBBox(currentStroke.points);
@@ -10770,6 +10908,7 @@
   function abortStroke() {
     if (!currentStroke) return;
     clearHoldTimer();
+    shapeGuide = null;
     wsSend({ type: "stroke_abort", strokeId: currentStroke.id });
     currentStroke = null;
     requestRedraw();
@@ -11110,6 +11249,8 @@
       if (touchPointers.size >= 2 && zoomBoxDrag && zoomBoxDrag.canvas) zoomBoxDrag = null;
       if (touchPointers.size === 2) {
         tapState = null;
+        endNbHold();
+        if (window.sofiaPagePullCancel) window.sofiaPagePullCancel({ snap: false });
         if (currentStroke) abortStroke();
         if (dragState) cancelSelectionDrag();
         pendingShapeDrag = null;
@@ -11146,6 +11287,9 @@
           return;
         }
         if (fingerDrawEnabled && !pinchState && !boardPageAt(screenToWorld(e.clientX, e.clientY))) {
+          if (window.sofiaArmPagePull && window.sofiaArmPagePull()) {
+            pullArm = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+          }
           dispatchPrimaryDown(e);
           return;
         }
@@ -11164,6 +11308,7 @@
             return;
           }
           panState = { lastX: e.clientX, lastY: e.clientY };
+          if (notebook && !boardEditId && !notebookZoomedIn()) beginNbHold();
           if (!palm) tapState = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
         }
         if (!fingerDrawEnabled) armPasteHold(e, screenToWorld(e.clientX, e.clientY));
@@ -11178,7 +11323,11 @@
     }
     if (e.pointerType === "mouse" && (spacePressed || e.button === 1)) {
       panState = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
+      if (notebook && !boardEditId && !notebookZoomedIn()) beginNbHold();
       return;
+    }
+    if ((e.pointerType === "pen" || e.pointerType === "mouse") && window.sofiaArmPagePull && window.sofiaArmPagePull()) {
+      pullArm = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
     }
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (currentTool !== "select" && zoomFrameHit(e.clientX, e.clientY)) {
@@ -11215,6 +11364,33 @@
       return;
     }
 
+    if (pullArm && pullArm.pointerId === e.pointerId && currentStroke && currentStroke.pointerId === e.pointerId && notebook && !boardEditId) {
+      const dx = e.clientX - pullArm.x;
+      const dy = e.clientY - pullArm.y;
+      const horiz = notebook.layout === "horizontal";
+      const along = horiz ? -dx : -dy;
+      const cross = horiz ? Math.abs(dy) : Math.abs(dx);
+      const fresh = performance.now() - pullArm.t < 480;
+      if (fresh && along > 36 && along > cross * 1.35 && currentStroke.points.length < 28) {
+        abortStroke();
+        pullArm = null;
+        beginNbHold();
+        panState = {
+          lastX: e.clientX,
+          lastY: e.clientY,
+          pointerId: e.pointerId,
+          pull: true,
+          t: performance.now(),
+          vx: 0,
+          vy: 0,
+        };
+        offsetX += dx;
+        offsetY += dy;
+        requestRedraw();
+        return;
+      }
+      if (!fresh || (cross > 24 && cross > along)) pullArm = null;
+    }
     if (e.pointerType === "touch") {
       touchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (tapState && tapState.pointerId === e.pointerId && Math.hypot(e.clientX - tapState.x, e.clientY - tapState.y) > TAP_MAX_MOVE_PX) {
@@ -11424,6 +11600,7 @@
     const consumed = pasteHoldConsumed;
     clearPasteHold();
     activePointers.delete(e.pointerId);
+    if (pullArm && pullArm.pointerId === e.pointerId) pullArm = null;
     if (zoomBoxDrag && zoomBoxDrag.canvas && zoomBoxDrag.pointerId === e.pointerId) {
       zoomBoxDrag = null;
       if (zoomWin) zoomWin.y = snapZoomY(zoomWin.y);
@@ -11477,6 +11654,7 @@
         } else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
         else if (!panState && endedTwoFinger && endedTwoFinger.mode === "pinch" && window.sofiaPageSnap) window.sofiaPageSnap({});
         panState = null;
+        endNbHold();
         if (!notebookZoomedIn()) endZoomLock();
       }
       if (tapState && tapState.pointerId === e.pointerId) {
@@ -11508,11 +11686,14 @@
       const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
       const snapPan = panState;
       panState = null;
+      pullArm = null;
       if (notebookZoomedIn() && !boardEditId) {
         endZoomLock();
+        endNbHold();
         return;
       }
       if (!addedPage) {
+        endNbHold();
         if (notebook && !boardEditId && window.sofiaPageSnap && window.sofiaPageSnap(snapPan || {})) return;
         if (e.type === "pointerup") startFling(snapPan);
       }
@@ -11647,6 +11828,7 @@
           requestRedraw();
           return;
         }
+        beginNbHold();
         offsetX += mx;
         offsetY += my;
         const now = performance.now();
@@ -11657,10 +11839,20 @@
         requestRedraw();
         clearTimeout(wheelSnapTimer);
         wheelSnapTimer = setTimeout(() => {
+          if (pagePull) return;
+          const past = window.sofiaPullPast ? window.sofiaPullPast() : 0;
+          const speed = Math.hypot(wheelPan.vx || 0, wheelPan.vy || 0);
+          const horiz = notebook && notebook.layout === "horizontal";
+          const toward = horiz ? -(wheelPan.vx || 0) : -(wheelPan.vy || 0);
+          if (past >= 52 && toward <= 0.9 && speed < 1.15 && window.sofiaPagePullArm) {
+            window.sofiaPagePullArm("wheel");
+            return;
+          }
           const ps = { vx: wheelPan.vx, vy: wheelPan.vy, t: wheelPan.t };
           wheelPan = { vx: 0, vy: 0, t: 0 };
+          endNbHold();
           if (window.sofiaPageSnap) window.sofiaPageSnap(ps);
-        }, 140);
+        }, 180);
         return;
       }
       const factor = Math.exp(-e.deltaY * 0.0015);
@@ -12825,13 +13017,14 @@
     hwPanel.classList.toggle("dock-right", docked && hwLayout.side !== "left");
     // Seite wechseln geht per Ziehen der Kopfzeile auf die andere Seite - kein eigener Knopf
     document.getElementById("hw-panel-side").classList.add("hidden");
-    document.getElementById("hw-panel-min").classList.toggle("hidden", docked);
+    document.getElementById("hw-panel-min").classList.remove("hidden");
     const modeBtn = document.getElementById("hw-panel-mode");
     modeBtn.title = docked ? "Als schwebendes Fenster lösen" : "Als Seitenleiste andocken";
     modeBtn.firstElementChild.textContent = docked ? "picture_in_picture" : hwLayout.side === "left" ? "dock_to_left" : "dock_to_right";
     if (docked) {
       const w = hwDockWidth();
-      Object.assign(hwPanel.style, { top: "0px", height: window.innerHeight + "px", width: w + "px", left: hwLayout.side === "left" ? "0px" : window.innerWidth - w + "px" });
+      const inset = 12;
+      Object.assign(hwPanel.style, { top: inset + "px", height: Math.max(200, window.innerHeight - inset * 2) + "px", width: w + "px", left: hwLayout.side === "left" ? "0px" : window.innerWidth - w + "px" });
       setViewInsets(hwLayout.side === "left" ? w : 0, hwLayout.side === "left" ? 0 : w);
     } else {
       setViewInsets(0, 0);
@@ -14082,7 +14275,7 @@
     return "sofianotes-view:" + (currentPersonId || "anon") + ":" + bid;
   }
   function saveView(bid) {
-    if (!bid || historyView) return;
+    if (!bid || historyView || boardEditId) return;
     try {
       const v = { s: scale, x: offsetX, y: offsetY, w: window.innerWidth, h: window.innerHeight, l: viewLeft };
       if (notebook && window.sofiaCurrentPage) v.page = window.sofiaCurrentPage();
@@ -14119,11 +14312,16 @@
     viewRestoreFor = null;
     return restoreView(bid);
   };
+  function saveOpenView() {
+    if (!currentBoardId || !libraryBackdrop.classList.contains("hidden")) return;
+    if (boardEditId) saveBoardView(boardEditId);
+    else saveView(currentBoardId);
+  }
   setInterval(() => {
-    if (currentBoardId && libraryBackdrop.classList.contains("hidden") && !document.hidden) saveView(currentBoardId);
+    if (!document.hidden) saveOpenView();
   }, 3000);
-  window.addEventListener("pagehide", () => currentBoardId && saveView(currentBoardId));
-  document.addEventListener("visibilitychange", () => document.hidden && currentBoardId && saveView(currentBoardId));
+  window.addEventListener("pagehide", () => saveOpenView());
+  document.addEventListener("visibilitychange", () => document.hidden && saveOpenView());
   const undoHistory = new Map(); // boardId -> {undo, redo}
   function stashUndo(bid) {
     if (!bid) return;
@@ -14868,14 +15066,12 @@
   }
 
   // ---- Admin: Personen + Mail-Adressen verwalten -----------------------
-  const adminBackdrop = document.getElementById("admin-backdrop");
   const adminPeopleListEl = document.getElementById("admin-people-list");
 
   function openAdminPanel() {
     if (!isAdmin) return;
-    adminBackdrop.classList.remove("hidden");
-    loadAdminPeople();
-    syncSofiaAdminHint();
+    openSettings();
+    showSettingsPage("people");
   }
   // Kommen die Personen aus Sofia, ist hier nur Ansehen + "jetzt abgleichen" moeglich
   async function syncSofiaAdminHint() {
@@ -14886,7 +15082,7 @@
       st = null;
     }
     const on = !!(st && st.enabled);
-    adminBackdrop.classList.toggle("from-sofia", on);
+    document.querySelector('.set-page[data-page="people"]')?.classList.toggle("from-sofia", on);
     let hint = document.getElementById("admin-sofia-hint");
     if (!on) {
       if (hint) hint.remove();
@@ -14922,7 +15118,7 @@
       : "Neue Personen und Fächer in Sofia erscheinen hier automatisch · zuletzt " + when + " · " + (st.people || 0) + " Personen, " + (st.subjects || 0) + " Fächer";
   }
   function closeAdminPanel() {
-    adminBackdrop.classList.add("hidden");
+    if (settingsPopover && settingsPopover.dataset.page === "people") showSettingsPage("main");
   }
 
   function escapeHtml(s) {
@@ -15041,9 +15237,6 @@
   }
 
   document.getElementById("btn-admin-close")?.addEventListener("click", closeAdminPanel);
-  adminBackdrop?.addEventListener("click", (e) => {
-    if (e.target === adminBackdrop) closeAdminPanel();
-  });
   document.getElementById("btn-admin-new-person")?.addEventListener("click", async (e) => {
     const input = document.getElementById("admin-new-person-name");
     const name = input.value.trim();
@@ -15062,13 +15255,6 @@
 
   document.getElementById("btn-open-library")?.addEventListener("click", () => showLibrary());
   // grosser Zurueck-Pfeil oben links: eine Ebene zurueck (vom Blatt in den Ordner)
-  document.getElementById("board-mode-btn")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (boardEditId) return exitBoardPage();
-    const i = window.sofiaCurrentPage ? window.sofiaCurrentPage() : 0;
-    const pg = notebook && notebook.pages[i];
-    if (pg && pg.board) enterBoardPage(pg.id);
-  });
   document.getElementById("btn-back")?.addEventListener("click", (e) => {
     e.stopPropagation();
     if (window.sofiaExitBoardPage && window.sofiaExitBoardPage()) return;
@@ -15107,7 +15293,10 @@
   });
   applyBackMode();
   document.getElementById("btn-library-close")?.addEventListener("click", () => hideLibrary());
-  document.getElementById("btn-library-switch")?.addEventListener("click", openAdminPanel);
+  document.getElementById("set-nav-people")?.addEventListener("click", () => {
+    if (!isAdmin) return;
+    showSettingsPage("people");
+  });
   const libSearchRow = document.getElementById("lib-search-row");
   const libSearchInput = document.getElementById("lib-search-input");
   document.getElementById("btn-library-search")?.addEventListener("click", () => {
@@ -16022,7 +16211,7 @@
     // Seite fuer Seite: nach dem Wischen zur naechsten/vorigen Seite einrasten.
     // Rueckgabe false = normal weiterscrollen (z. B. wenn hineingezoomt).
     window.sofiaPageSnap = (ps) => {
-      if (boardEditId) return false;
+      if (boardEditId || pagePull) return false;
       if (!notebook || !nbPaging()) return false;
       const cur = currentPage();
       const fit = viewFor(cur);
@@ -16470,9 +16659,9 @@
 
     // Letzte Seite: am Ende weiterziehen und ~1s halten (Ladekreis) legt eine Seite an.
     // Finger/Maus-Verschieben, nicht Stift-Zeichnen, nicht Pinch-Zoom.
-    const PULL_MS = 1000;
+    const PULL_MS = PAGE_PULL_MS;
     const PULL_START_PX = 52;
-    const PULL_KEEP_PX = 22;
+    const PULL_KEEP_PX = 28;
     function pullPastLastPx() {
       if (!notebook || !currentBoardId) return 0;
       const n = notebook.pages.length;
@@ -16501,18 +16690,43 @@
         ? { wx: last.x + last.w + gap, wy: last.y + last.h / 2 }
         : { wx: last.x + last.w / 2, wy: last.y + last.h + gap };
     }
-    function cancelPagePull() {
+    function cancelPagePull(opts) {
       if (!pagePull) return;
+      const wheel = !!pagePull.wheel;
       pagePull = null;
       requestRedraw();
+      if (wheel && (!opts || opts.snap !== false) && !panState) {
+        endNbHold();
+        if (window.sofiaPageSnap) window.sofiaPageSnap({});
+      }
     }
     function completePagePull() {
       if (!pagePull || pagePull.done) return;
       if (myRole === "view") return cancelPagePull();
       pagePull.done = true;
       pagePull = null;
+      endNbHold();
+      if (wheelSnapTimer) clearTimeout(wheelSnapTimer);
       addPages(notebook.pages.length - 1, [templatePage()]);
     }
+    function armPagePull(via) {
+      if (pagePull || !notebook) return;
+      const pos = pagePullRingPos();
+      pagePull = { t0: performance.now(), wx: pos.wx, wy: pos.wy, wheel: via === "wheel" };
+      pagePullHint();
+      requestRedraw();
+    }
+    window.sofiaPullPast = () => pullPastLastPx();
+    window.sofiaPagePullArm = armPagePull;
+    window.sofiaArmPagePull = () => {
+      if (!notebook || boardEditId || viewOnly || historyView || myRole === "view") return false;
+      const n = notebook.pages.length;
+      if (!n) return false;
+      const fit = viewFor(n - 1);
+      if (!fit || scale > fit.scale * 1.08) return false;
+      const [ga] = groupOf(n - 1);
+      return currentPage() >= ga;
+    };
     function pagePullHint() {
       try {
         if (localStorage.getItem("sofianotes-page-pull-hint") === "1") return;
@@ -16522,16 +16736,19 @@
     }
     window.sofiaPagePullCancel = cancelPagePull;
     window.sofiaPagePullTick = () => {
-      if (boardEditId) return cancelPagePull();
-      if (!notebook || viewOnly || historyView || myRole === "view") return cancelPagePull();
-      if (pinchState || currentStroke || penIsDown() || rulerGesture || touchPointers.size > 1) return cancelPagePull();
-      if (!panState) {
-        if (pagePull && !pagePull.done) cancelPagePull();
+      if (boardEditId) return cancelPagePull({ snap: false });
+      if (!notebook || viewOnly || historyView || myRole === "view") return cancelPagePull({ snap: false });
+      const pullPan = !!(panState && panState.pull);
+      if (pinchState || currentStroke || rulerGesture || touchPointers.size > 1) return cancelPagePull({ snap: false });
+      if (penIsDown() && !pullPan) return cancelPagePull({ snap: false });
+      const wheelHold = !!(pagePull && pagePull.wheel);
+      if (!panState && !wheelHold) {
+        if (pagePull && !pagePull.done) cancelPagePull({ snap: false });
         return;
       }
       const past = pullPastLastPx();
       if (pagePull) {
-        if (past < PULL_KEEP_PX) return cancelPagePull();
+        if (past < PULL_KEEP_PX) return cancelPagePull(wheelHold ? undefined : { snap: false });
         const pos = pagePullRingPos();
         pagePull.wx = pos.wx;
         pagePull.wy = pos.wy;
@@ -16539,10 +16756,7 @@
         return;
       }
       if (past < PULL_START_PX) return;
-      const pos = pagePullRingPos();
-      pagePull = { t0: performance.now(), wx: pos.wx, wy: pos.wy };
-      pagePullHint();
-      requestRedraw();
+      armPagePull("pointer");
     };
     window.sofiaPagePullEnd = () => {
       if (!pagePull) return false;
@@ -16667,8 +16881,8 @@
         const i = +cv.dataset.index;
         const r = rects[i];
         if (!r) return;
-        const maxW = 18;
-        const maxH = 24;
+        const maxW = 28;
+        const maxH = 36;
         const sc = Math.min(maxW / r.w, maxH / r.h);
         const w = Math.max(8, Math.round(r.w * sc));
         renderThumb(cv, r, i, { cache: false, w });
@@ -16799,7 +17013,7 @@
           boardSig = (boardSig * 33 + Math.round(b.minX + b.maxX * 3 + b.minY * 5 + ((st.points && st.points.length) || 0))) % 2147483647;
         }
       }
-      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, pg.board ? 1 : 0, pg.boardOf || "", pg.boardIndex || 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0, boardSig, darkMode ? "d" : "l"].join("|");
+      return [pg.mediaId || "", pg.paper || "", pg.rot || 0, pg.board ? 1 : 0, pg.boardOf || "", pg.boardIndex || 0, r.w, r.h, bk ? bk.list.length : 0, bk ? bk.sig : 0, boardSig, darkMode ? "d" : "l", gridStyle].join("|");
     }
     function thumbKey(r, i) {
       return (currentBoardId || "") + ":" + (r.id || "i" + i);
@@ -19452,7 +19666,7 @@
     }
     currentPersonId = me.id;
     isAdmin = !!me.isAdmin;
-    document.getElementById("btn-library-switch")?.classList.toggle("hidden", !isAdmin);
+    document.getElementById("set-nav-people")?.classList.toggle("hidden", !isAdmin);
     localStorage.setItem("sofianotes-person", currentPersonId);
     const startParams = new URLSearchParams(location.search);
     currentFolderId = startParams.get("folder") || null;
