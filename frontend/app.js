@@ -246,20 +246,6 @@
     ctx.lineTo(r.x + NB_MARGIN, r.y + r.h);
     ctx.stroke();
   }
-  // Sichtbare Seitengruppe (eine Seite, bzw. Doppelseite) in Weltkoordinaten
-  function pageGroupXBounds() {
-    const rects = pageRects(notebook);
-    if (!rects.length) return null;
-    let i = 0;
-    if (typeof window.sofiaCurrentPage === "function") i = window.sofiaCurrentPage();
-    i = Math.max(0, Math.min(rects.length - 1, i | 0));
-    if (window.sofiaNbSpread && window.sofiaNbSpread()) {
-      const a = i - (i % 2);
-      const b = Math.min(rects.length - 1, a + 1);
-      return { x0: Math.min(rects[a].x, rects[b].x), x1: Math.max(rects[a].x + rects[a].w, rects[b].x + rects[b].w) };
-    }
-    return { x0: rects[i].x, x1: rects[i].x + rects[i].w };
-  }
   function viewShiftToFit(lo, hi, a, b, extra, pulling) {
     const m = 24;
     if (!pulling && b - a <= hi - lo - m) return (lo + hi) / 2 - (a + b) / 2;
@@ -267,60 +253,167 @@
     if (b < hi - extra) return hi - extra - b;
     return 0;
   }
-  // Vertikales Notizbuch: aktuelle Seite in der sichtbaren Breite halten (nicht die
-  // Bounding-Box aller Seiten — sonst sitzt eine schmalere Seite nach links).
-  function alignNotebookX(pulling) {
-    if (!notebook || notebook.layout === "horizontal") return;
-    const g = pageGroupXBounds();
+  function pageGroupBounds() {
+    const rects = pageRects(notebook);
+    if (!rects.length) return null;
+    let i = 0;
+    if (typeof window.sofiaCurrentPage === "function") i = window.sofiaCurrentPage();
+    i = Math.max(0, Math.min(rects.length - 1, i | 0));
+    let a = i;
+    let b = i;
+    if (window.sofiaNbSpread && window.sofiaNbSpread()) {
+      a = i - (i % 2);
+      b = Math.min(rects.length - 1, a + 1);
+    }
+    return {
+      i,
+      x0: Math.min(rects[a].x, rects[b].x),
+      y0: Math.min(rects[a].y, rects[b].y),
+      x1: Math.max(rects[a].x + rects[a].w, rects[b].x + rects[b].w),
+      y1: Math.max(rects[a].y + rects[a].h, rects[b].y + rects[b].h),
+    };
+  }
+  function notebookPagingOn() {
+    return !window.sofiaNbPaging || window.sofiaNbPaging();
+  }
+  function notebookZoomedIn() {
+    const fitSc = window.sofiaFitScale && window.sofiaFitScale();
+    return !!(fitSc && scale > fitSc * 1.08);
+  }
+  // Reingezoomt: die Seite, auf der die Geste begann. Nicht mitwandern, sonst
+  // rutscht die Ansicht ins Leere und ein spaeteres Einrasten holt sie zurueck.
+  let zoomLock = null;
+  function beginZoomLock() {
+    if (!notebook || !notebookZoomedIn()) return;
+    if (zoomLock) return;
+    const g = pageGroupBounds();
+    if (g) zoomLock = { x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1 };
+  }
+  function endZoomLock() {
+    zoomLock = null;
+  }
+  function clampAxisInside(lo, hi, a, b) {
+    if (b - a <= hi - lo) return (lo + hi) / 2 - (a + b) / 2;
+    if (a > lo) return lo - a;
+    if (b < hi) return hi - b;
+    return 0;
+  }
+  function clampZoomLock() {
+    if (!notebook || !notebookZoomedIn()) return;
+    const g = zoomLock || pageGroupBounds();
     if (!g) return;
     const left = viewLeft;
     const right = window.innerWidth - viewRight;
-    offsetX += viewShiftToFit(left, right, g.x0 * scale + offsetX, g.x1 * scale + offsetX, 24, !!pulling);
+    const top = 76;
+    const bottom = window.innerHeight - 20;
+    offsetX += clampAxisInside(left, right, g.x0 * scale + offsetX, g.x1 * scale + offsetX);
+    offsetY += clampAxisInside(top, bottom, g.y0 * scale + offsetY, g.y1 * scale + offsetY);
   }
-  // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
-  function clampNotebookView() {
-    const animBusy = pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy());
-    if (animBusy) return;
+  // Seite, an der eine Blaetter-Geste angefangen hat. Die Ansicht bleibt daran,
+  // statt frei in die Luecke zu rutschen und danach zurueckzuspringen.
+  let nbHold = null;
+  function beginNbHold() {
+    if (nbHold || !notebook || pinchState || !notebookPagingOn() || notebookZoomedIn()) return;
+    const i = window.sofiaCurrentPage ? window.sofiaCurrentPage() : 0;
+    const v = window.sofiaViewFor && window.sofiaViewFor(i);
+    if (!v) return;
+    nbHold = { i, ox: v.offsetX, oy: v.offsetY };
+  }
+  function endNbHold() {
+    nbHold = null;
+  }
+  function shiftBothAxes(x0, y0, x1, y1, extra, pulling) {
+    const left = viewLeft;
+    const right = window.innerWidth - viewRight;
+    const top = 76;
+    const bottom = window.innerHeight - 20;
+    offsetX += viewShiftToFit(left, right, x0 * scale + offsetX, x1 * scale + offsetX, extra, pulling);
+    offsetY += viewShiftToFit(top, bottom, y0 * scale + offsetY, y1 * scale + offsetY, extra, pulling);
+  }
+  // Seite fuer Seite: quer exakt auf der Seite, laengs nur ein kleines Mitziehen.
+  // Reingezoomt oder durchgehend: Raender, kein Wegdriften mit spaetem Ruecksprung.
+  function holdNotebookInPages() {
+    if (!notebook || pinchState) return;
+    if (window.sofiaViewBusy && window.sofiaViewBusy()) return;
+    const horiz = notebook.layout === "horizontal";
+    if (notebookPagingOn() && !notebookZoomedIn() && nbHold) {
+      const n = notebook.pages.length;
+      const along = horiz ? offsetX - nbHold.ox : offsetY - nbHold.oy;
+      let lo = -48;
+      let hi = 48;
+      if (nbHold.i >= n - 1) lo = -160;
+      if (nbHold.i <= 0) hi = 160;
+      const c = Math.max(lo, Math.min(hi, along));
+      if (horiz) {
+        offsetX = nbHold.ox + c;
+        offsetY = nbHold.oy;
+      } else {
+        offsetY = nbHold.oy + c;
+        offsetX = nbHold.ox;
+      }
+      return;
+    }
+    if (notebookPagingOn()) {
+      const g = pageGroupBounds();
+      if (!g) return;
+      shiftBothAxes(g.x0, g.y0, g.x1, g.y1, 8, false);
+      return;
+    }
     const rects = pageRects(notebook);
     if (!rects.length) return;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, maxW = 0, maxH = 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const r of rects) {
       minX = Math.min(minX, r.x);
       minY = Math.min(minY, r.y);
       maxX = Math.max(maxX, r.x + r.w);
       maxY = Math.max(maxY, r.y + r.h);
-      maxW = Math.max(maxW, r.w);
-      maxH = Math.max(maxH, r.h);
     }
-    const left = viewLeft;
-    const right = window.innerWidth - viewRight;
-    const top = 76;
-    const bottom = window.innerHeight - 20;
-    const availW = right - left;
-    const availH = bottom - top;
-    const panning = !!panState;
-    const wheelBusy = !!(wheelPan && wheelPan.t && performance.now() - wheelPan.t < 180);
-    // hoechstens so weit raus, dass eine ganze Seite drauf passt
-    const spreadW = window.sofiaNbSpread && window.sofiaNbSpread() ? maxW * 2 + PAGE_GAP : maxW;
-    const minScale = Math.max(MIN_ZOOM, Math.min(availW / spreadW, availH / maxH) * 0.92);
-    if (!panning && !wheelBusy && scale < minScale) {
-      const c = screenToWorld(left + availW / 2, top + availH / 2);
-      scale = minScale;
-      offsetX = left + availW / 2 - c.x * scale;
-      offsetY = top + availH / 2 - c.y * scale;
-    }
-    const horiz = notebook.layout === "horizontal";
     const pulling = !!(panState && !pinchState && !currentStroke);
     const endRoom = pulling ? 128 : 24;
-    if (horiz) {
-      if (!panning && !wheelBusy) {
-        offsetX += viewShiftToFit(left, right, minX * scale + offsetX, maxX * scale + offsetX, endRoom, pulling);
-      }
-    } else {
-      alignNotebookX(false);
+    shiftBothAxes(minX, minY, maxX, maxY, horiz ? (horiz ? endRoom : 24) : endRoom, pulling);
+  }
+  // Vertikales Notizbuch: aktuelle Seite in der sichtbaren Breite halten.
+  function alignNotebookX() {
+    if (!notebook || notebook.layout === "horizontal") return;
+    if (nbHold && notebookPagingOn() && !notebookZoomedIn()) {
+      offsetX = nbHold.ox;
+      return;
     }
-    if (panning || wheelBusy) return;
-    offsetY += viewShiftToFit(top, bottom, minY * scale + offsetY, maxY * scale + offsetY, horiz ? 24 : endRoom, pulling);
+    const g = pageGroupBounds();
+    if (!g) return;
+    const left = viewLeft;
+    const right = window.innerWidth - viewRight;
+    offsetX += viewShiftToFit(left, right, g.x0 * scale + offsetX, g.x1 * scale + offsetX, 8, false);
+  }
+  // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
+  function clampNotebookView() {
+    if (window.sofiaViewBusy && window.sofiaViewBusy()) return;
+    if (notebookZoomedIn()) {
+      clampZoomLock();
+      return;
+    }
+    if (pinchState) return;
+    const rects = pageRects(notebook);
+    if (!rects.length) return;
+    const moving = !!(panState || (fling && !fling.stop) || (wheelPan && wheelPan.t && performance.now() - wheelPan.t < 220));
+    if (!moving) {
+      let maxW = 0, maxH = 0;
+      for (const r of rects) {
+        maxW = Math.max(maxW, r.w);
+        maxH = Math.max(maxH, r.h);
+      }
+      const availW = window.innerWidth - viewLeft - viewRight;
+      const availH = window.innerHeight - 76 - 20;
+      const spreadW = window.sofiaNbSpread && window.sofiaNbSpread() ? maxW * 2 + PAGE_GAP : maxW;
+      const minScale = Math.max(MIN_ZOOM, Math.min(availW / spreadW, availH / maxH) * 0.92);
+      if (scale < minScale) {
+        const c = screenToWorld(viewLeft + availW / 2, 76 + availH / 2);
+        scale = minScale;
+        offsetX = viewLeft + availW / 2 - c.x * scale;
+        offsetY = 76 + availH / 2 - c.y * scale;
+      }
+    }
+    holdNotebookInPages();
   }
 
   // Seiten-Hintergrundbild, ggf. in Vierteldrehungen gedreht (page.rot = 0..3, im Uhrzeigersinn)
@@ -7061,6 +7154,7 @@
     else if (zoomWin.x < a.x) dx = a.x - zoomWin.x + zoomWin.w * 0.2;
     offsetX += dx * scale;
     offsetY += dy * scale;
+    if (notebook && notebookZoomedIn()) clampZoomLock();
   }
 
   // Kurzes Gleiten (~0,1 s) statt Sprung: fuehlt sich sofort an, man sieht aber wohin.
@@ -8332,6 +8426,7 @@
     const age = performance.now() - (ps.t || 0);
     let vx = ps.vx || 0;
     let vy = ps.vy || 0;
+    if (notebook && notebookZoomedIn()) return;
     if (age > 80 || Math.hypot(vx, vy) < 0.25) return;
     vx *= 1.15;
     vy *= 1.15;
@@ -8342,8 +8437,13 @@
       if (f.stop || fling !== f) return;
       const dt = Math.min(40, now - last);
       last = now;
+      const px = offsetX;
+      const py = offsetY;
       offsetX += vx * dt;
       offsetY += vy * dt;
+      if (notebook) clampNotebookView();
+      if (offsetX === px) vx = 0;
+      if (offsetY === py) vy = 0;
       const decay = Math.exp(-dt / 330);
       vx *= decay;
       vy *= decay;
@@ -10643,6 +10743,7 @@
         panState = null;
         const pts = Array.from(touchPointers.values());
         const mid = midpoint(pts[0], pts[1]);
+        beginZoomLock();
         pinchState = {
           initialDist: distance(pts[0], pts[1]),
           initialScale: scale,
@@ -10764,6 +10865,7 @@
           const dx = mid.x - last.x;
           const dy = mid.y - last.y;
           const dt = Math.max(1, now - (pinchState.t || now - 16));
+          if (notebookZoomedIn()) beginZoomLock();
           offsetX += dx;
           offsetY += dy;
           pinchState.vx = 0.7 * (dx / dt) + 0.3 * (pinchState.vx || 0);
@@ -10771,13 +10873,19 @@
           pinchState.t = now;
           pinchState.lastMid = mid;
           panState = { lastX: mid.x, lastY: mid.y, vx: pinchState.vx, vy: pinchState.vy, t: now };
+          if (notebookZoomedIn()) {
+            beginZoomLock();
+            clampZoomLock();
+          }
           requestRedraw();
           return;
         }
         const newScale = clampZoom(pinchState.initialScale * (dist / Math.max(1, pinchState.initialDist)));
         scale = newScale;
+        if (notebookZoomedIn()) beginZoomLock();
         offsetX = mid.x - pinchState.anchorWorld.x * scale;
         offsetY = mid.y - pinchState.anchorWorld.y * scale;
+        if (notebookZoomedIn()) clampZoomLock();
         requestRedraw();
         return;
       }
@@ -10792,6 +10900,7 @@
         if (panState && touchPointers.size === 1) {
           const dx = e.clientX - panState.lastX;
           const dy = e.clientY - panState.lastY;
+          if (notebookZoomedIn()) beginZoomLock();
           offsetX += dx;
           offsetY += dy;
           // Geschwindigkeit fuer das Weiterlaufen nach dem Loslassen
@@ -10802,6 +10911,10 @@
           panState.t = now;
           panState.lastX = e.clientX;
           panState.lastY = e.clientY;
+          if (notebookZoomedIn()) {
+            beginZoomLock();
+            clampZoomLock();
+          }
           requestRedraw();
         }
         return;
@@ -10817,6 +10930,7 @@
     } else if (panState && (panState.pointerId === undefined || panState.pointerId === e.pointerId)) {
       const dx = e.clientX - panState.lastX;
       const dy = e.clientY - panState.lastY;
+      if (notebookZoomedIn()) beginZoomLock();
       offsetX += dx;
       offsetY += dy;
       const now = performance.now();
@@ -10826,6 +10940,10 @@
       panState.t = now;
       panState.lastX = e.clientX;
       panState.lastY = e.clientY;
+      if (notebookZoomedIn()) {
+        beginZoomLock();
+        clampZoomLock();
+      }
       requestRedraw();
       return;
     }
@@ -10971,9 +11089,13 @@
       if (touchPointers.size === 0) {
         const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
         if (addedPage) panState = null;
-        else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
+        else if (notebookZoomedIn()) {
+          panState = null;
+          endZoomLock();
+        } else if (panState && e.type === "pointerup" && !(window.sofiaPageSnap && window.sofiaPageSnap(panState))) startFling(panState);
         else if (!panState && endedTwoFinger && endedTwoFinger.mode === "pinch" && window.sofiaPageSnap) window.sofiaPageSnap({});
         panState = null;
+        if (!notebookZoomedIn()) endZoomLock();
       }
       if (tapState && tapState.pointerId === e.pointerId) {
         const isTap =
@@ -11004,10 +11126,15 @@
       const addedPage = window.sofiaPagePullEnd && window.sofiaPagePullEnd();
       const snapPan = panState;
       panState = null;
+      if (notebookZoomedIn()) {
+        endZoomLock();
+        return;
+      }
       if (!addedPage) {
         if (notebook && window.sofiaPageSnap && window.sofiaPageSnap(snapPan || {})) return;
         if (e.type === "pointerup") startFling(snapPan);
       }
+      endZoomLock();
       return;
     }
 
@@ -11079,7 +11206,10 @@
       touchPointers.delete(e.pointerId);
       activePointers.delete(e.pointerId);
       if (touchPointers.size < 2) pinchState = null;
-      if (touchPointers.size === 0) panState = null;
+      if (touchPointers.size === 0) {
+        panState = null;
+        endZoomLock();
+      }
     }
   };
   window.addEventListener("pointerup", dropTouch, true);
@@ -11092,6 +11222,7 @@
     for (const [id, p] of activePointers) if (p.type === "touch") activePointers.delete(id);
     pinchState = null;
     panState = null;
+    endZoomLock();
     rulerGesture = null;
   };
   window.addEventListener("touchend", (e) => setTimeout(() => resetTouches(e), 0), { capture: true, passive: true });
@@ -11122,6 +11253,14 @@
         const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
         const mx = -(dx * k);
         const my = -(dy * k);
+        if (notebookZoomedIn()) {
+          beginZoomLock();
+          offsetX += mx;
+          offsetY += my;
+          clampZoomLock();
+          requestRedraw();
+          return;
+        }
         offsetX += mx;
         offsetY += my;
         const now = performance.now();
@@ -11142,9 +11281,17 @@
       scale = clampZoom(scale * factor);
       offsetX = e.clientX - anchor.x * scale;
       offsetY = e.clientY - anchor.y * scale;
+      if (notebook && notebookZoomedIn()) {
+        beginZoomLock();
+        clampZoomLock();
+      }
       requestRedraw();
       clearTimeout(wheelSnapTimer);
-      wheelSnapTimer = setTimeout(() => window.sofiaPageSnap && window.sofiaPageSnap({}), 260);
+      wheelSnapTimer = setTimeout(() => {
+        endZoomLock();
+        if (notebookZoomedIn()) return;
+        if (window.sofiaPageSnap) window.sofiaPageSnap({});
+      }, 260);
     },
     { passive: false }
   );
@@ -15362,6 +15509,7 @@
     window.sofiaViewBusy = () => !!viewAnim;
     function animateView(v, ms) {
       if (!v) return;
+      if (typeof endZoomLock === "function") endZoomLock();
       const from = { scale, offsetX, offsetY };
       const t0 = performance.now();
       const me = {};
@@ -15383,6 +15531,7 @@
     function fitPage(i, animate) {
       const v = viewFor(i);
       if (!v) return;
+      if (typeof endZoomLock === "function") endZoomLock();
       if (animate) return animateView(v);
       viewAnim = null;
       scale = v.scale;
@@ -15392,6 +15541,12 @@
     }
     window.sofiaFitPage = fitPage;
     window.sofiaCurrentPage = () => currentPage();
+    window.sofiaNbPaging = nbPaging;
+    window.sofiaViewFor = viewFor;
+    window.sofiaFitScale = () => {
+      const v = viewFor(currentPage());
+      return v ? v.scale : 0;
+    };
     // Seite fuer Seite: nach dem Wischen zur naechsten/vorigen Seite einrasten.
     // Rueckgabe false = normal weiterscrollen (z. B. wenn hineingezoomt).
     window.sofiaPageSnap = (ps) => {
