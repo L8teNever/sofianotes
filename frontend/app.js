@@ -17437,8 +17437,8 @@
         const i = +cv.dataset.index;
         const r = rects[i];
         if (!r) return;
-        const maxW = 28;
-        const maxH = 36;
+        const maxW = 40;
+        const maxH = 52;
         const sc = Math.min(maxW / r.w, maxH / r.h);
         const w = Math.max(8, Math.round(r.w * sc));
         renderThumb(cv, r, i, { cache: false, w });

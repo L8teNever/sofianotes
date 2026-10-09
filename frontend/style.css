@@ -3817,16 +3817,16 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .pages-mark {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   width: 100%;
   border: none;
-  border-radius: 10px;
+  border-radius: 14px;
   background: transparent;
   color: inherit;
-  padding: 7px 8px;
+  padding: 10px 12px;
   cursor: pointer;
   text-align: left;
-  min-height: 44px;
+  min-height: 68px;
 }
 .pages-mark:hover { background: rgba(103, 80, 164, 0.08); }
 .pages-mark-thumb {
@@ -3842,7 +3842,7 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 600 15px/1.25 "Google Sans", Inter, sans-serif;
+  font: 600 19px/1.25 "Google Sans", Inter, sans-serif;
 }
 .page-thumb.read .page-thumb-img { outline: 2px solid rgba(103, 80, 164, 0.35); outline-offset: 1px; }
 .page-thumb-kind {
