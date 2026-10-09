@@ -16455,7 +16455,11 @@
     const PAPER_LABELS = { graph: "Kariert", lines: "Liniert", dots: "Punkte", blank: "Blanko" };
     const newId = () => "p" + uuid().slice(0, 12);
 
-    function currentPage() {
+    // Seite in der Bildschirmmitte. Reingezoomt bleibt es die Seite, die zuletzt in der
+    // Einpassung aktuell war - sonst springt die Mitte beim Zoomen an die Nachbarseite,
+    // und beim Herauszoomen landet man auf der falschen Seite.
+    let lastFitPage = 0;
+    function nearestPageToCenter() {
       const rects = pageRects(notebook);
       if (!rects.length) return 0;
       const c = screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
@@ -16471,6 +16475,15 @@
         }
       });
       return best;
+    }
+    function currentPage() {
+      const rects = pageRects(notebook);
+      if (!rects.length) return 0;
+      const nearest = nearestPageToCenter();
+      const fit = viewFor(Math.min(lastFitPage, rects.length - 1));
+      if (fit && boardEditId === null && scale > fit.scale * 1.08) return Math.min(lastFitPage, rects.length - 1);
+      lastFitPage = nearest;
+      return nearest;
     }
     // Im Board gilt die Board-Seite, nicht die Weltposition des unendlichen Blattes.
     function listedPage() {
