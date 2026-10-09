@@ -137,3 +137,33 @@ class LibraryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MediaLibraryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_newest_first_with_person_name(self):
+        a = "11111111-1111-4111-8111-111111111111"
+        b = "22222222-2222-4222-8222-222222222222"
+        run(db.media_library_add(a, "franz", "Tafel.jpg", 800, 600))
+        run(db.media_library_add(b, "simon", "Buch.jpg", 600, 900))
+        items = run(db.media_library_list(10))
+        self.assertEqual([i["id"] for i in items], [b, a])
+        self.assertEqual(items[1]["personId"], "franz")
+        self.assertEqual(items[1]["w"], 800)
+        self.assertTrue(items[0]["personName"])
+
+    def test_reinsert_moves_up_and_keeps_uploader(self):
+        a = "11111111-1111-4111-8111-111111111111"
+        b = "22222222-2222-4222-8222-222222222222"
+        run(db.media_library_add(a, "franz", "Tafel.jpg", 800, 600))
+        run(db.media_library_add(b, "simon", "Buch.jpg", 600, 900))
+        run(db.media_library_add(a, "simon", "Tafel.jpg", 800, 600))
+        items = run(db.media_library_list(10))
+        self.assertEqual([i["id"] for i in items], [a, b])
+        self.assertEqual(items[0]["personId"], "franz")

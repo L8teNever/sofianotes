@@ -732,6 +732,29 @@ async def upload_media_raw(media_id: str, request: Request) -> dict:
     return {"ok": True, "id": saved["id"], "bytes": saved["bytes"]}
 
 
+@app.get("/api/media-library")
+async def get_media_library(me: dict = Depends(get_current_person)) -> dict:
+    """Zuletzt eingefuegte Bilder aller Personen, neueste zuerst (nur solche, deren Datei noch da ist)."""
+    items = [it for it in await db.media_library_list(40) if media.path_for(it["id"]).is_file()]
+    return {"items": items[:24]}
+
+
+@app.post("/api/media-library")
+async def add_media_library(request: Request, me: dict = Depends(get_current_person)) -> dict:
+    body = await _json_body(request)
+    media_id = str(body.get("id") or "")
+    if not media.valid_id(media_id):
+        raise HTTPException(status_code=400, detail="bad id")
+    name = str(body.get("name") or "Bild")[:120]
+    try:
+        w = max(1, min(20000, int(body.get("w") or 0)))
+        h = max(1, min(20000, int(body.get("h") or 0)))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="bad size") from exc
+    await db.media_library_add(media_id, me["id"], name, w, h)
+    return {"ok": True}
+
+
 @app.get("/api/media/{media_id}")
 async def get_media(media_id: str) -> Response:
     blob = media.load_bytes(media_id)

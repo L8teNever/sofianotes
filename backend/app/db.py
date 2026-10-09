@@ -160,6 +160,20 @@ def _init_sync() -> None:
         )
         """
     )
+    # Bild-Bibliothek: wer wann welches Bild eingefuegt hat (die Datei selbst liegt in data/media)
+    _conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS media_library (
+            media_id TEXT PRIMARY KEY,
+            person_id TEXT,
+            name TEXT,
+            w INTEGER,
+            h INTEGER,
+            at REAL NOT NULL
+        )
+        """
+    )
+    _conn.execute("CREATE INDEX IF NOT EXISTS media_library_at ON media_library (at)")
     _seed_people_sync()
     _refresh_person_cache_sync()
     cols = {row[1] for row in _conn.execute("PRAGMA table_info(strokes)").fetchall()}
@@ -1811,6 +1825,43 @@ def _inbox_remove_sync(person_id: str, item_id: int) -> bool:
     cur = _conn.execute("DELETE FROM inbox WHERE id = ? AND to_person = ?", (item_id, person_id))
     _conn.commit()
     return cur.rowcount > 0
+
+
+def _media_library_add_sync(media_id: str, person_id: str | None, name: str, w: int, h: int) -> None:
+    # Erneut eingefuegt: nach oben ruecken, Urheber bleibt
+    _conn.execute(
+        """
+        INSERT INTO media_library (media_id, person_id, name, w, h, at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(media_id) DO UPDATE SET at = excluded.at
+        """,
+        (media_id, person_id, name, w, h, time.time()),
+    )
+    _conn.commit()
+
+
+def _media_library_list_sync(limit: int) -> list[dict[str, Any]]:
+    rows = _conn.execute(
+        """
+        SELECT m.media_id, m.person_id, p.name, m.name, m.w, m.h, m.at
+        FROM media_library m LEFT JOIN people p ON p.id = m.person_id
+        ORDER BY m.at DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {"id": r[0], "personId": r[1], "personName": r[2], "name": r[3], "w": r[4], "h": r[5], "at": r[6]}
+        for r in rows
+    ]
+
+
+async def media_library_add(media_id: str, person_id: str | None, name: str, w: int, h: int) -> None:
+    async with _lock:
+        await asyncio.get_event_loop().run_in_executor(None, _media_library_add_sync, media_id, person_id, name, w, h)
+
+
+async def media_library_list(limit: int = 30) -> list[dict[str, Any]]:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _media_library_list_sync, limit)
 
 
 async def inbox_add(to_person: str, from_person: str, kind: str, title: str, board_id: str | None = None, file_id: str | None = None) -> None:

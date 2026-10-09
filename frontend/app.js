@@ -2689,6 +2689,12 @@
     setTool(next);
   }
 
+  // Zoom-Ansicht: die Stifte stehen auch im Formen-Modus in der Leiste. Ein Tipp darauf
+  // heisst "wieder mit dem Stift schreiben", also zurueck in den Stift-Modus.
+  function pickToolFromBar(tool) {
+    if (currentMode === "shapes" && (tool === "pen" || tool === "marker") && toolbarEl.classList.contains("zoom-inner")) setMode("pen");
+    setTool(tool, { openPopover: true });
+  }
   toolbarEl.querySelectorAll(".tool-btn[data-tool]").forEach((btn) => {
     let ignoreClick = false;
     btn.addEventListener("pointerup", (e) => {
@@ -2697,7 +2703,7 @@
       const r = btn.getBoundingClientRect();
       if (e.clientX < r.left - 2 || e.clientX > r.right + 2 || e.clientY < r.top - 2 || e.clientY > r.bottom + 2) return;
       ignoreClick = true;
-      setTool(btn.dataset.tool, { openPopover: true });
+      pickToolFromBar(btn.dataset.tool);
     });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2705,7 +2711,7 @@
         ignoreClick = false;
         return;
       }
-      setTool(btn.dataset.tool, { openPopover: true });
+      pickToolFromBar(btn.dataset.tool);
     });
   });
   document.getElementById("btn-laser")?.addEventListener("click", (e) => {
@@ -10354,7 +10360,17 @@
     const jpeg = await scanImageToJpeg(file, 2000);
     if (!jpeg) return null;
     const mediaId = await uploadJpeg(jpeg);
+    rememberLibraryImage(mediaId, file.name, jpeg.w, jpeg.h);
     return placeImageStroke(mediaId, jpeg.w, jpeg.h, file.name, origin);
+  }
+  // Bild-Bibliothek: eingefuegte Bilder merkt sich der Server (wer, wann), damit alle sie
+  // beim naechsten "Bild" direkt wieder einfuegen koennen. Offline: einfach auslassen.
+  function rememberLibraryImage(mediaId, name, w, h) {
+    fetch("/api/media-library", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: mediaId, name: name || "Bild", w, h }),
+    }).catch(() => {});
   }
 
   const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
@@ -10572,6 +10588,7 @@
     e.stopPropagation();
     hidePopovers();
     insertMenu.classList.toggle("hidden");
+    if (!insertMenu.classList.contains("hidden")) refreshImageLibrary();
   });
   document.getElementById("insert-table")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -10581,8 +10598,100 @@
   document.getElementById("insert-image")?.addEventListener("click", (e) => {
     e.stopPropagation();
     insertMenu.classList.add("hidden");
-    pickImportFiles("image/*");
+    openImageLibrary(e.currentTarget);
   });
+  // "Bild": zuletzt eingefuegte Bilder aller Personen zum direkten Einfuegen, darueber
+  // "Neues Bild hochladen". Gibt es noch keine (oder offline), geht gleich die Dateiauswahl auf.
+  let imageLibPop = null;
+  function closeImageLibrary() {
+    if (imageLibPop) imageLibPop.remove();
+    imageLibPop = null;
+  }
+  // Liste wird schon beim Oeffnen des Einfuegen-Menues geholt: Safari oeffnet die
+  // Dateiauswahl nur direkt im Tipp, nicht nach einem Warten auf den Server.
+  let imageLibItems = [];
+  function refreshImageLibrary() {
+    return fetch("/api/media-library", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && Array.isArray(d.items)) imageLibItems = d.items;
+      })
+      .catch(() => {});
+  }
+  setTimeout(refreshImageLibrary, 4000);
+  function openImageLibrary(anchor) {
+    closeImageLibrary();
+    const items = imageLibItems.slice();
+    refreshImageLibrary();
+    if (!items.length) return pickImportFiles("image/*");
+    const pop = document.createElement("div");
+    pop.className = "image-lib-pop";
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "lib-add-opt image-lib-upload";
+    up.innerHTML = '<span class="material-symbols-rounded">upload_file</span>Neues Bild hochladen';
+    up.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      closeImageLibrary();
+      pickImportFiles("image/*");
+    });
+    pop.appendChild(up);
+    const title = document.createElement("div");
+    title.className = "image-lib-title";
+    title.textContent = "Zuletzt eingefügt";
+    pop.appendChild(title);
+    const grid = document.createElement("div");
+    grid.className = "image-lib-grid";
+    for (const it of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "image-lib-item";
+      b.title = (it.name || "Bild") + (it.personName ? " · " + it.personName : "");
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.alt = "";
+      img.src = "/api/media/" + encodeURIComponent(it.id);
+      b.appendChild(img);
+      if (it.personName) {
+        const who = document.createElement("span");
+        who.className = "image-lib-who";
+        who.textContent = it.personName;
+        b.appendChild(who);
+      }
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        closeImageLibrary();
+        insertLibraryImage(it);
+      });
+      grid.appendChild(b);
+    }
+    pop.appendChild(grid);
+    document.body.appendChild(pop);
+    imageLibPop = pop;
+    const a = (insertBtn || anchor).getBoundingClientRect();
+    const pw = pop.offsetWidth;
+    const ph = pop.offsetHeight;
+    let left = Math.max(8, Math.min(window.innerWidth - pw - 8, a.left + a.width / 2 - pw / 2));
+    let top = a.bottom + 8;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, a.top - ph - 8);
+    pop.style.left = Math.round(left) + "px";
+    pop.style.top = Math.round(top) + "px";
+  }
+  function insertLibraryImage(it) {
+    if (viewOnly || myRole === "view") return showToast("Nur ansehen: hier kann man nichts einfügen");
+    const origin = screenToWorld(window.innerWidth * 0.18, window.innerHeight * 0.16);
+    const s = placeImageStroke(it.id, it.w || 800, it.h || 600, it.name || "Bild", origin);
+    rememberLibraryImage(it.id, it.name, it.w, it.h);
+    if (s) {
+      setTool("select");
+      selectStrokeIds([s.id]);
+    }
+    requestRedraw();
+  }
+  document.addEventListener("pointerdown", (e) => {
+    if (imageLibPop && !e.target.closest(".image-lib-pop")) closeImageLibrary();
+  }, true);
   document.getElementById("insert-pdf")?.addEventListener("click", (e) => {
     e.stopPropagation();
     insertMenu.classList.add("hidden");
