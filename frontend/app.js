@@ -936,6 +936,8 @@
     const side = document.getElementById("top-side-bar");
     const sideOn = !!side && Array.from(side.children).some((c) => !c.classList.contains("hidden") && !c.classList.contains("tb-off"));
     if (side) setCls(side, "tsb-empty", !sideOn);
+    // Breite der "Seiten"-Gruppe: das ✕ der offenen Seiten-Leiste rueckt mit gleichem Abstand daneben
+    document.documentElement.style.setProperty("--tsb-w", side && sideOn ? side.offsetWidth + "px" : "0px");
     const sideW = sideOn && !vertical ? side.offsetWidth + 8 : 0;
     // kleine Leiste sitzt ganz links am Rand; die Rueckgaengig-Pille in derselben Ecke rueckt daneben
     const atBottom0 = bar.classList.contains("tb-bottom");

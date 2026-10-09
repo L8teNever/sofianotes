@@ -3056,6 +3056,8 @@ html[data-theme="dark"] .app-toast {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
 }
 #hw-panel .hw-chrome-close:hover { background: #f3edf7; }
+/* Andock-Knopf eigene Pille, ganz rechts direkt neben der Minimieren/X-Pille (nicht mittig) */
+#hw-panel .hw-panel-head > #hw-panel-mode { margin-left: auto; }
 #hw-panel .page-thumb-foot .hw-panel-btn {
   width: 30px;
   height: 30px;
@@ -4147,7 +4149,7 @@ body.pages-open #btn-split { display: none; }
 body.pages-open .top-back-bar { left: var(--safe-left); }
 body.pages-open .top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--back-shift, 0px)); }
 .top-close-bar { display: none; }
-body.pages-open .top-close-bar { display: flex; left: calc(var(--view-left) - var(--bar-h) - 14px); }
+body.pages-open .top-close-bar { display: flex; left: calc(var(--safe-left) + var(--back-shift, 0px) + var(--tsb-w, 0px) + 8px); }
 /* blauer Ordner-Knopf neben dem Dateinamen entfaellt (der Zurueck-Pfeil macht dasselbe) */
 #btn-open-library { display: none !important; }
 .layer-menu { position: fixed; z-index: 1250; min-width: 230px; width: max-content; max-width: 300px; right: auto; bottom: auto; transform: none; }
