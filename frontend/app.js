@@ -2729,6 +2729,10 @@
   function beginLiveDockDrag() {
     if (!dockDrag || dockDrag.live) return;
     hidePopovers();
+    if (zoomPaneDrag) {
+      zoomPaneDrag = null;
+      zoomPaneEl?.classList.remove("moving");
+    }
     const r = liftDock(dockDrag.el, dockDrag.kind);
     dockDrag.live = true;
     dockDrag.grabDX = dockDrag.lastX - r.left;
@@ -2742,9 +2746,10 @@
   function armDockDrag(kind, e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (e.target.closest("input, textarea, .popover, .tool-popover, .settings-modal, .settings-backdrop, .swatch-scroll, .swatch, .lib-add-menu, .text-color-pop, .text-color-btn")) return;
-    if (kind !== "topbar") e.preventDefault();
+    const zoomInner = kind === "dock" && toolbarEl.classList.contains("zoom-inner");
+    if (kind !== "topbar" && !zoomInner) e.preventDefault();
     const el = kind === "dock" ? toolbarEl : kind === "topbar" ? topBar : undoDock;
-    const fromChrome = !isDockInteractiveTarget(e.target);
+    const fromChrome = zoomInner ? false : !isDockInteractiveTarget(e.target);
     dockDrag = {
       kind,
       el,
@@ -6858,7 +6863,7 @@
     document.getElementById("btn-zw-pen")?.classList.toggle("active", inner);
   }
   function attachZoomInnerBar() {
-    if (!zoomInnerBarPref || !zoomWin || !zoomPaneEl || !toolbarEl) return;
+    if (!zoomWin || !zoomPaneEl || !toolbarEl) return;
     const chrome = document.getElementById("zoom-pane-chrome");
     if (!chrome) return;
     if (!toolbarSavedDock) {
@@ -6966,8 +6971,7 @@
     // Notizbuch: Rahmen und Raender an der aktuellen A4-Seite ausrichten
     if (notebook && window.sofiaCurrentPage) zoomToPage(window.sofiaCurrentPage(), false);
     if (zoomWinBtn) zoomWinBtn.classList.add("active");
-    if (zoomInnerBarPref) attachZoomInnerBar();
-    else applyZoomChrome();
+    attachZoomInnerBar();
     layoutZoomPane();
     requestRedraw();
   }
@@ -7384,13 +7388,13 @@
     if (penBtn) {
       penBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        zoomInnerBarPref = !toolbarEl.classList.contains("zoom-inner");
+        if (toolbarEl.classList.contains("zoom-inner")) return;
+        zoomInnerBarPref = true;
         try {
-          localStorage.setItem("sofianotes-zoom-inner-bar", zoomInnerBarPref ? "1" : "0");
+          localStorage.setItem("sofianotes-zoom-inner-bar", "1");
         } catch (err) {}
         renderZoomRowsSetting();
-        if (zoomInnerBarPref) attachZoomInnerBar();
-        else detachZoomInnerBar();
+        attachZoomInnerBar();
         requestRedraw();
       });
     }
@@ -7411,7 +7415,7 @@
     };
     zoomPaneEl.addEventListener("pointerdown", (e) => {
       if (!zoomWin) return;
-      if (e.target.closest("canvas, button, #toolbar")) return;
+      if (e.target.closest("canvas, button, input, .swatch, .tool-popover, .swatch-scroll")) return;
       e.preventDefault();
       e.stopPropagation();
       try {
