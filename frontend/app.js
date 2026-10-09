@@ -14345,7 +14345,12 @@
   function libRowIcon(name, color) {
     const box = document.createElement("div");
     box.className = "lib-row-icon";
-    if (color) box.style.background = color;
+    if (color) {
+      // Ordnerfarbe: hell als Kachel, im Dunkelmodus als abgedunkelter Ton (siehe CSS)
+      box.style.background = color;
+      box.style.setProperty("--tint", color);
+      box.dataset.tint = "";
+    }
     box.innerHTML = `<i data-lucide="${name}"></i>`;
     return box;
   }

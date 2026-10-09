@@ -4638,7 +4638,10 @@ html[data-theme="dark"] .tsb-title,
 html[data-theme="dark"] .pap-sub { color: #f4f1f8; }
 html[data-theme="dark"] .pap-sub { color: #c8c2d0; }
 html[data-theme="dark"] .set-ico { background: #2b2930; color: #d0bcff; }
-html[data-theme="dark"] .lib-row-icon { background-image: linear-gradient(rgba(18, 16, 24, 0.55), rgba(18, 16, 24, 0.55)); }
+html[data-theme="dark"] .lib-row-icon[data-tint] {
+  background: color-mix(in srgb, var(--tint) 32%, #1f1d26) !important;
+  color: color-mix(in srgb, var(--tint) 70%, #ffffff) !important;
+}
 
 /* Rechner und Lineal */
 html[data-theme="dark"] .calc-display { background: #1f1d26; color: #f4f1f8; }
