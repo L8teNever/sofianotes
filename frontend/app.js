@@ -16500,6 +16500,14 @@
       });
       return best;
     }
+    // Im Board gilt die Board-Seite, nicht die Weltposition des unendlichen Blattes.
+    function listedPage() {
+      if (boardEditId && notebook) {
+        const i = notebook.pages.findIndex((p) => p.id === boardEditId);
+        if (i >= 0) return i;
+      }
+      return currentPage();
+    }
     // Seite i in die Mitte holen, Breite eingepasst
     // Ansicht: durchgehend (Seitenbreite einpassen) oder Seite fuer Seite (ganze Seite/Doppelseite)
     // Standard: immer auf eine Seite einrasten (nur "durchgehend" schaltet es ab)
@@ -16580,18 +16588,13 @@
     function activateNotebookPage(i) {
       const pg = notebook && notebook.pages[i];
       if (!pg) return;
-      if (!boardEditId) {
-        if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
-        fitPage(i);
-        return;
-      }
       const target = pg.boardOf || (pg.board ? pg.id : null);
-      if (target && target !== boardEditId) {
-        exitBoardPage({ fit: false });
-        enterBoardPage(target);
+      if (target) {
+        if (boardEditId !== target) enterBoardPage(target);
         return;
       }
-      exitBoardPage({ fit: false });
+      if (boardEditId) exitBoardPage({ fit: false });
+      if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
       fitPage(i);
     }
     function syncBoardSpread(primaryId) {
@@ -17244,15 +17247,22 @@
       if (panelOpen) renderPanel();
       else addPop.classList.add("hidden");
     }
+    function setPanelKeepingPlace(open) {
+      if (boardEditId) {
+        setPanel(open);
+        return;
+      }
+      const i = currentPage();
+      setPanel(open);
+      fitPage(i);
+    }
     pagesBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const i = currentPage();
-      setPanel(!panelOpen);
-      fitPage(i);
+      setPanelKeepingPlace(!panelOpen);
     });
     document.getElementById("btn-pages-close")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      setPanel(false);
+      setPanelKeepingPlace(false);
     });
     window.sofiaNotebookMenu = (anchor) => {
       if (!menu.classList.contains("hidden")) return closeMenu();
@@ -17260,7 +17270,7 @@
     };
     document.getElementById("pages-close").addEventListener("click", (e) => {
       e.stopPropagation();
-      setPanel(false);
+      setPanelKeepingPlace(false);
     });
     document.getElementById("pages-more").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -17309,8 +17319,7 @@
     function jumpBookmark(m) {
       const i = pageIndexById(m.pageId);
       if (i < 0) return;
-      if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
-      fitPage(i);
+      activateNotebookPage(i);
     }
     let suppressMarkClick = false;
     function paintMarkThumbs() {
@@ -17701,7 +17710,7 @@
       renderedSig = JSON.stringify(notebook.pages) + notebook.layout + JSON.stringify(notebook.bookmarks || []);
       renderMarks();
       const rects = pageRects(notebook);
-      const cur = currentPage();
+      const cur = listedPage();
       thumbBuckets = bucketStrokes(rects);
       thumbQueue = [];
       const todo = [];
@@ -18098,11 +18107,7 @@
         if (want) setTimeout(() => setPanel(true), 0);
       }
       if (panelOpen) {
-        let cur = currentPage();
-        if (boardEditId) {
-          const bi = notebook.pages.findIndex((p) => p.id === boardEditId);
-          if (bi >= 0) cur = bi;
-        }
+        const cur = listedPage();
         if (cur !== lastCur) {
           lastCur = cur;
           grid.querySelectorAll(".page-thumb[data-index]").forEach((el) => el.classList.toggle("active", Number(el.dataset.index) === cur));
