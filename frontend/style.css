@@ -1964,15 +1964,9 @@ button {
 /* ---- Einfuegen-Menue oben ---- */
 .insert-menu-wrap { position: relative; display: flex; }
 .insert-menu { right: auto; left: 50%; transform: translateX(-50%); min-width: 170px; }
-.objects-menu-wrap #objects-menu { min-width: 220px; padding-bottom: 10px; }
-.obj-menu-sub {
-  font: 700 11px/1 'Google Sans', 'Inter', sans-serif;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: #6750a4;
-  padding: 10px 14px 4px;
-}
-.obj-seg { margin: 0 10px 6px; }
+#objects-bar #obj-dash,
+#objects-bar #obj-arrow { display: flex; align-items: center; gap: 2px; }
+#objects-bar:not([data-kind="arrow"]) .obj-heads { display: none; }
 
 /* ---- Tabellen-Dialog ---- */
 .table-dialog {
@@ -3737,6 +3731,7 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 body.view-only #mode-switch,
 body.view-only .insert-menu-wrap,
 body.view-only .objects-menu-wrap,
+body.view-only #objects-bar,
 body.view-only #btn-zoom-window,
 body.view-only #toolbar,
 body.view-only #undo-btn,
