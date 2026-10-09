@@ -427,34 +427,6 @@
     if (boardEditId || !notebook || (!notebookZoomedIn() && !zoomGesture)) return;
     clampToAnchorPage();
   }
-  // Reingezoomt schwenken: quer auf der Seite bleiben, laengs flüssig über den Rand
-  // auf die nächste Seite. Nicht an der Seite festklemmen, auf der der Zoom begann.
-  function clampZoomedPan() {
-    if (boardEditId || !notebook || !notebookZoomedIn()) return;
-    const rects = pageRects(notebook);
-    const g = pageGroupBounds();
-    if (!rects.length || !g) return;
-    const horiz = notebook.layout === "horizontal";
-    const left = viewLeft;
-    const right = window.innerWidth - viewRight;
-    const top = 76;
-    const bottom = window.innerHeight - 20;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const r of rects) {
-      if (r.x < minX) minX = r.x;
-      if (r.y < minY) minY = r.y;
-      if (r.x + r.w > maxX) maxX = r.x + r.w;
-      if (r.y + r.h > maxY) maxY = r.y + r.h;
-    }
-    if (horiz) {
-      offsetY += clampAxisInside(top, bottom, g.y0 * scale + offsetY, g.y1 * scale + offsetY);
-      offsetX += clampAxisInside(left, right, minX * scale + offsetX, maxX * scale + offsetX);
-    } else {
-      offsetX += clampAxisInside(left, right, g.x0 * scale + offsetX, g.x1 * scale + offsetX);
-      offsetY += clampAxisInside(top, bottom, minY * scale + offsetY, maxY * scale + offsetY);
-    }
-    if (window.sofiaFollowPanPage) window.sofiaFollowPanPage();
-  }
   // Seite, an der eine Blaetter-Geste angefangen hat. Die Ansicht bleibt daran,
   // statt frei in die Luecke zu rutschen und danach zurueckzuspringen.
   let nbHold = null;
@@ -533,15 +505,72 @@
     offsetX += viewShiftToFit(left, right, g.x0 * scale + offsetX, g.x1 * scale + offsetX, 8, false);
   }
   // Im Notizbuch nicht von den Seiten wegscrollen oder -zoomen koennen
+  function viewportWorld() {
+    const left = viewLeft;
+    const right = window.innerWidth - viewRight;
+    const top = 76;
+    const bottom = window.innerHeight - 20;
+    return {
+      x0: (left - offsetX) / scale,
+      y0: (top - offsetY) / scale,
+      x1: (right - offsetX) / scale,
+      y1: (bottom - offsetY) / scale,
+    };
+  }
+  function pageOverlapFrac(r, v) {
+    const ix = Math.max(0, Math.min(v.x1, r.x + r.w) - Math.max(v.x0, r.x));
+    const iy = Math.max(0, Math.min(v.y1, r.y + r.h) - Math.max(v.y0, r.y));
+    const viewArea = Math.max(1, (v.x1 - v.x0) * (v.y1 - v.y0));
+    const possible = Math.min(viewArea, Math.max(1, r.w * r.h));
+    return (ix * iy) / possible;
+  }
+  // Reingezoomt nicht zurechtrücken. Nur wenn der Ausschnitt größtenteils neben
+  // jeder Seite liegt, den kleinsten Schritt zurück, der wieder halb auf einer Seite liegt.
+  function nudgeIfMostlyOffPages() {
+    if (boardEditId || !notebook || !notebookZoomedIn()) return;
+    const rects = pageRects(notebook);
+    if (!rects.length) return;
+    const v0 = viewportWorld();
+    let best = 0;
+    let page = rects[0];
+    for (const r of rects) {
+      const f = pageOverlapFrac(r, v0);
+      if (f > best) {
+        best = f;
+        page = r;
+      }
+    }
+    if (best >= 0.5) return;
+    const left = viewLeft;
+    const right = window.innerWidth - viewRight;
+    const top = 76;
+    const bottom = window.innerHeight - 20;
+    const fullX = clampAxisInside(left, right, page.x * scale + offsetX, (page.x + page.w) * scale + offsetX);
+    const fullY = clampAxisInside(top, bottom, page.y * scale + offsetY, (page.y + page.h) * scale + offsetY);
+    if (!fullX && !fullY) return;
+    let lo = 0;
+    let hi = 1;
+    const ox = offsetX;
+    const oy = offsetY;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      offsetX = ox + fullX * mid;
+      offsetY = oy + fullY * mid;
+      const f = pageOverlapFrac(page, viewportWorld());
+      if (f >= 0.5) hi = mid;
+      else lo = mid;
+    }
+    offsetX = ox + fullX * hi;
+    offsetY = oy + fullY * hi;
+  }
   function clampNotebookView() {
     if (boardEditId) return;
     if (window.sofiaViewBusy && window.sofiaViewBusy()) return;
-    if (zoomGesture) {
-      clampToAnchorPage();
-      return;
-    }
+    // Pinch/Trackpad-Zoom: der Punkt unter den Fingern bleibt liegen, kein Clamp.
+    if (zoomGesture || pinchState) return;
     if (notebookZoomedIn()) {
-      clampZoomedPan();
+      if ((panState || (fling && !fling.stop)) && window.sofiaFollowPanPage) window.sofiaFollowPanPage();
+      nudgeIfMostlyOffPages();
       return;
     }
     if (pinchState) return;
@@ -11830,10 +11859,7 @@
           pinchState.t = now;
           pinchState.lastMid = mid;
           panState = { lastX: mid.x, lastY: mid.y, vx: pinchState.vx, vy: pinchState.vy, t: now };
-          if (notebookZoomedIn()) {
-            beginZoomLock();
-            clampZoomedPan();
-          }
+          if (notebookZoomedIn()) beginZoomLock();
           requestRedraw();
           return;
         }
@@ -11846,8 +11872,6 @@
         if (notebookZoomedIn() || zoomGesture) beginZoomLock();
         offsetX = mid.x - pinchState.anchorWorld.x * scale;
         offsetY = mid.y - pinchState.anchorWorld.y * scale;
-        if (zoomGesture) clampToAnchorPage();
-        else if (notebookZoomedIn()) clampZoomLock();
         requestRedraw();
         return;
       }
@@ -11873,10 +11897,7 @@
           panState.t = now;
           panState.lastX = e.clientX;
           panState.lastY = e.clientY;
-          if (notebookZoomedIn()) {
-            beginZoomLock();
-            clampZoomedPan();
-          }
+          if (notebookZoomedIn()) beginZoomLock();
           requestRedraw();
         }
         return;
@@ -11902,10 +11923,7 @@
       panState.t = now;
       panState.lastX = e.clientX;
       panState.lastY = e.clientY;
-      if (notebookZoomedIn()) {
-        beginZoomLock();
-        clampZoomedPan();
-      }
+      if (notebookZoomedIn()) beginZoomLock();
       requestRedraw();
       return;
     }
@@ -12262,7 +12280,6 @@
           releaseZoomHold();
           offsetX += mx;
           offsetY += my;
-          clampZoomedPan();
           requestRedraw();
           return;
         }
@@ -12301,7 +12318,6 @@
       if (notebook && !boardEditId) armZoomGesture();
       else zoomGesture = false;
       beginZoomLock();
-      if (notebook && !boardEditId) clampToAnchorPage();
       requestRedraw();
     },
     { passive: false }
