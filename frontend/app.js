@@ -74,6 +74,8 @@
     "sofianotes-zoompane-pos",
     "sofianotes-math",
     "sofianotes-eraser-return",
+    "sofianotes-pen-tap2",
+    "sofianotes-pen-tap3",
     "sofianotes-hwpanel-layout",
     "sofianotes-hwpanel",
     "sofianotes-hwpill-pos",
@@ -3148,8 +3150,122 @@
     });
   }
 
+  // ---- Stift-Gesten: 2x / 3x mit dem Stift auf dieselbe Stelle tippen ----
+  // Einstellbar (Lasso, Radierer, Lineal, Marker, Formen, Rueckgaengig). Die Tipp-Punkte, die
+  // der Stift dabei gemalt hat, verschwinden wieder (ohne Spur im Rueckgaengig-Verlauf).
+  // Nur sehr dicht beieinander liegende, kurze Tipps zaehlen, damit Ue-Punkte und ":" nicht ausloesen.
+  const PEN_TAP_MAX_MS = 260;
+  const PEN_TAP_MAX_MOVE = 6;
+  const PEN_TAP_GAP_MS = 360;
+  const PEN_TAP_RADIUS = 9;
+  let lastEndedStroke = null;
+  let penTapDown = null;
+  let penTaps = [];
+  let penTapTimer = null;
+  const penTapAction = (n) => lsGetRaw("sofianotes-pen-tap" + n) || "off";
+  function syncPenTapSettings() {
+    for (const n of [2, 3]) {
+      const cur = penTapAction(n);
+      document.querySelectorAll("#set-pen-tap" + n + " [data-act]").forEach((b) => b.classList.toggle("active", b.dataset.act === cur));
+    }
+  }
+  for (const n of [2, 3]) {
+    document.querySelectorAll("#set-pen-tap" + n + " [data-act]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        try {
+          localStorage.setItem("sofianotes-pen-tap" + n, b.dataset.act);
+        } catch (err) {}
+        syncPenTapSettings();
+      })
+    );
+  }
+  syncPenTapSettings();
+  function removeTapDots(ids) {
+    const gone = ids.filter((id) => boardStrokes.has(id));
+    if (!gone.length) return;
+    for (const id of gone) boardStrokes.delete(id);
+    wsSend({ type: "erase", strokeIds: gone });
+    const set = new Set(gone);
+    undoStack = undoStack.filter((a) => !(a && a.type === "add" && a.stroke && set.has(a.stroke.id)));
+    updateUndoRedoButtons();
+    requestRedraw();
+  }
+  function runPenTapAction(act) {
+    if (act === "lasso") setMode(currentMode === "lasso" ? "pen" : "lasso");
+    else if (act === "eraser") setMode(currentTool === "eraser" ? "pen" : "eraser");
+    else if (act === "shapes") setMode(currentMode === "shapes" ? "pen" : "shapes");
+    else if (act === "marker") {
+      if (currentMode !== "pen") setMode("pen");
+      setTool(currentTool === "marker" ? "pen" : "marker");
+    } else if (act === "ruler") {
+      if (rulerBtn) rulerBtn.click();
+    } else if (act === "undo") undo();
+  }
+  function firePenTaps() {
+    clearTimeout(penTapTimer);
+    penTapTimer = null;
+    const taps = penTaps;
+    penTaps = [];
+    const n = Math.min(3, taps.length);
+    const act = n >= 2 ? penTapAction(n) : "off";
+    if (act === "off") return;
+    removeTapDots(taps.map((t) => t.dotId).filter(Boolean));
+    runPenTapAction(act);
+  }
+  canvas.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.pointerType !== "pen") return;
+      penTapDown = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+    },
+    true
+  );
+  canvas.addEventListener(
+    "pointermove",
+    (e) => {
+      if (penTapDown && e.pointerId === penTapDown.id && Math.hypot(e.clientX - penTapDown.x, e.clientY - penTapDown.y) > PEN_TAP_MAX_MOVE) penTapDown.moved = true;
+    },
+    true
+  );
+  canvas.addEventListener(
+    "pointerup",
+    (e) => {
+      const d = penTapDown;
+      penTapDown = null;
+      if (!d || e.pointerType !== "pen" || e.pointerId !== d.id) return;
+      const now = performance.now();
+      const isTap = !d.moved && now - d.t <= PEN_TAP_MAX_MS && Math.hypot(e.clientX - d.x, e.clientY - d.y) <= PEN_TAP_MAX_MOVE;
+      if (!isTap || currentTool === "text" || (penTapAction(2) === "off" && penTapAction(3) === "off")) {
+        penTaps = [];
+        return;
+      }
+      // Nach endPointer auswerten: dann ist der Tipp-Punkt als Strich fertig
+      setTimeout(() => {
+        const last = penTaps[penTaps.length - 1];
+        if (last && (now - last.t > PEN_TAP_GAP_MS || Math.hypot(d.x - last.x, d.y - last.y) > PEN_TAP_RADIUS)) penTaps = [];
+        const dot = lastEndedStroke && now - lastEndedStroke.t < 120 ? lastEndedStroke.id : null;
+        penTaps.push({ t: now, x: d.x, y: d.y, dotId: dot });
+        clearTimeout(penTapTimer);
+        if (penTaps.length >= 3) return firePenTaps();
+        if (penTaps.length === 2) {
+          // Wartet kurz auf einen dritten Tipp, wenn 3x belegt ist
+          if (penTapAction(3) === "off") return firePenTaps();
+          penTapTimer = setTimeout(firePenTaps, PEN_TAP_GAP_MS);
+          return;
+        }
+        penTapTimer = setTimeout(() => {
+          penTaps = [];
+          penTapTimer = null;
+        }, PEN_TAP_GAP_MS);
+      }, 0);
+    },
+    true
+  );
+
   function openSettings() {
     toolPopover.classList.add("hidden");
+    syncPenTapSettings();
     zoomPopover.classList.add("hidden");
     hideEraseAllMenu();
     hidePasteMenu();
@@ -11419,6 +11535,7 @@
     currentStroke.endedAt = performance.now();
     const finishedId = currentStroke.id;
     const selectShape = !!(currentStroke.locked && currentStroke.extra && currentStroke.extra.shape);
+    lastEndedStroke = { id: currentStroke.id, t: performance.now() };
     boardStrokes.set(currentStroke.id, currentStroke);
     pushUndo({ type: "add", stroke: cloneStroke(currentStroke) });
     currentStroke = null;
@@ -18348,7 +18465,7 @@
     const MAX_SRC = 2600; // Arbeitsbild (spart Speicher und Zeit)
     let src = null; // Canvas mit dem (gedrehten) Foto
     let quad = null; // 4 Punkte in src-Koordinaten: TL, TR, BR, BL
-    let enhance = true;
+    let enhance = false;
     let resolveFn = null;
     let view = { k: 1, ox: 0, oy: 0 };
 
@@ -18688,7 +18805,8 @@
       bmpRef = bmp;
       rot = 0;
       src = toCanvas(bmp, 0);
-      enhance = lsGetRaw("sofianotes-scan-enhance") !== "0";
+      // Standard aus: das Aufhellen verfälscht dunkle Bilder (z. B. Screenshots im Dunkelmodus)
+      enhance = lsGetRaw("sofianotes-scan-enhance") === "1";
       document.getElementById("scan-enhance").classList.toggle("active", enhance);
       scrim.classList.remove("hidden");
       return new Promise((resolve) => {

@@ -582,6 +582,28 @@
         <span class="set-nav-text"><strong>Nach Radieren zurück</strong><small>Danach automatisch wieder der Stift</small></span>
         <span class="set-knob"></span>
       </button>
+      <div class="set-sub">Stift-Gesten</div>
+      <p class="set-hint">Mit dem Stift schnell auf dieselbe Stelle tippen. Die Tipp-Punkte werden dabei wieder entfernt. Nochmal tippen schaltet zurück zum Stift. Achtung bei Ü-Punkten: nur sehr dicht beieinander liegende Tipps zählen.</p>
+      <div class="set-sub set-sub-small">2× tippen</div>
+      <div class="set-seg set-seg-wrap" id="set-pen-tap2">
+        <button type="button" data-act="off">Aus</button>
+        <button type="button" data-act="lasso">Lasso</button>
+        <button type="button" data-act="eraser">Radierer</button>
+        <button type="button" data-act="ruler">Lineal</button>
+        <button type="button" data-act="marker">Marker</button>
+        <button type="button" data-act="shapes">Formen</button>
+        <button type="button" data-act="undo">Rückgängig</button>
+      </div>
+      <div class="set-sub set-sub-small">3× tippen</div>
+      <div class="set-seg set-seg-wrap" id="set-pen-tap3">
+        <button type="button" data-act="off">Aus</button>
+        <button type="button" data-act="lasso">Lasso</button>
+        <button type="button" data-act="eraser">Radierer</button>
+        <button type="button" data-act="ruler">Lineal</button>
+        <button type="button" data-act="marker">Marker</button>
+        <button type="button" data-act="shapes">Formen</button>
+        <button type="button" data-act="undo">Rückgängig</button>
+      </div>
     </div>
 
     <div class="set-page hidden" data-page="theme">
@@ -951,7 +973,7 @@
   <div class="scan-bottom">
     <button type="button" id="scan-full" class="scan-chip"><span class="material-symbols-rounded">fit_screen</span>Ganzes Bild</button>
     <button type="button" id="scan-auto" class="scan-chip"><span class="material-symbols-rounded">document_scanner</span>Blatt erkennen</button>
-    <button type="button" id="scan-enhance" class="scan-chip active"><span class="material-symbols-rounded">auto_fix_high</span>Verbessern</button>
+    <button type="button" id="scan-enhance" class="scan-chip"><span class="material-symbols-rounded">auto_fix_high</span>Verbessern</button>
     <button type="button" id="scan-rotate" class="scan-chip"><span class="material-symbols-rounded">rotate_right</span>Drehen</button>
   </div>
   <p id="scan-hint" class="scan-hint">Ecken ziehen, um den Ausschnitt anzupassen.</p>
