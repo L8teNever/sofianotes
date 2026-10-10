@@ -1236,4 +1236,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await manager.broadcast({"type": "presence_leave", "id": client.id}, board_id=board_id)
 
 
+# Experimentell: Handschrift-Modell fuer die Erkennung direkt auf dem Geraet (zu gross fuers Repo,
+# liegt deshalb in data/models; fehlt es, antwortet der Pfad mit 404 und die App laesst den Schalter aus)
+LOCAL_OCR_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "models" / "trocr-de-small"
+
+
+@app.get("/models/trocr-de-small/{file_path:path}")
+async def local_ocr_model(file_path: str) -> Response:
+    base = LOCAL_OCR_DIR.resolve()
+    target = (base / file_path).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target, headers={"Cache-Control": "public, max-age=604800"})
+
+
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

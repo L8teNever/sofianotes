@@ -539,6 +539,12 @@
         <span class="set-nav-text"><strong>App &amp; Version</strong><small id="set-sum-app">Updates</small></span>
         <span class="material-symbols-rounded set-chev">chevron_right</span>
       </button>
+      <div class="set-group">Experimentell</div>
+      <button type="button" class="set-nav" data-go="exp" data-title="Experimentell">
+        <span class="set-ico"><span class="material-symbols-rounded">auto_fix_high</span></span>
+        <span class="set-nav-text"><strong>Experimentell</strong><small id="set-sum-exp">Noch nicht fertig, nur zum Ausprobieren</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
     </nav>
     <div class="set-content">
       <h3 id="set-section-title" class="set-section-title hidden">Papier</h3>
@@ -770,6 +776,16 @@
         <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" autocomplete="off" autocorrect="off" spellcheck="false" name="admin-person-input" />
         <button type="button" id="btn-admin-new-person">Anlegen</button>
       </div>
+    </div>
+
+    <div class="set-page hidden" data-page="exp">
+      <p class="set-hint">Funktionen, die noch nicht fertig sind. Sie gelten nur für dieses Gerät und bleiben aus, bis du sie hier einschaltest.</p>
+      <button id="exp-local-ocr-toggle" class="setting-toggle set-switch" title="Handschrift auf dem Gerät erkennen">
+        <span class="set-ico"><span class="material-symbols-rounded">document_scanner</span></span>
+        <span class="set-nav-text"><strong>Handschrift auf dem Gerät erkennen</strong><small id="exp-local-ocr-status">Aus</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <p class="set-hint">Lädt einmal ein deutsches Handschrift-Modell (etwa 65 MB). Danach liest „KI“ im Lasso ohne Server und auch offline. Es liest Zeile für Zeile; mehrere Zeilen werden vorher getrennt, ganze Seiten auf einmal noch nicht.</p>
     </div>
 
     <div class="set-page hidden" data-page="app">
@@ -1308,6 +1324,7 @@
 <script src="de-words.js?v=__BUILD__"></script>
 <script src="ink-recognize.js?v=__BUILD__"></script>
 <script src="offline.js?v=__BUILD__"></script>
+<script src="local-ocr.js?v=__BUILD__"></script>
 <script src="app.js?v=__BUILD__"></script>
 <script src="updates.js?v=__BUILD__"></script>
 </body>

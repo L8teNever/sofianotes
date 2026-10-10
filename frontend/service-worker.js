@@ -1,11 +1,19 @@
 const BUILD = "__BUILD__";
 const CACHE_NAME = "sofianotes-v" + BUILD;
+// Experimentelle Handschrift-Erkennung: Bibliothek + Laufzeit (~20 MB) in einem eigenen Cache,
+// der Updates ueberlebt. Das Modell selbst speichert transformers.js ("transformers-cache").
+const OCR_CACHE = "sofianotes-ocr-v1";
+const KEEP_CACHES = [OCR_CACHE, "transformers-cache"];
+function isOcrLib(url) {
+  return url.hostname === "cdn.jsdelivr.net" && /\/npm\/(@huggingface\/transformers|onnxruntime-web)@\d/.test(url.pathname);
+}
 const APP_SHELL = [
   "/",
   "/index.html",
   "/style.css?v=" + BUILD,
   "/de-words.js?v=" + BUILD,
   "/ink-recognize.js?v=" + BUILD,
+  "/local-ocr.js?v=" + BUILD,
   "/offline.js?v=" + BUILD,
   "/updates.js?v=" + BUILD,
   "/app.js?v=" + BUILD,
@@ -34,7 +42,7 @@ self.addEventListener("activate", (event) => {
     Promise.all([
       self.clients.claim(),
       caches.keys().then((keys) => {
-        const oldKeys = keys.filter((k) => k !== CACHE_NAME);
+        const oldKeys = keys.filter((k) => k !== CACHE_NAME && !KEEP_CACHES.includes(k));
         return Promise.all(oldKeys.map((k) => caches.delete(k))).then(() => {
           if (oldKeys.length > 0) {
             return self.clients.matchAll({ type: "window" }).then((clients) => {
@@ -112,6 +120,23 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   if (url.pathname.startsWith("/ws")) return;
   if (url.pathname === "/service-worker.js") return;
+  // Modell: nicht doppelt speichern, das macht transformers.js selbst
+  if (url.origin === self.location.origin && url.pathname.startsWith("/models/trocr-de-small/")) return;
+  if (isOcrLib(url)) {
+    event.respondWith(
+      caches.open(OCR_CACHE).then((cache) =>
+        cache.match(event.request).then(
+          (hit) =>
+            hit ||
+            fetch(event.request).then((response) => {
+              if (response.ok) cache.put(event.request, response.clone());
+              return response;
+            })
+        )
+      )
+    );
+    return;
+  }
 
   if (url.origin === self.location.origin && isFreshPath(url.pathname)) {
     event.respondWith(networkFirst(event.request, url));

@@ -3263,6 +3263,39 @@
     true
   );
 
+  // ---- Experimentell: Handschrift auf dem Geraet ----
+  const expOcrToggle = document.getElementById("exp-local-ocr-toggle");
+  const expOcrStatus = document.getElementById("exp-local-ocr-status");
+  function syncExpOcr() {
+    const lo = window.SofiaLocalOcr;
+    if (!lo || !expOcrToggle) return;
+    const on = lo.enabled();
+    expOcrToggle.classList.toggle("active", on);
+    const st = lo.status();
+    let txt = "Aus";
+    if (on) {
+      if (st.state === "ready") txt = "Bereit – liest auf diesem Gerät";
+      else if (st.state === "loading") txt = "Lädt Modell … " + Math.round((st.progress || 0) * 100) + " %";
+      else if (st.state === "missing") txt = "Modell fehlt auf dem Server";
+      else if (st.state === "error") txt = "Fehler: " + (st.error || "unbekannt");
+      else txt = "An – lädt beim nächsten Start";
+    }
+    if (expOcrStatus) expOcrStatus.textContent = txt;
+    const sum = document.getElementById("set-sum-exp");
+    if (sum) sum.textContent = on ? "Handschrift auf dem Gerät: " + (st.state === "ready" ? "bereit" : "an") : "Noch nicht fertig, nur zum Ausprobieren";
+  }
+  if (expOcrToggle) {
+    expOcrToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const lo = window.SofiaLocalOcr;
+      if (!lo) return;
+      lo.setEnabled(!lo.enabled());
+      syncExpOcr();
+    });
+    if (window.SofiaLocalOcr) window.SofiaLocalOcr.onChange(syncExpOcr);
+    syncExpOcr();
+  }
+
   function openSettings() {
     toolPopover.classList.add("hidden");
     syncPenTapSettings();
@@ -12811,6 +12844,27 @@
     return (g.strokeIds || []).slice().sort().join(",");
   }
 
+  // Striche einer Auswahl in Zeilen aufteilen (die lokale Erkennung liest nur eine Zeile auf einmal):
+  // ein Strich gehoert zur Zeile, in deren Hoehe seine Mitte liegt.
+  function splitInkLines(strokes) {
+    const items = strokes
+      .map((st) => ({ st, b: st.bbox || makeBBox(st.points) }))
+      .sort((a, b) => a.b.minY + a.b.maxY - (b.b.minY + b.b.maxY));
+    const lines = [];
+    for (const it of items) {
+      const cy = (it.b.minY + it.b.maxY) / 2;
+      let line = lines.find((l) => cy >= l.minY && cy <= l.maxY);
+      if (!line) {
+        line = { minY: it.b.minY, maxY: it.b.maxY, items: [] };
+        lines.push(line);
+      }
+      line.items.push(it);
+      line.minY = Math.min(line.minY, it.b.minY);
+      line.maxY = Math.max(line.maxY, it.b.maxY);
+    }
+    return lines.sort((a, b) => a.minY - b.minY).map((l) => l.items.map((i) => i.st));
+  }
+
   function renderInkCrop(strokes) {
     const boxes = strokes.map((s) => s.bbox || SofiaInk.bboxOfPoints(s.points || []));
     const b = unionBBox(boxes);
@@ -12920,8 +12974,10 @@
       if (g) g.misspelled = [];
       return;
     }
+    // Lokales Modell liefert ganze Woerter: nichts automatisch ersetzen, nur unterstreichen
+    const keepWords = g.source === "local";
     const local = SofiaInk.correctText(g.text);
-    if (local.changes.length) g.text = local.text;
+    if (!keepWords && local.changes.length) g.text = local.text;
     g.misspelled = SofiaInk.misspelledSpans(g.text);
     if (!/[A-Za-zÄÖÜäöüß]{3,}/.test(g.text)) return;
     try {
@@ -12935,7 +12991,7 @@
       const data = await resp.json();
       if (data && data.suggestions && Object.keys(data.suggestions).length) {
         const hun = SofiaInk.correctText(g.text, data.suggestions);
-        if (hun.changes.length) g.text = hun.text;
+        if (!keepWords && hun.changes.length) g.text = hun.text;
       }
       const extra = data && data.misspelled ? data.misspelled : [];
       g.misspelled = SofiaInk.misspelledSpans(g.text, extra);
@@ -13092,7 +13148,38 @@
       renderInkOverlay();
 
       const cloudGroups = [];
+      // Experimentell: auf dem Geraet lesen (Zeile fuer Zeile). Klappt das nicht oder laedt
+      // das Modell noch, geht es wie bisher ueber den Server.
+      const local = window.SofiaLocalOcr;
+      if (local && local.enabled() && local.ready() && burst.length && !ac.signal.aborted) {
+        try {
+          const strokes = blocks[0].strokes;
+          const parts = [];
+          for (const line of splitInkLines(strokes)) {
+            if (ac.signal.aborted) break;
+            const t = await local.readLine(renderInkCrop(line).dataUrl);
+            if (t) parts.push(t);
+          }
+          // Kein correctText: das Modell liefert ganze Woerter, die Korrektur fuer
+          // Einzelbuchstaben wuerde richtige Woerter verbiegen ("Zeile" -> "Zelle")
+          const text = SofiaInk.cleanOcrText(parts.join(" "));
+          if (text && !ac.signal.aborted) {
+            const solved = mathSolveEnabled ? SofiaInk.solveFromBurst(text) : null;
+            cloudGroups.push({
+              bbox: blocks[0].bbox,
+              glyphs: [],
+              text,
+              math: !!(solved || SofiaInk.looksLikeMath(text)),
+              result: solved,
+              misspelled: SofiaInk.misspelledSpans(text),
+              strokeIds: strokes.map((st) => st.id),
+              source: "local",
+            });
+          }
+        } catch (err) {}
+      }
       const canCloud =
+        !cloudGroups.length &&
         cloudOcrEnabled !== false &&
         ocrRemaining > 1 &&
         recognizeAbort === ac &&
@@ -13173,7 +13260,7 @@
         groups = SofiaInk.stitchBlockGroups(groups, blocks);
       }
       for (const g of groups) {
-        const fix = SofiaInk.correctText(g.text);
+        const fix = g.source === "local" ? { changes: [] } : SofiaInk.correctText(g.text);
         if (fix.changes.length) g.text = fix.text;
         if (!g.misspelled) g.misspelled = SofiaInk.misspelledSpans(g.text);
       }
