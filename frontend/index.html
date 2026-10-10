@@ -437,14 +437,14 @@
         <span id="popover-tool-title">Stift Stärke</span>
         <span id="popover-size-text" class="chip">6 px</span>
       </div>
-      <div id="popover-presets" class="presets"></div>
-      <div class="slider-box">
-        <div class="slider-label">
-          <span>Individuell</span>
-          <span id="popover-brush-preview"></span>
-        </div>
-        <input id="size-slider" type="range" min="1" max="45" value="6" />
+      <div class="size-stepper">
+        <button type="button" id="size-minus" class="size-step" title="Dünner" aria-label="Dünner"><span class="material-symbols-rounded">remove</span></button>
+        <div class="size-stage"><span id="popover-brush-preview"></span></div>
+        <button type="button" id="size-plus" class="size-step" title="Dicker" aria-label="Dicker"><span class="material-symbols-rounded">add</span></button>
       </div>
+      <input id="size-slider" class="size-slider" type="range" min="1" max="45" value="6" />
+      <div class="presets-head"><span>Eigene Stärken</span><small>lange drücken = speichern</small></div>
+      <div id="popover-presets" class="presets"></div>
       <div id="eraser-clear-row" class="eraser-clear-row hidden">
         <button id="btn-erase-all" type="button" class="erase-all-btn" title="Alle Striche löschen (Bilder, Texte und Tabellen bleiben)">
           <span class="material-symbols-rounded">delete_sweep</span>

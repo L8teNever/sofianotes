@@ -75,6 +75,7 @@
     "sofianotes-math",
     "sofianotes-eraser-return",
     "sofianotes-text-lines",
+    "sofianotes-size-presets",
     "sofianotes-pen-tap2",
     "sofianotes-pen-tap3",
     "sofianotes-hwpanel-layout",
@@ -2494,6 +2495,72 @@
     return `rgba(${r},${g},${b},${alpha})`;
   }
 
+  // Eigene Staerken: drei Plaetze pro Werkzeug, gespeichert fuer alle Geraete
+  function readSizePresets() {
+    try {
+      return JSON.parse(localStorage.getItem("sofianotes-size-presets") || "{}") || {};
+    } catch (err) {
+      return {};
+    }
+  }
+  function sizePresetsFor(tool, cfg) {
+    const all = readSizePresets();
+    const own = Array.isArray(all[tool]) ? all[tool] : null;
+    const base = cfg.presets && cfg.presets.length ? cfg.presets : [];
+    return base.map((v, i) => {
+      const n = own && Number(own[i]);
+      return Number.isFinite(n) && n >= cfg.min && n <= cfg.max ? n : v;
+    });
+  }
+  function saveSizePreset(tool, cfg, i, value) {
+    const all = readSizePresets();
+    const list = sizePresetsFor(tool, cfg);
+    list[i] = Math.max(cfg.min, Math.min(cfg.max, value));
+    all[tool] = list;
+    try {
+      localStorage.setItem("sofianotes-size-presets", JSON.stringify(all));
+    } catch (err) {}
+  }
+  function popoverCfg() {
+    const selected = typeof selectionInkStrokes === "function" ? selectionInkStrokes() : [];
+    const usingSel = selected.length > 0;
+    const cfg = usingSel ? toolConfigs[selected[0].tool] || toolConfigs.pen : toolConfigs[currentTool] || toolConfigs.pen;
+    return { cfg, size: usingSel ? selected[0].size : activeSize() };
+  }
+  function applyPopoverSize(v) {
+    const { cfg } = popoverCfg();
+    const n = Math.max(cfg.min, Math.min(cfg.max, Math.round(v)));
+    setActiveSize(n);
+    restyleSelection({ size: n }, "size");
+    renderToolPopover();
+    updateEraserCursorVisibility();
+  }
+  const sizeMinusBtn = document.getElementById("size-minus");
+  const sizePlusBtn = document.getElementById("size-plus");
+  // Plus/Minus: antippen = 1 px, halten = schnell weiter
+  for (const [btn, dir] of [[sizeMinusBtn, -1], [sizePlusBtn, 1]]) {
+    if (!btn) continue;
+    let delay = null;
+    let rep = null;
+    const step = () => applyPopoverSize(popoverCfg().size + dir);
+    const stop = () => {
+      clearTimeout(delay);
+      clearInterval(rep);
+      delay = rep = null;
+    };
+    btn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      stop();
+      step();
+      delay = setTimeout(() => (rep = setInterval(step, 70)), 380);
+    });
+    btn.addEventListener("pointerup", stop);
+    btn.addEventListener("pointerleave", stop);
+    btn.addEventListener("pointercancel", stop);
+    btn.addEventListener("click", (e) => e.stopPropagation());
+  }
+
   function renderToolPopover() {
     const selected = typeof selectionInkStrokes === "function" ? selectionInkStrokes() : [];
     const usingSel = selected.length > 0;
@@ -2507,33 +2574,58 @@
     sizeSlider.max = String(cfg.max);
     sizeSlider.value = String(size);
     popoverPresets.innerHTML = "";
-    const names = cfg.names || ["Dünn", "Mittel", "Dick"];
-    cfg.presets.forEach((preset, i) => {
+    const presetTool = usingSel ? selected[0].tool : currentTool;
+    const presets = sizePresetsFor(presetTool, cfg);
+    const dotFor = (v) => Math.round(5 + (17 * (v - cfg.min)) / Math.max(1, cfg.max - cfg.min));
+    presets.forEach((preset, i) => {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "preset-btn" + (preset === size ? " active" : "");
+      btn.className = "preset-btn" + (Math.round(preset) === Math.round(size) ? " active" : "");
+      btn.title = "Antippen: " + Math.round(preset) + " px · lange drücken: aktuelle Stärke hier speichern";
       const dot = document.createElement("span");
       dot.className = "preset-dot";
-      const px = 6 + i * 5;
+      const px = dotFor(preset);
       dot.style.width = px + "px";
       dot.style.height = px + "px";
-      if (currentTool === "marker" && !usingSel) dot.style.background = hexToRgba(currentColor, 0.55);
-      else if (currentTool === "eraser") dot.style.background = "#94a3b8";
+      if (presetTool === "marker") dot.style.background = hexToRgba(currentColor, 0.55);
+      else if (presetTool === "eraser") dot.style.background = "#94a3b8";
       else dot.style.background = themeInk(currentColor);
       btn.appendChild(dot);
       const lab = document.createElement("span");
-      lab.textContent = names[i] || String(preset);
+      lab.textContent = Math.round(preset) + " px";
       btn.appendChild(lab);
+      // lange druecken: aktuelle Staerke auf diesen Platz legen
+      let hold = null;
+      let saved = false;
+      btn.addEventListener("pointerdown", () => {
+        saved = false;
+        clearTimeout(hold);
+        hold = setTimeout(() => {
+          saved = true;
+          saveSizePreset(presetTool, cfg, i, Math.round(usingSel ? selected[0].size : activeSize()));
+          if (navigator.vibrate) navigator.vibrate(12);
+          showToast("Gespeichert: " + Math.round(usingSel ? selected[0].size : activeSize()) + " px");
+          renderToolPopover();
+        }, 550);
+      });
+      const stopHold = () => clearTimeout(hold);
+      btn.addEventListener("pointerup", stopHold);
+      btn.addEventListener("pointerleave", stopHold);
+      btn.addEventListener("pointercancel", stopHold);
+      btn.addEventListener("contextmenu", (e) => e.preventDefault());
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        setActiveSize(preset);
-        restyleSelection({ size: preset });
-        renderToolPopover();
-        updateEraserCursorVisibility();
+        if (saved) {
+          saved = false;
+          return;
+        }
+        applyPopoverSize(preset);
       });
       popoverPresets.appendChild(btn);
     });
-    const previewPx = Math.min(22, Math.max(4, size / 2));
+    sizeMinusBtn.disabled = size <= cfg.min;
+    sizePlusBtn.disabled = size >= cfg.max;
+    const previewPx = Math.min(40, Math.max(3, size));
     popoverPreview.style.width = previewPx + "px";
     popoverPreview.style.height = previewPx + "px";
     const previewTool = usingSel ? selected[0].tool : currentTool;
