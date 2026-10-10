@@ -9884,6 +9884,98 @@
     requestRedraw();
   }
 
+  // ---- Bearbeiten wie Zeichnen: einrasten und Hilfslinien zeigen ----
+  // Rechteck -> Quadrat (gleiche Seiten), Dreieck -> rechter Winkel / gleich lange Seiten.
+  function snapEditedRect(ring, knot, pressure) {
+    const c = closedRing(ring).slice(0, 4).map((p) => ({ x: p.x, y: p.y }));
+    if (c.length !== 4) return ring;
+    const len = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+    if (knot.kind === "corner") {
+      const i = knot.corner;
+      const opp = c[(i + 2) % 4];
+      const pa = c[(i + 3) % 4];
+      const pb = c[(i + 1) % 4];
+      const ua = len(opp, pa);
+      const vb = len(opp, pb);
+      if (Math.abs(ua - vb) > shapeSnapTol(ua, vb)) return ring;
+      const side = Math.max(ua, vb);
+      const ax = (pa.x - opp.x) / (ua || 1), ay = (pa.y - opp.y) / (ua || 1);
+      const bx = (pb.x - opp.x) / (vb || 1), by = (pb.y - opp.y) / (vb || 1);
+      c[(i + 3) % 4] = { x: opp.x + ax * side, y: opp.y + ay * side };
+      c[(i + 1) % 4] = { x: opp.x + bx * side, y: opp.y + by * side };
+      c[i] = { x: opp.x + (ax + bx) * side, y: opp.y + (ay + by) * side };
+    } else {
+      const i = knot.side;
+      const f0 = c[(i + 3) % 4];
+      const f1 = c[(i + 2) % 4];
+      const across = len(f0, c[i]);
+      const edge = len(c[i], c[(i + 1) % 4]);
+      if (Math.abs(across - edge) > shapeSnapTol(across, edge)) return ring;
+      const ux = (c[i].x - f0.x) / (across || 1), uy = (c[i].y - f0.y) / (across || 1);
+      c[i] = { x: f0.x + ux * edge, y: f0.y + uy * edge };
+      c[(i + 1) % 4] = { x: f1.x + ux * edge, y: f1.y + uy * edge };
+    }
+    shapeGuide = {
+      kind: "edit",
+      out: { x: (c[0].x + c[2].x) / 2, y: (c[0].y + c[2].y) / 2 },
+      inward: true,
+      ticks: [0, 1, 2, 3].map((k) => [c[k], c[(k + 1) % 4]]),
+    };
+    return rebuildClosed(c.map((p) => ({ x: p.x, y: p.y, p: pressure })), pressure);
+  }
+
+  function snapEditedTriangle(ring, i, pressure) {
+    const A = ring[(i + 1) % 3];
+    const B = ring[(i + 2) % 3];
+    let P = ring[i];
+    const len = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+    const dot = (o, a, b) => (a.x - o.x) * (b.x - o.x) + (a.y - o.y) * (b.y - o.y);
+    const angleAt = (o, a, b) => Math.acos(Math.max(-1, Math.min(1, dot(o, a, b) / ((len(o, a) * len(o, b)) || 1))));
+    const RIGHT_TOL = (5 * Math.PI) / 180;
+    const rights = [];
+    // rechter Winkel am gezogenen Punkt: Thaleskreis ueber AB
+    if (Math.abs(angleAt(P, A, B) - Math.PI / 2) < RIGHT_TOL) {
+      const M = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+      const r = len(A, B) / 2;
+      const d = len(M, P) || 1;
+      P = { x: M.x + ((P.x - M.x) / d) * r, y: M.y + ((P.y - M.y) / d) * r, p: pressure };
+      rights.push([P, A, B]);
+    } else {
+      // rechter Winkel an einer festen Ecke: P auf die Senkrechte dort schieben
+      for (const [O, Q] of [[A, B], [B, A]]) {
+        if (Math.abs(angleAt(O, P, Q) - Math.PI / 2) < RIGHT_TOL) {
+          const l = len(O, Q) || 1;
+          const ux = (Q.x - O.x) / l, uy = (Q.y - O.y) / l;
+          const t = (P.x - O.x) * ux + (P.y - O.y) * uy;
+          P = { x: P.x - ux * t, y: P.y - uy * t, p: pressure };
+          rights.push([O, P, Q]);
+          break;
+        }
+      }
+    }
+    ring[i] = P;
+    // gleich lange Seiten anzeigen (bei Spitze am gezogenen Punkt auch einrasten)
+    const ticks = [];
+    const pa = len(P, A), pb = len(P, B), ab = len(A, B);
+    if (!rights.length && Math.abs(pa - pb) <= shapeSnapTol(pa, pb)) {
+      const M = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+      const l = ab || 1;
+      const nx = -(B.y - A.y) / l, ny = (B.x - A.x) / l;
+      const h = (P.x - M.x) * nx + (P.y - M.y) * ny;
+      ring[i] = P = { x: M.x + nx * h, y: M.y + ny * h, p: pressure };
+      ticks.push([P, A], [P, B]);
+    } else {
+      const tol = shapeSnapTol(ab, ab);
+      if (Math.abs(len(P, A) - len(P, B)) <= tol * 0.4) ticks.push([P, A], [P, B]);
+      if (Math.abs(len(A, P) - ab) <= tol * 0.4) ticks.push([A, P], [A, B]);
+      if (Math.abs(len(B, P) - ab) <= tol * 0.4) ticks.push([B, P], [B, A]);
+    }
+    if (rights.length || ticks.length) {
+      const out = { x: (ring[0].x + ring[1].x + ring[2].x) / 3, y: (ring[0].y + ring[1].y + ring[2].y) / 3 };
+      shapeGuide = { kind: "edit", rights, ticks, out };
+    }
+  }
+
   function updatePointEdit(world) {
     const dx = world.x - dragState.startWorld.x;
     const dy = world.y - dragState.startWorld.y;
@@ -9894,12 +9986,14 @@
     const knot = dragState.knot || { kind: "free", i: dragState.index, knots: dragState.knots };
     const pressure = (pts[0] && pts[0].p) || 0.5;
     const shape = inferShape({ ...s, points: pts, extra: s.extra });
+    shapeGuide = null;
     if (shape === "rectangle" && (knot.kind === "corner" || knot.kind === "side")) {
       const corners = uniqueRectCorners(pts);
-      s.points =
+      const moved =
         knot.kind === "side"
           ? moveRectSide(corners, knot.side, world, pressure)
           : moveRectCorner(corners, knot.corner, world, pressure);
+      s.points = snapEditedRect(moved, knot, pressure);
       s.extra = Object.assign({}, s.extra || {}, { shape: "rectangle" });
     } else if ((shape === "circle" || shape === "ellipse") && knot.kind === "radius") {
       const g = ellipseGeomFromPoints(pts);
@@ -9907,22 +10001,37 @@
         const r = Math.max(8, Math.hypot(world.x - g.cx, world.y - g.cy));
         s.points = makeEllipsePoints(g.cx, g.cy, r, r, pressure, 96);
         s.extra = Object.assign({}, s.extra || {}, { shape: "circle" });
+        shapeGuide = { kind: "edit", center: { cx: g.cx, cy: g.cy, r } };
       } else {
         let rx = g.rx;
         let ry = g.ry;
         if (knot.axis === "x") rx = Math.max(8, Math.abs(world.x - g.cx));
         else ry = Math.max(8, Math.abs(world.y - g.cy));
+        // fast gleich: zum Kreis einrasten (wie beim Zeichnen)
+        const round = Math.abs(rx - ry) <= shapeSnapTol(rx * 2, ry * 2) / 2;
+        if (round) {
+          if (knot.axis === "x") rx = ry;
+          else ry = rx;
+          shapeGuide = { kind: "edit", center: { cx: g.cx, cy: g.cy, r: rx } };
+        }
         s.points = makeEllipsePoints(g.cx, g.cy, rx, ry, pressure, 96);
-        s.extra = Object.assign({}, s.extra || {}, { shape: "ellipse" });
+        s.extra = Object.assign({}, s.extra || {}, { shape: round ? "circle" : "ellipse" });
       }
     } else if (shape === "triangle" && knot.kind === "corner") {
       const ring = closedRing(pts).slice(0, 3).map((p) => ({ x: p.x, y: p.y, p: pressure }));
       ring[knot.corner] = { x: world.x, y: world.y, p: pressure };
+      snapEditedTriangle(ring, knot.corner, pressure);
       s.points = rebuildClosed(ring, pressure);
       s.extra = Object.assign({}, s.extra || {}, { shape: "triangle" });
     } else if (shape === "line" && knot.kind === "end") {
       const next = pts.map((p) => ({ x: p.x, y: p.y, p: p.p }));
-      next[knot.i] = { x: world.x, y: world.y, p: pressure };
+      const other = next[knot.i === 0 ? next.length - 1 : 0];
+      // waagerecht/senkrecht einrasten, wenn fast gerade (wie beim Zeichnen)
+      const ang = Math.atan2(world.y - other.y, world.x - other.x);
+      const off = Math.abs(((ang % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2));
+      const near = Math.min(off, Math.PI / 2 - off) < (4 * Math.PI) / 180;
+      const end = near ? snapCardinalFrom(other, world) : world;
+      next[knot.i] = { x: end.x, y: end.y, p: pressure };
       s.points = next;
       s.extra = Object.assign({}, s.extra || {}, { shape: "line" });
     } else {
@@ -11195,7 +11304,9 @@
 
   function drawShapeGuide() {
     const g = shapeGuide;
-    if (!g || !currentStroke || !currentStroke.objectKind) return;
+    if (!g) return;
+    const editing = g.kind === "edit" && dragState && dragState.kind === "point";
+    if (!editing && (!currentStroke || !currentStroke.objectKind)) return;
     const ink = darkMode ? "rgba(208,188,255,0.95)" : "rgba(103,80,164,0.95)";
     ctx.save();
     ctx.lineCap = "round";
@@ -11210,7 +11321,63 @@
       ctx.lineTo(x + nx * len, y + ny * len);
       ctx.stroke();
     };
-    if (g.kind === "square") {
+    if (g.kind === "edit") {
+      if (g.outline) {
+        ctx.setLineDash([5 / scale, 4 / scale]);
+        ctx.beginPath();
+        g.outline.forEach((p, k) => (k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+        ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Gleich-Striche etwas ausserhalb der Form, damit die Griffe sie nicht verdecken
+      for (const [p, q] of g.ticks || []) {
+        const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+        let nx = -(q.y - p.y) / l;
+        let ny = (q.x - p.x) / l;
+        let mx = (p.x + q.x) / 2;
+        let my = (p.y + q.y) / 2;
+        if (g.out && ((mx - g.out.x) * nx + (my - g.out.y) * ny < 0) !== !!g.inward) {
+          nx = -nx;
+          ny = -ny;
+        }
+        if (g.out) {
+          mx += nx * (18 / scale);
+          my += ny * (18 / scale);
+        }
+        const tx = (q.x - p.x) / l;
+        const ty = (q.y - p.y) / l;
+        const gap = 3 / scale;
+        tick(mx - tx * gap, my - ty * gap, nx, ny);
+        tick(mx + tx * gap, my + ty * gap, nx, ny);
+      }
+      for (const [o, a, b] of g.rights || []) {
+        const s = 12 / scale;
+        const la = Math.hypot(a.x - o.x, a.y - o.y) || 1;
+        const lb = Math.hypot(b.x - o.x, b.y - o.y) || 1;
+        const ax = ((a.x - o.x) / la) * s, ay = ((a.y - o.y) / la) * s;
+        const bx = ((b.x - o.x) / lb) * s, by = ((b.y - o.y) / lb) * s;
+        ctx.beginPath();
+        ctx.moveTo(o.x + ax, o.y + ay);
+        ctx.lineTo(o.x + ax + bx, o.y + ay + by);
+        ctx.lineTo(o.x + bx, o.y + by);
+        ctx.stroke();
+      }
+      if (g.center) {
+        const c = g.center;
+        ctx.setLineDash([5 / scale, 4 / scale]);
+        ctx.beginPath();
+        ctx.moveTo(c.cx - c.r, c.cy);
+        ctx.lineTo(c.cx + c.r, c.cy);
+        ctx.moveTo(c.cx, c.cy - c.r);
+        ctx.lineTo(c.cx, c.cy + c.r);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(c.cx, c.cy, 2.2 / scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (g.kind === "square") {
       const x0 = Math.min(g.x, g.x + g.w);
       const y0 = Math.min(g.y, g.y + g.h);
       const side = Math.abs(g.w);
