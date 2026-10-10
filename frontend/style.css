@@ -4961,3 +4961,27 @@ html[data-theme="dark"] .set-sub.set-sub-small { color: #c8c2d0; }
 .exp-ocr-actions .version-btn:disabled { opacity: 0.5; cursor: default; }
 html[data-theme="dark"] .exp-ocr-actions .version-btn { background: #3a3350; color: #e8def8; }
 html[data-theme="dark"] .exp-ocr-actions .version-btn.exp-danger { color: #ffb3b8; }
+
+/* Material-Leiste: angedockt links rückt sie neben die offene Seiten-Leiste */
+.hw-panel.docked.dock-left { transition: left 0.32s cubic-bezier(0.2, 0, 0, 1); }
+
+/* Material-Fenster greifen: hebt sich kurz an, Rand leuchtet – "jetzt kannst du es verschieben" */
+@keyframes hw-grab-pop {
+  0% { scale: 1; }
+  55% { scale: 1.035; }
+  100% { scale: 1.02; }
+}
+.hw-panel.grabbed {
+  scale: 1.02;
+  animation: hw-grab-pop 0.22s cubic-bezier(0.2, 0, 0, 1);
+  outline: 2px solid rgba(103, 80, 164, 0.55);
+  outline-offset: 2px;
+  box-shadow: 0 24px 60px rgba(30, 20, 60, 0.32) !important;
+  cursor: grabbing;
+}
+.hw-panel.grabbed .hw-panel-head { cursor: grabbing; }
+.hw-panel.grab-drop { transition: scale 0.24s cubic-bezier(0.2, 0, 0, 1); scale: 1; }
+html[data-theme="dark"] .hw-panel.grabbed { outline-color: rgba(208, 188, 255, 0.6); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6) !important; }
+@media (prefers-reduced-motion: reduce) {
+  .hw-panel.grabbed { animation: none; scale: 1; }
+}

@@ -902,7 +902,8 @@
       window.sofiaSplitLayout();
       return;
     }
-    left = Math.max(pagesInsetLeft, Math.round(left || 0));
+    // Seiten-Leiste und links angedockte Material-Leiste stehen nebeneinander, nicht uebereinander
+    left = pagesInsetLeft + Math.round(left || 0);
     right = Math.max(0, Math.round(right || 0));
     if (left === viewLeft && right === viewRight) return;
     // was vorher in der Mitte des Sichtbereichs lag, bleibt dort
@@ -14089,7 +14090,7 @@
     if (docked) {
       const w = hwDockWidth();
       const inset = 12;
-      Object.assign(hwPanel.style, { top: inset + "px", height: Math.max(200, window.innerHeight - inset * 2) + "px", width: w + "px", left: hwLayout.side === "left" ? "0px" : window.innerWidth - w + "px" });
+      Object.assign(hwPanel.style, { top: inset + "px", height: Math.max(200, window.innerHeight - inset * 2) + "px", width: w + "px", left: hwLayout.side === "left" ? "var(--pages-inset, 0px)" : window.innerWidth - w + "px" });
       setViewInsets(hwLayout.side === "left" ? w : 0, hwLayout.side === "left" ? 0 : w);
     } else {
       setViewInsets(0, 0);
@@ -14518,6 +14519,12 @@
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch (err) {}
     hwPanel.classList.add("dragging");
+    // Greifen sichtbar machen: Fenster hebt sich kurz an (nur beim Verschieben)
+    if (kind === "move") {
+      hwPanel.classList.remove("grab-drop");
+      hwPanel.classList.add("grabbed");
+      if (navigator.vibrate) navigator.vibrate(10);
+    }
   }
   function hwMoveDrag(e) {
     if (!hwDrag || hwDrag.id !== e.pointerId) return;
@@ -14565,6 +14572,11 @@
     const kind = hwDrag.kind;
     hwDrag = null;
     hwPanel.classList.remove("dragging");
+    if (hwPanel.classList.contains("grabbed")) {
+      hwPanel.classList.remove("grabbed");
+      hwPanel.classList.add("grab-drop");
+      setTimeout(() => hwPanel.classList.remove("grab-drop"), 260);
+    }
     const toLeft = hwPanel.classList.contains("dock-hint-left");
     const toRight = hwPanel.classList.contains("dock-hint-right");
     hwPanel.classList.remove("dock-hint-left", "dock-hint-right");
@@ -17921,6 +17933,8 @@
       pagesInsetLeft = panelOpen ? Math.min(PANEL_W, Math.round(window.innerWidth * 0.4)) : 0;
       // von links angedockt; oben sitzen ueber ihr die Leisten (⋯ und "Seiten  ✕")
       panel.style.width = pagesInsetLeft + "px";
+      // eine links angedockte Material-Leiste rueckt daneben
+      document.documentElement.style.setProperty("--pages-inset", pagesInsetLeft + "px");
       document.body.classList.toggle("pages-open", panelOpen);
       if (typeof syncBackButton === "function") syncBackButton();
       setViewInsets(requestedInsets[0], requestedInsets[1]);
@@ -19564,7 +19578,7 @@
     }
     function geometry() {
       const st = splitState;
-      const L = Math.max(pagesInsetLeft, Math.round(requestedInsets[0] || 0));
+      const L = pagesInsetLeft + Math.round(requestedInsets[0] || 0);
       const R = Math.round(requestedInsets[1] || 0);
       const W = window.innerWidth;
       const x = Math.round(L + (W - L - R) * st.pos);
