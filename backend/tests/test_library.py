@@ -167,3 +167,32 @@ class MediaLibraryTests(unittest.TestCase):
         items = run(db.media_library_list(10))
         self.assertEqual([i["id"] for i in items], [a, b])
         self.assertEqual(items[0]["personId"], "franz")
+
+
+class CompactPointsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_points_are_rounded_and_compact(self):
+        b = run(db.create_board("simon", "R", None))
+        st = {"id": "s1", "tool": "pen", "color": "#000", "size": 3, "board_id": b["id"],
+              "points": [{"x": -367.4727053967903, "y": 421.7515025264502, "p": 0.07999999821186066}, {"x": 5, "y": 6, "p": 1, "text": "a"}]}
+        run(db.insert_stroke(st, "simon"))
+        raw = db._conn.execute("SELECT points FROM strokes WHERE id = 's1'").fetchone()[0]
+        self.assertEqual(raw, '[{"x":-367.47,"y":421.75,"p":0.08},{"x":5,"y":6,"p":1,"text":"a"}]')
+        loaded = run(db.load_all(b["id"]))
+        self.assertEqual(loaded[0]["points"][0], {"x": -367.47, "y": 421.75, "p": 0.08})
+
+    def test_migration_rewrites_old_rows_once(self):
+        b = run(db.create_board("simon", "R", None))
+        db._conn.execute("INSERT INTO strokes (id, tool, color, size, points, created_at, board_id) VALUES (?,?,?,?,?,?,?)",
+                         ("old", "pen", "#000", 3, '[{"x": 1.23456789, "y": 2.0, "p": 0.5}]', 1.0, b["id"]))
+        db._conn.execute("PRAGMA user_version = 0")
+        db._migrate_compact_points_sync()
+        raw = db._conn.execute("SELECT points FROM strokes WHERE id = 'old'").fetchone()[0]
+        self.assertEqual(raw, '[{"x":1.23,"y":2.0,"p":0.5}]')
+        self.assertEqual(db._conn.execute("PRAGMA user_version").fetchone()[0], 1)

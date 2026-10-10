@@ -34,7 +34,8 @@
   };
 
   const canvas = document.getElementById("board");
-  const ctx = canvas.getContext("2d");
+  // let: beim Aufsetzen des Stifts zeichnet drawScene das Blatt kurz ins Zwischenbild (staticLayer)
+  let ctx = canvas.getContext("2d");
   window.__sofiaMainCtx = ctx;
   const eraserCursorEl = document.getElementById("eraser-cursor");
   const statusEl = document.getElementById("status");
@@ -1024,14 +1025,17 @@
     // Offene Seiten-Leiste: "Seiten" immer oben mittig auf der Leiste, nicht ueber einer
     // an die Seite geschobenen Kopfleiste.
     if (overPanel) {
-      side.classList.add("tsb-corner");
-      side.classList.remove("tsb-vertical", "tsb-bottom");
+      // Klassen nur schreiben, wenn sie sich aendern: jedes Schreiben weckt den
+      // MutationObserver -> layoutTopBar -> placeSideBar (sonst Endlosschleife jedes Bild)
+      setCls(side, "tsb-corner", true);
+      setCls(side, "tsb-vertical", false);
+      setCls(side, "tsb-bottom", false);
       side.style.left = "";
       side.style.top = "";
       side.style.transform = "";
       return;
     }
-    side.classList.toggle("tsb-vertical", vertical);
+    setCls(side, "tsb-vertical", vertical);
     const sw = side.offsetWidth;
     const sh = side.offsetHeight;
     let left;
@@ -1042,13 +1046,14 @@
       if (top < 4) top = r.bottom + 8;
     } else {
       // ganz links am Rand (neben einer offenen Seiten-Leiste), oben bzw. unten wie die Kopfleiste
-      side.classList.toggle("tsb-bottom", bar.classList.contains("tb-bottom"));
-      side.classList.add("tsb-corner");
+      setCls(side, "tsb-bottom", bar.classList.contains("tb-bottom"));
+      setCls(side, "tsb-corner", true);
       side.style.left = "";
       side.style.top = "";
       return;
     }
-    side.classList.remove("tsb-corner", "tsb-bottom");
+    setCls(side, "tsb-corner", false);
+    setCls(side, "tsb-bottom", false);
     // nicht ueber die Rueckgaengig-Pille legen: dann auf die andere Seite der Kopfleiste
     const undo = document.getElementById("undo-redo-dock");
     const u = undo ? undo.getBoundingClientRect() : null;
@@ -1255,12 +1260,20 @@
   }
 
   // Geglaettete Linie als Path2D, pro Strich gemerkt: beim Verschieben, Zoomen und Schwenken
-  // muss sie nicht jedes Bild neu aus allen Punkten gebaut werden. Ein Fingerabdruck aus den
-  // Koordinaten faengt auch Punkte ab, die direkt veraendert wurden.
+  // muss sie nicht jedes Bild neu aus allen Punkten gebaut werden. Aenderungen ersetzen das
+  // Punkte-Array (neuer Schluessel) oder haengen an (Laenge/letzter Punkt im Fingerabdruck).
+  // Wer Punkte direkt verschiebt, ruft forgetSmoothPath(points) auf. Frueher lief der
+  // Fingerabdruck jedes Bild ueber alle Punkte aller sichtbaren Striche - das war der groesste Posten.
   const smoothPathCache = new WeakMap();
+  function forgetSmoothPath(pts) {
+    if (pts) smoothPathCache.delete(pts);
+  }
   function smoothPathFor(pts) {
-    let sig = pts.length;
-    for (let i = 0; i < pts.length; i++) sig += pts[i].x * 1.0000003 + pts[i].y * 0.9999991;
+    const n = pts.length;
+    const a = pts[0];
+    const m = pts[n >> 1];
+    const z = pts[n - 1];
+    const sig = n + a.x * 1.0000003 + a.y * 0.9999991 + m.x * 1.0000007 + m.y * 0.9999993 + z.x * 1.0000011 + z.y * 0.9999997;
     const hit = smoothPathCache.get(pts);
     if (hit && hit.sig === sig) return hit.path;
     const path = new Path2D();
@@ -2161,7 +2174,118 @@
   }
   // full: auch Bedienelemente (Auswahl, Lineal, Zoom-Rahmen ...) - nur fuer die aktive Ansicht.
   // clip: {x0, x1} in Fensterkoordinaten - nur dort zeichnen (geteilte Ansicht)
+  // Fertige Striche als Zwischenbild: waehrend ein Strich entsteht, aendert sich nur er selbst.
+  // Beim Aufsetzen wird das Blatt einmal ohne ihn gezeichnet und gemerkt; danach kopiert jedes
+  // Bild nur dieses Zwischenbild und malt den neuen Strich darueber (statt aller Striche).
+  const staticLayer = { canvas: document.createElement("canvas"), ctx: null, key: "", sid: null, slow: 0, off: false };
+  function canCacheStatic() {
+    return (
+      !staticLayer.off &&
+      !!currentStroke &&
+      !currentStroke.eraser &&
+      (currentStroke.tool === "pen" || currentStroke.tool === "marker") &&
+      !historyView &&
+      !pageAppear &&
+      !splitOn()
+    );
+  }
+  function staticKey() {
+    return [scale, offsetX, offsetY, canvasLeft, canvas.width, canvas.height, dpr, darkMode ? 1 : 0, gridStyle, boardEditId || "", notebook ? pageRects(notebook).length : -1].join("|");
+  }
+  // Zeichenflaeche des Zwischenbilds in Bildschirmgroesse. Das Blatt wird direkt hierhin gezeichnet:
+  // aus der sichtbaren Flaeche zurueckzukopieren kostet ~80 ms (Browser muss das Bild zuruecklesen).
+  function staticLayerCtx() {
+    const L = staticLayer;
+    if (L.canvas.width !== canvas.width || L.canvas.height !== canvas.height) {
+      L.canvas.width = canvas.width;
+      L.canvas.height = canvas.height;
+      L.ctx = null;
+    }
+    if (!L.ctx) L.ctx = L.canvas.getContext("2d");
+    L.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    return L.ctx;
+  }
+  // Live-Teile ueber dem Zwischenbild: Striche anderer, die gerade entstehen, und der eigene
+  function drawLiveInk() {
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
+    const clipPages = notebook && !boardEditId;
+    if (clipPages) {
+      ctx.save();
+      ctx.beginPath();
+      for (const r of pageRects(notebook)) ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.clip();
+    }
+    // Marker liegt sonst unter der Tinte; hier liegt er darueber. "multiply" (hell) bzw.
+    // "screen" (dunkel) laesst die Schrift trotzdem unveraendert durch - sieht aus wie darunter.
+    const live = (st) => {
+      if (st.tool !== "marker") return drawStroke(st, ctx);
+      ctx.save();
+      ctx.globalCompositeOperation = darkMode ? "screen" : "multiply";
+      drawStroke(st, ctx, { alpha: 0.38 });
+      ctx.restore();
+    };
+    for (const st of remoteInProgress.values()) live(st);
+    const pageId = currentStroke.extra && currentStroke.extra.boardPage;
+    if (!pageId || pageId === boardEditId) live(currentStroke);
+    if (clipPages) {
+      ctx.restore();
+      ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
+    }
+  }
+
   function drawScene(full, clip, live = true) {
+    const cacheable = live && full && !clip && canCacheStatic();
+    if (cacheable && notebook && !boardEditId) clampNotebookView();
+    const key = cacheable ? staticKey() : "";
+    if (cacheable && staticLayer.sid === currentStroke.id && staticLayer.key === key) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(staticLayer.canvas, 0, 0);
+      if (window.sofiaPagesUi) window.sofiaPagesUi();
+      drawLiveInk();
+      drawSceneOverlays();
+      return;
+    }
+    const mainCtx = ctx;
+    const buildStart = cacheable ? performance.now() : 0;
+    if (cacheable) {
+      ctx = staticLayerCtx();
+      window.__sofiaMainCtx = ctx;
+    }
+    try {
+      drawSceneContent(full, clip, live, cacheable);
+    } finally {
+      if (ctx !== mainCtx) {
+        ctx = mainCtx;
+        window.__sofiaMainCtx = mainCtx;
+      }
+    }
+    if (cacheable) {
+      // Zwischenbild fertig: auf den Bildschirm, dann der Strich darueber
+      staticLayer.key = key;
+      staticLayer.sid = currentStroke.id;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(staticLayer.canvas, 0, 0);
+      // Manche Geraete laden das Zwischenbild nur langsam hoch (ohne echte GPU dauert das erste
+      // Kopieren > 25 ms). Passiert das zweimal, wird fuer diese Sitzung normal gezeichnet.
+      if (performance.now() - buildStart > 25 && ++staticLayer.slow >= 2) {
+        staticLayer.off = true;
+        staticLayer.canvas.width = staticLayer.canvas.height = 1;
+        staticLayer.ctx = null;
+      }
+      drawLiveInk();
+    }
+    if (!full) {
+      ctx.restore();
+      return;
+    }
+    drawSceneOverlays();
+  }
+
+  // Blatt ohne Bedienelemente. Bei cacheable ohne die gerade entstehenden Striche und
+  // ohne das abschliessende restore (das macht drawScene auf dem Zwischenbild).
+  function drawSceneContent(full, clip, live, cacheable) {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (clip) {
@@ -2243,21 +2367,21 @@
 
     for (const stroke of back) drawLoose(stroke);
     for (const stroke of imgs) drawStroke(stroke);
-    for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
+    if (!cacheable) for (const stroke of remoteInProgress.values()) if (stroke.tool === "image") drawStroke(stroke);
     // Tabellen liegen wie Papier unter der Tinte, damit man direkt in die Zellen schreiben kann.
     for (const stroke of tables) drawStroke(stroke);
 
     // Marker auf eigenem Layer in voller Deckkraft, dann einmalig mit Alpha
     // draufgelegt — so entstehen keine dunklen Perlen durch Selbstueberlagerung.
     // Nach den Bildern, damit Textmarker auf Fotos und PDFs liegt.
-    const liveMarker = live && currentStroke && currentStroke.tool === "marker";
-    const hasMarkers = markers.length > 0 || liveMarker || Array.from(remoteInProgress.values()).some((st) => st.tool === "marker");
+    const liveMarker = !cacheable && live && currentStroke && currentStroke.tool === "marker";
+    const hasMarkers = markers.length > 0 || liveMarker || (!cacheable && Array.from(remoteInProgress.values()).some((st) => st.tool === "marker"));
     if (hasMarkers || markerLayerUsed) syncMarkerLayer();
     if (hasMarkers) {
       markerLayerUsed = true;
       markerCtx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
       for (const stroke of markers) drawStroke(stroke, markerCtx, { alpha: 1 });
-      for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
+      if (!cacheable) for (const stroke of remoteInProgress.values()) if (stroke.tool === "marker") drawStroke(stroke, markerCtx, { alpha: 1 });
       if (liveMarker) drawStroke(currentStroke, markerCtx, { alpha: 1 });
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -2269,8 +2393,8 @@
 
     for (const stroke of main) drawLoose(stroke);
     drawHistoryGhosts();
-    for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
-    if (live && currentStroke && currentStroke.tool && currentStroke.tool !== "marker") {
+    if (!cacheable) for (const stroke of remoteInProgress.values()) if (stroke.tool !== "marker" && stroke.tool !== "image") drawStroke(stroke);
+    if (!cacheable && live && currentStroke && currentStroke.tool && currentStroke.tool !== "marker") {
       const pageId = currentStroke.extra && currentStroke.extra.boardPage;
       if (!pageId || pageId === boardEditId) drawStroke(currentStroke);
     }
@@ -2279,11 +2403,15 @@
       ctx.restore();
       ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
     }
-    if (!full) {
-      ctx.restore();
+    if (cacheable) {
+      ctx.restore(); // Zwischenbild: save() vom Anfang schliessen
       return;
     }
+    if (!full) return;
+  }
 
+  // Bedienelemente ueber dem Blatt (Auswahl, Lineal, Zoom-Rahmen ...); schliesst das ctx.save() von drawScene
+  function drawSceneOverlays() {
     drawTextDragPreview();
     drawTextMoveHandles();
     drawZoomBoxOnPage();
@@ -11661,7 +11789,13 @@
     requestRedraw();
   }
 
+  // Auf 1/100 Weltpixel runden: unsichtbar, halbiert aber Live-Nachrichten und Speicher
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const r3 = (v) => (typeof v === "number" ? Math.round(v * 1000) / 1000 : v);
   function startStroke(pointerId, pointerType, wx, wy, pressure) {
+    wx = r2(wx);
+    wy = r2(wy);
+    pressure = r3(pressure);
     clearSelection();
     const id = uuid();
     const tool = currentTool === "marker" ? "marker" : "pen";
@@ -11696,6 +11830,9 @@
 
   function extendStroke(wx, wy, pressure) {
     if (!currentStroke) return;
+    wx = r2(wx);
+    wy = r2(wy);
+    pressure = r3(pressure);
     if (currentStroke.objectKind) {
       applyObjectPreview(wx, wy, pressure);
       return;
@@ -11712,9 +11849,9 @@
       for (let i = 1; i < steps; i++) {
         const t = i / steps;
         const pt = {
-          x: last.x + (wx - last.x) * t,
-          y: last.y + (wy - last.y) * t,
-          p: (last.p || 0.5) * (1 - t) + pressure * t,
+          x: r2(last.x + (wx - last.x) * t),
+          y: r2(last.y + (wy - last.y) * t),
+          p: r3((last.p || 0.5) * (1 - t) + pressure * t),
         };
         currentStroke.points.push(pt);
         currentStroke.unsent.push(pt);
@@ -17545,6 +17682,7 @@
           p.x += dx;
           p.y += dy;
         }
+        forgetSmoothPath(st.points);
         st.bbox = strokeWorldBBox(st);
         tagShape(st);
         moved.push(st.id);
@@ -17702,6 +17840,7 @@
             p.x += dx;
             p.y += dy;
           }
+          forgetSmoothPath(st.points);
           st.bbox = strokeWorldBBox(st);
         }
         tagShape(st);

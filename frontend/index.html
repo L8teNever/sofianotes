@@ -1327,6 +1327,11 @@
     window.addEventListener("error", function (e) {
       var t = e && e.target;
       if (t && t.tagName === "SCRIPT") {
+        // Fremde Skripte (Symbole, PDF, KI) sind optional: fehlt das CDN oder ist man offline,
+        // startet die App trotzdem - kein Neuladen und keine Fehlermeldung deswegen
+        try {
+          if (t.src && new URL(t.src, location.href).origin !== location.origin) return;
+        } catch (err) {}
         showBootError("Eine Datei konnte nicht geladen werden. Bitte neu laden.");
         return;
       }

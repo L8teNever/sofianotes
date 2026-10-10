@@ -176,6 +176,7 @@ def _init_sync() -> None:
     _conn.execute("CREATE INDEX IF NOT EXISTS media_library_at ON media_library (at)")
     _seed_people_sync()
     _refresh_person_cache_sync()
+    _migrate_compact_points_sync()
     cols = {row[1] for row in _conn.execute("PRAGMA table_info(strokes)").fetchall()}
     if "extra" not in cols:
         _conn.execute("ALTER TABLE strokes ADD COLUMN extra TEXT")
@@ -338,8 +339,49 @@ def _stroke_json_sync(stroke_id: str) -> tuple[str | None, str | None]:
     return row[6], json.dumps(item)
 
 
+def _round_point(p: Any) -> Any:
+    """x/y auf 1/100, Druck auf 1/1000: unsichtbar, aber halbiert die gespeicherten Daten."""
+    if not isinstance(p, dict):
+        return p
+    q = dict(p)
+    for key, nd in (("x", 2), ("y", 2), ("p", 3)):
+        v = q.get(key)
+        if isinstance(v, float):
+            q[key] = round(v, nd)
+    return q
+
+
+def _pack_points(points: Any) -> str:
+    """Punkte kompakt speichern (gerundet, ohne Leerzeichen) - laedt schneller."""
+    if isinstance(points, list):
+        points = [_round_point(p) for p in points]
+    return json.dumps(points, separators=(",", ":"), ensure_ascii=False)
+
+
+def _migrate_compact_points_sync() -> None:
+    """Einmalig: vorhandene Striche gerundet und kompakt neu speichern (user_version 1)."""
+    if _conn.execute("PRAGMA user_version").fetchone()[0] >= 1:
+        return
+    rows = _conn.execute("SELECT id, points FROM strokes").fetchall()
+    updates = []
+    for sid, raw in rows:
+        try:
+            packed = _pack_points(json.loads(raw))
+        except (TypeError, ValueError):
+            continue
+        if packed != raw:
+            updates.append((packed, sid))
+    for i in range(0, len(updates), 1000):
+        _conn.executemany("UPDATE strokes SET points = ? WHERE id = ?", updates[i : i + 1000])
+    _conn.execute("PRAGMA user_version = 1")
+    _conn.commit()
+
+
 def _clean_stroke(stroke: dict[str, Any]) -> dict[str, Any]:
     item = {k: stroke[k] for k in ("id", "tool", "color", "size", "points") if k in stroke}
+    # gerundet wie gespeichert, damit ein unveraenderter Strich im Verlauf nicht als Aenderung zaehlt
+    if isinstance(item.get("points"), list):
+        item["points"] = [_round_point(p) for p in item["points"]]
     if stroke.get("extra") is not None:
         item["extra"] = stroke["extra"]
     return item
@@ -372,7 +414,7 @@ def _insert_sync(stroke: dict[str, Any], person_id: str | None = None) -> None:
             stroke["tool"],
             stroke["color"],
             stroke["size"],
-            json.dumps(stroke["points"]),
+            _pack_points(stroke["points"]),
             extra_json,
             time.time(),
             board_id,
@@ -474,7 +516,7 @@ def _insert_many_sync(board_id: str, strokes: list[dict[str, Any]]) -> None:
         "INSERT OR REPLACE INTO strokes (id, tool, color, size, points, extra, created_at, board_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
             (
-                s["id"], s["tool"], s["color"], s["size"], json.dumps(s["points"]),
+                s["id"], s["tool"], s["color"], s["size"], _pack_points(s["points"]),
                 json.dumps(s["extra"]) if s.get("extra") is not None else None,
                 base + i * 1e-6, board_id,
             )
