@@ -74,6 +74,7 @@
     "sofianotes-zoompane-pos",
     "sofianotes-math",
     "sofianotes-eraser-return",
+    "sofianotes-text-lines",
     "sofianotes-pen-tap2",
     "sofianotes-pen-tap3",
     "sofianotes-hwpanel-layout",
@@ -2361,6 +2362,7 @@
     text: { label: "Text", min: 10, max: 96, presets: [18, 28, 44], names: ["Klein", "Mittel", "Groß"], title: "Textgröße" },
   };
   let textSize = 28;
+  let textOnLines = lsGetRaw("sofianotes-text-lines") !== "0"; // Text direkt auf die Linien
 
   const toolPopover = document.getElementById("tool-popover");
   const popoverTitle = document.getElementById("popover-tool-title");
@@ -3150,6 +3152,19 @@
     });
   }
 
+  const textLinesToggleEl = document.getElementById("text-lines-toggle");
+  if (textLinesToggleEl) {
+    textLinesToggleEl.classList.toggle("active", textOnLines);
+    textLinesToggleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      textOnLines = !textOnLines;
+      try {
+        localStorage.setItem("sofianotes-text-lines", textOnLines ? "1" : "0");
+      } catch (err) {}
+      textLinesToggleEl.classList.toggle("active", textOnLines);
+    });
+  }
+
   // ---- Stift-Gesten: 2x / 3x mit dem Stift auf dieselbe Stelle tippen ----
   // Einstellbar (Lasso, Radierer, Lineal, Marker, Formen, Rueckgaengig). Die Tipp-Punkte, die
   // der Stift dabei gemalt hat, verschwinden wieder (ohne Spur im Rueckgaengig-Verlauf).
@@ -3281,6 +3296,16 @@
       else txt = "An – lädt beim nächsten Start";
     }
     if (expOcrStatus) expOcrStatus.textContent = txt;
+    const infoEl = document.getElementById("exp-local-ocr-info");
+    if (infoEl) {
+      const mb = st.bytes ? Math.round(st.bytes / 1048576) + " MB" : "";
+      infoEl.textContent = st.version ? "Auf diesem Gerät: Fassung " + st.version + (mb ? " · " + mb : "") : "Auf diesem Gerät ist kein Modell gespeichert.";
+    }
+    const busy = st.state === "loading";
+    const rl = document.getElementById("exp-local-ocr-reload");
+    const rm = document.getElementById("exp-local-ocr-remove");
+    if (rl) rl.disabled = busy;
+    if (rm) rm.disabled = busy || (!st.version && st.state !== "ready");
     const sum = document.getElementById("set-sum-exp");
     if (sum) sum.textContent = on ? "Handschrift auf dem Gerät: " + (st.state === "ready" ? "bereit" : "an") : "Noch nicht fertig, nur zum Ausprobieren";
   }
@@ -3294,6 +3319,21 @@
     });
     if (window.SofiaLocalOcr) window.SofiaLocalOcr.onChange(syncExpOcr);
     syncExpOcr();
+    document.getElementById("exp-local-ocr-reload")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const lo = window.SofiaLocalOcr;
+      if (!lo) return;
+      lo.reload().catch(() => {});
+      syncExpOcr();
+    });
+    document.getElementById("exp-local-ocr-remove")?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const lo = window.SofiaLocalOcr;
+      if (!lo) return;
+      await lo.remove();
+      syncExpOcr();
+      showToast("Modell auf diesem Gerät gelöscht");
+    });
   }
 
   function openSettings() {
@@ -7051,6 +7091,52 @@
     return null;
   }
 
+  // Direkt auf die Linien tippen (wie Samsung Notes): Tipp auf eine Seite setzt den Text auf
+  // die Linie darunter, Schrift passend zum Linienabstand, Breite bis zum Seitenrand. Weil die
+  // Zeilenhoehe (TEXT_LINE) dann genau dem Linienabstand entspricht, liegt jede Zeile auf einer Linie.
+  function lineTypingSpot(w) {
+    let spacing;
+    let first;
+    let left;
+    let right;
+    let snapX = null;
+    let bottom = Infinity;
+    const r = notebook && !boardEditId ? pageRects(notebook).find((p) => w.x >= p.x && w.x <= p.x + p.w && w.y >= p.y && w.y <= p.y + p.h) : null;
+    if (notebook && !boardEditId) {
+      if (!r || !r.page || r.page.mediaId || r.page.board || r.page.boardOf) return null;
+      const paper = r.page.paper || "graph";
+      bottom = r.y + r.h - 4 * MM;
+      if (paper === "graph" || paper === "dots") {
+        spacing = NB_GRID;
+        first = r.y + NB_GRID;
+        left = r.x + NB_GRID;
+        right = r.x + r.w - NB_GRID;
+        snapX = (x) => r.x + Math.round((x - r.x) / NB_GRID) * NB_GRID;
+      } else {
+        spacing = NB_LINE;
+        first = r.y + NB_LINE_TOP;
+        left = paper === "lines" ? r.x + NB_MARGIN + 2 * MM : r.x + 10 * MM;
+        right = r.x + r.w - 10 * MM;
+      }
+    } else {
+      spacing = GRID_SIZE;
+      first = 0;
+      left = -Infinity;
+      right = null;
+      snapX = (x) => Math.round(x / GRID_SIZE) * GRID_SIZE;
+    }
+    // Linie auf oder direkt unter dem Tipp
+    const k = Math.max(0, Math.ceil((w.y - first) / spacing - 0.15));
+    const lineY = first + k * spacing;
+    if (lineY > bottom) return null;
+    let x = snapX ? snapX(w.x) : w.x;
+    x = Math.max(left, x);
+    const width = right == null ? GRID_SIZE * 20 : right - x;
+    if (width < spacing * 3) return null;
+    const size = spacing / TEXT_LINE;
+    return { x, y: lineY - spacing * 0.2, size, width };
+  }
+
   // Tippen: bestehendes Textfeld bearbeiten, Tabellenzelle bearbeiten oder neues Feld.
   // Ziehen: neues Feld mit dieser Breite (Text bricht dann automatisch um).
   function finishTextDrag(drag) {
@@ -7064,6 +7150,14 @@
       if (table) return openCellEditor(table, cellAt(table, a));
     }
     clearSelection();
+    const spot = !dragged && textOnLines ? lineTypingSpot(a) : null;
+    if (spot) {
+      textEdit = { kind: "text", strokeId: null, x: spot.x, y: spot.y, size: spot.size, color: currentColor, width: spot.width, before: null, onLines: true };
+      showTextEditor("");
+      for (const [cmd, f] of Object.entries(FMT)) if (textDefaults[f.flag]) toggleAtCaret(cmd);
+      syncFormatBar();
+      return;
+    }
     const size = textSize / Math.max(scale, 0.25);
     const x = dragged ? Math.min(a.x, b.x) : a.x;
     const top = dragged ? Math.min(a.y, b.y) : a.y - size * 0.6;

@@ -6,11 +6,15 @@
   const LIB_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.0/dist/transformers.min.js";
   const MODEL = "trocr-de-small";
   const KEY = "sofianotes-exp-local-ocr";
+  const VER_KEY = "sofianotes-exp-local-ocr-ver";
+  const CACHE = "transformers-cache";
 
   let state = "off"; // off | loading | ready | error | missing
   let progress = 0;
   let errorText = "";
   let pipePromise = null;
+  let pipeRef = null;
+  let info = null; // {available, version, bytes} vom Server
   const listeners = new Set();
 
   function emit() {
@@ -27,13 +31,53 @@
       return false;
     }
   }
-  async function modelAvailable() {
+  const lsGet = (k) => {
     try {
-      const r = await fetch("/models/" + MODEL + "/config.json", { cache: "no-store" });
-      return r.ok;
+      return localStorage.getItem(k);
     } catch (err) {
-      return false;
+      return null;
     }
+  };
+  const lsSet = (k, v) => {
+    try {
+      if (v == null) localStorage.removeItem(k);
+      else localStorage.setItem(k, v);
+    } catch (err) {}
+  };
+  // Fassung auf dem Server; offline null (dann gilt, was im Speicher liegt)
+  async function serverInfo() {
+    try {
+      const r = await fetch("/api/local-ocr-model", { cache: "no-store" });
+      if (!r.ok) return null;
+      info = await r.json();
+      return info;
+    } catch (err) {
+      return null;
+    }
+  }
+  // Gespeicherte Modelldateien dieses Geraets loeschen (Bibliothek bleibt)
+  async function dropModelFiles() {
+    lsSet(VER_KEY, null);
+    if (!("caches" in window)) return;
+    try {
+      const cache = await caches.open(CACHE);
+      const keys = await cache.keys();
+      await Promise.all(keys.filter((k) => k.url.includes("/models/" + MODEL + "/")).map((k) => cache.delete(k)));
+    } catch (err) {}
+  }
+  // Geladenes Modell freigeben und Dateien loeschen
+  async function clearModelCache() {
+    const pending = pipePromise;
+    pipePromise = null;
+    let pipe = pipeRef;
+    if (!pipe && pending) pipe = await pending.catch(() => null);
+    pipeRef = null;
+    if (pipe && typeof pipe.dispose === "function") {
+      try {
+        await pipe.dispose();
+      } catch (err) {}
+    }
+    await dropModelFiles();
   }
 
   function load() {
@@ -43,11 +87,16 @@
     errorText = "";
     emit();
     pipePromise = (async () => {
-      if (!(await modelAvailable())) {
+      const srv = await serverInfo();
+      const have = lsGet(VER_KEY);
+      if (srv && !srv.available) {
         state = "missing";
         emit();
         throw new Error("missing");
       }
+      if (!srv && !have) throw new Error("Offline – Modell noch nicht geladen");
+      // Neue Fassung auf dem Server: alte Dateien weg, neu laden
+      if (srv && have && have !== srv.version) await dropModelFiles();
       const tf = await import(LIB_URL);
       tf.env.allowRemoteModels = false;
       tf.env.allowLocalModels = true;
@@ -76,6 +125,8 @@
           }
         },
       });
+      pipeRef = pipe;
+      if (srv) lsSet(VER_KEY, srv.version);
       state = "ready";
       progress = 1;
       emit();
@@ -113,7 +164,24 @@
         emit();
       }
     },
-    status: () => ({ state, progress, error: errorText }),
+    status: () => ({ state, progress, error: errorText, version: lsGet(VER_KEY), bytes: info && info.bytes }),
+    // Modell auf diesem Geraet loeschen und ausschalten
+    async remove() {
+      lsSet(KEY, "0");
+      await clearModelCache();
+      state = "off";
+      progress = 0;
+      errorText = "";
+      emit();
+    },
+    // Loeschen und frisch vom Server holen
+    async reload() {
+      await clearModelCache();
+      lsSet(KEY, "1");
+      state = "off";
+      emit();
+      return load();
+    },
     ready: () => state === "ready",
     onChange(fn) {
       listeners.add(fn);

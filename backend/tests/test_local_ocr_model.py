@@ -42,3 +42,15 @@ class LocalOcrModelRouteTests(unittest.TestCase):
         main.LOCAL_OCR_DIR = Path(self.tmp.name) / "gibts-nicht"
         with self.assertRaises(HTTPException):
             asyncio.run(main.local_ocr_model("config.json"))
+
+    def test_info_version_changes_with_files(self):
+        a = asyncio.run(main.local_ocr_model_info())
+        self.assertTrue(a["available"])
+        self.assertEqual(a["bytes"], 3)
+        (self.model / "onnx" / "encoder_model_quantized.onnx").write_bytes(b"xyz")
+        b = asyncio.run(main.local_ocr_model_info())
+        self.assertNotEqual(a["version"], b["version"])
+
+    def test_info_without_model(self):
+        main.LOCAL_OCR_DIR = Path(self.tmp.name) / "gibts-nicht"
+        self.assertEqual(asyncio.run(main.local_ocr_model_info()), {"available": False})

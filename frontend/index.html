@@ -588,6 +588,11 @@
         <span class="set-nav-text"><strong>Nach Radieren zurück</strong><small>Danach automatisch wieder der Stift</small></span>
         <span class="set-knob"></span>
       </button>
+      <button id="text-lines-toggle" class="setting-toggle set-switch active" title="Text direkt auf die Linien tippen">
+        <span class="set-ico"><span class="material-symbols-rounded">text_fields</span></span>
+        <span class="set-nav-text"><strong>Text auf die Linien</strong><small>Im Text-Modus tippen: schreibt direkt auf die Linie, Größe passend. Ziehen macht ein freies Textfeld.</small></span>
+        <span class="set-knob"></span>
+      </button>
       <div class="set-sub">Stift-Gesten</div>
       <p class="set-hint">Mit dem Stift schnell auf dieselbe Stelle tippen. Die Tipp-Punkte werden dabei wieder entfernt. Nochmal tippen schaltet zurück zum Stift. Achtung bei Ü-Punkten: nur sehr dicht beieinander liegende Tipps zählen.</p>
       <div class="set-sub set-sub-small">2× tippen</div>
@@ -785,7 +790,18 @@
         <span class="set-nav-text"><strong>Handschrift auf dem Gerät erkennen</strong><small id="exp-local-ocr-status">Aus</small></span>
         <span class="set-knob"></span>
       </button>
-      <p class="set-hint">Lädt einmal ein deutsches Handschrift-Modell (etwa 65 MB). Danach liest „KI“ im Lasso ohne Server und auch offline. Es liest Zeile für Zeile; mehrere Zeilen werden vorher getrennt, ganze Seiten auf einmal noch nicht.</p>
+      <div class="version-actions exp-ocr-actions">
+        <button type="button" id="exp-local-ocr-reload" class="version-btn">
+          <span class="material-symbols-rounded">refresh</span>
+          Modell neu laden
+        </button>
+        <button type="button" id="exp-local-ocr-remove" class="version-btn exp-danger">
+          <span class="material-symbols-rounded">delete</span>
+          Modell löschen
+        </button>
+      </div>
+      <p id="exp-local-ocr-info" class="set-hint"></p>
+      <p class="set-hint">Lädt einmal ein deutsches Handschrift-Modell (etwa 65 MB). Danach liest „KI“ im Lasso ohne Server und auch offline. Es liest Zeile für Zeile; mehrere Zeilen werden vorher getrennt, ganze Seiten auf einmal noch nicht. Gibt es auf dem Server eine neue Fassung, lädt das Gerät sie beim nächsten Start selbst; „Modell neu laden“ holt sie sofort, „Modell löschen“ gibt den Speicher wieder frei.</p>
     </div>
 
     <div class="set-page hidden" data-page="app">

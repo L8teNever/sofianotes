@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1239,6 +1240,24 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 # Experimentell: Handschrift-Modell fuer die Erkennung direkt auf dem Geraet (zu gross fuers Repo,
 # liegt deshalb in data/models; fehlt es, antwortet der Pfad mit 404 und die App laesst den Schalter aus)
 LOCAL_OCR_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "models" / "trocr-de-small"
+
+
+@app.get("/api/local-ocr-model")
+async def local_ocr_model_info() -> dict:
+    """Ob das Modell da ist und welche Fassung: aendert sich eine Datei, aendert sich die Kennung,
+    und die Geraete laden es beim naechsten Start neu."""
+    base = LOCAL_OCR_DIR
+    if not (base / "config.json").is_file():
+        return {"available": False}
+    files = sorted(p for p in base.rglob("*") if p.is_file())
+    total = 0
+    sig = []
+    for p in files:
+        st = p.stat()
+        total += st.st_size
+        sig.append(f"{p.relative_to(base)}:{st.st_size}:{int(st.st_mtime)}")
+    version = hashlib.sha1("|".join(sig).encode()).hexdigest()[:12]
+    return {"available": True, "version": version, "bytes": total}
 
 
 @app.get("/models/trocr-de-small/{file_path:path}")
