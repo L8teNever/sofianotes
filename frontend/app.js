@@ -18933,7 +18933,10 @@
       setTimeout(() => {
         let res = null;
         try {
-          res = warp();
+          // Nichts zugeschnitten und nicht verbessert: Originalbild durchreichen (kein Entzerren)
+          const f = fullQuad();
+          const untouched = !enhance && quad && quad.every((p, k) => Math.abs(p.x - f[k].x) < 0.5 && Math.abs(p.y - f[k].y) < 0.5);
+          res = untouched ? { canvas: src, w: src.width, h: src.height } : warp();
         } catch (err) {
           res = null;
         }
@@ -18978,7 +18981,13 @@
       scrim.classList.remove("hidden");
       return new Promise((resolve) => {
         resolveFn = resolve;
-        requestAnimationFrame(autoDetect);
+        // Standard: ganzes Bild, nichts veraendert. "Blatt erkennen" nur auf Wunsch -
+        // die Erkennung hat dunkle Bilder (z. B. Screenshots im Dunkelmodus) zugeschnitten und verzerrt.
+        requestAnimationFrame(() => {
+          quad = fullQuad();
+          hint.textContent = "Ganzes Bild – Ecken ziehen oder „Blatt erkennen“, um zuzuschneiden.";
+          render();
+        });
       });
     };
   })();
