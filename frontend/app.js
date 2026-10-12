@@ -19278,6 +19278,8 @@
       const none = n && n >= allPickIds().length;
       const ic = allBtn.querySelector(".material-symbols-rounded");
       if (ic) ic.textContent = none ? "remove_done" : "done_all";
+      const tx = allBtn.querySelector(".tsel-all-text");
+      if (tx) tx.textContent = none ? "Keine" : "Alle";
       allBtn.title = none ? "Auswahl aufheben" : "Alle Seiten auswählen";
     }
     function startPageSelect(preId) {

@@ -3864,6 +3864,11 @@ body.pages-open.pages-selecting .tsel-all {
   cursor: pointer;
 }
 .tsel-all .material-symbols-rounded { font-size: 22px; color: inherit; }
+/* Text "Alle"/"Keine" nur, wenn der Zurueck-Pfeil aus ist (sonst fehlt der Platz: dann ✓✓) */
+.tsel-all-text { display: none; font: 600 14px/1 'Google Sans', 'Inter', sans-serif; }
+body.back-in-menu.pages-open.pages-selecting .tsel-all { width: auto; padding: 0 12px; border-radius: 17px; }
+body.back-in-menu.pages-open.pages-selecting .tsel-all .material-symbols-rounded { display: none; }
+body.back-in-menu.pages-open.pages-selecting .tsel-all-text { display: inline; }
 body.pages-open.pages-selecting .tsel-all:hover { background: rgba(103, 80, 164, 0.08); }
 body.pages-open.pages-selecting .tsel-export {
   display: inline-flex;
