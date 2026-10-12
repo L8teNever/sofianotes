@@ -18971,9 +18971,37 @@
         return false;
       }
     }
+    // Chat gehoert zur Blatt-Ansicht: auf der Startseite (Bibliothek) ausgeblendet,
+    // beim naechsten Blatt wieder da, wenn er offen war
+    let wanted = false;
+    const libBackdrop = document.getElementById("library-backdrop");
+    const onBoardView = () => !!currentBoardId && (!libBackdrop || libBackdrop.classList.contains("hidden"));
+    function hideWin() {
+      win.classList.add("hidden");
+      clearInterval(listTimer);
+      clearInterval(msgTimer);
+      closeMenu();
+      applyLayout();
+    }
+    function syncView() {
+      if (!onBoardView()) {
+        if (!win.classList.contains("hidden")) hideWin();
+      } else if (wanted && win.classList.contains("hidden")) open();
+    }
+    if (libBackdrop) new MutationObserver(syncView).observe(libBackdrop, { attributes: true, attributeFilter: ["class"] });
     async function open() {
+      wanted = true;
+      if (!onBoardView()) return;
       win.classList.remove("hidden");
       applyLayout();
+      if (current) {
+        // zurueck aus der Startseite: offene Unterhaltung weiter aktualisieren
+        loadMessages(false);
+        clearInterval(msgTimer);
+        msgTimer = setInterval(() => {
+          if (!document.hidden && current) loadMessages(false);
+        }, 4000);
+      }
       if (!current) {
         showList();
         if (!convs.length) message("Lädt …");
@@ -18987,15 +19015,18 @@
       }, 15000);
     }
     function close() {
-      win.classList.add("hidden");
-      clearInterval(listTimer);
-      clearInterval(msgTimer);
-      closeMenu();
+      wanted = false;
       current = null;
-      applyLayout();
+      hideWin();
     }
     window.sofiaOpenChat = open;
-    $("chat-close").addEventListener("click", close);
+    $("chat-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      close();
+    });
+    $("chat-close").addEventListener("pointerup", (e) => {
+      if (e.pointerType !== "mouse") close();
+    });
     $("chat-back").addEventListener("click", showList);
     win.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
