@@ -2465,7 +2465,6 @@
   // Bedienelemente ueber dem Blatt (Auswahl, Lineal, Zoom-Rahmen ...); schliesst das ctx.save() von drawScene
   function drawSceneOverlays() {
     drawTextDragPreview();
-    drawTextMoveHandles();
     drawZoomBoxOnPage();
     drawAutoBox();
     drawLassoAndSelection();
@@ -6668,57 +6667,6 @@
   function isBoxText(s) {
     return !!s && s.tool === "text" && !!(s.extra && s.extra.box);
   }
-  // Griffleiste oben am Textfeld: Finger verschiebt, Stift schreibt. Weltkoordinaten.
-  function textMoveHandleRect(s) {
-    const b = s && (s.bbox || strokeWorldBBox(s));
-    if (!b) return null;
-    const h = 26 / Math.max(scale, 0.25);
-    const pad = 6 / Math.max(scale, 0.25);
-    return { minX: b.minX, maxX: b.maxX, minY: b.minY - h - pad, maxY: b.minY - pad };
-  }
-  function textMoveHandleAt(world, pointerType) {
-    const slop = ((pointerType === "touch" ? 18 : 8) / Math.max(scale, 0.25));
-    const list = Array.from(boardStrokes.values());
-    for (let i = list.length - 1; i >= 0; i--) {
-      const s = list[i];
-      if (!isBoxText(s) || !canEditStroke(s)) continue;
-      if (textEdit && textEdit.kind === "text" && textEdit.strokeId === s.id) continue;
-      const hr = textMoveHandleRect(s);
-      if (!hr) continue;
-      if (world.x >= hr.minX - slop && world.x <= hr.maxX + slop && world.y >= hr.minY - slop && world.y <= hr.maxY + slop) return s;
-    }
-    return null;
-  }
-  function drawTextMoveHandles() {
-    if (viewOnly || historyView) return;
-    for (const s of boardStrokes.values()) {
-      if (!isBoxText(s)) continue;
-      if (textEdit && textEdit.kind === "text" && textEdit.strokeId === s.id) continue;
-      const hr = textMoveHandleRect(s);
-      if (!hr) continue;
-      const w = 36 / Math.max(scale, 0.25);
-      const h = 9 / Math.max(scale, 0.25);
-      const x = (hr.minX + hr.maxX) / 2 - w / 2;
-      const y = (hr.minY + hr.maxY) / 2 - h / 2;
-      const r = 4.5 / Math.max(scale, 0.25);
-      ctx.save();
-      ctx.fillStyle = "rgba(26,115,232,0.92)";
-      ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
-      else ctx.rect(x, y, w, h);
-      ctx.fill();
-      ctx.restore();
-    }
-  }
-  function tryGrabTextBox(e, world) {
-    const s = textMoveHandleAt(world, e.pointerType);
-    if (!s) return false;
-    if (textEdit) commitTextEditor();
-    selectStrokeIds([s.id]);
-    startSelectionDrag(e.pointerId, world);
-    if (dragState) dragState.pointerType = e.pointerType;
-    return true;
-  }
   function textFont(size) {
     return `400 ${size}px Inter, sans-serif`;
   }
@@ -7474,6 +7422,29 @@
   // Direkt auf die Linien tippen (wie Samsung Notes): Tipp auf eine Seite setzt den Text auf
   // die Linie darunter, Schrift passend zum Linienabstand, Breite bis zum Seitenrand. Weil die
   // Zeilenhoehe (TEXT_LINE) dann genau dem Linienabstand entspricht, liegt jede Zeile auf einer Linie.
+  // Linien des Hintergrunds an dieser Stelle: Abstand und erste Linie (null = keine Linien)
+  function paperLinesAt(w) {
+    if (notebook && !boardEditId) {
+      const r = pageRects(notebook).find((p) => w.x >= p.x && w.x <= p.x + p.w && w.y >= p.y && w.y <= p.y + p.h);
+      if (!r || !r.page || r.page.mediaId || r.page.board || r.page.boardOf) return null;
+      const paper = r.page.paper || "graph";
+      if (paper === "blank") return null;
+      if (paper === "graph" || paper === "dots") return { spacing: NB_GRID, first: r.y + NB_GRID };
+      return { spacing: NB_LINE, first: r.y + NB_LINE_TOP };
+    }
+    if (gridStyle === "blank") return null;
+    return { spacing: GRID_SIZE, first: 0 };
+  }
+  // Textfeld beim Verschieben auf die Linien setzen: erste Grundlinie wie bei "Text auf die
+  // Linien" knapp ueber einer Linie. x ist der linke Rand, y die erste Grundlinie.
+  function snapTextBaseline(x, y, size) {
+    const L = paperLinesAt({ x, y });
+    if (!L) return y;
+    const off = size * TEXT_LINE * 0.2;
+    const k = Math.max(0, Math.round((y + off - L.first) / L.spacing));
+    return L.first + k * L.spacing - off;
+  }
+
   function lineTypingSpot(w) {
     let spacing;
     let first;
@@ -7825,6 +7796,7 @@
       if (!d || d.id !== e.pointerId || !textEdit) return;
       textEdit.x = d.origX + (e.clientX - d.x0) / scale;
       textEdit.y = d.origY + (e.clientY - d.y0) / scale;
+      if (textEdit.kind === "text") textEdit.y = snapTextBaseline(textEdit.x, textEdit.y, textEdit.size);
       positionTextEditor();
       sendTextLive();
     });
@@ -10646,7 +10618,17 @@
 
   function updateSelectionDrag(world) {
     const dx = world.x - dragState.startWorld.x;
-    const dy = world.y - dragState.startWorld.y;
+    let dy = world.y - dragState.startWorld.y;
+    // nur Textfelder unterwegs: an den Linien einrasten (am ersten Feld ausgerichtet)
+    const ids = Array.from(dragState.snapshot.keys());
+    const texts = ids.map((id) => boardStrokes.get(id)).filter((st) => st && st.tool === "text" && !(st.extra && st.extra.rotation));
+    if (texts.length && texts.length === ids.length) {
+      const a = dragState.snapshot.get(texts[0].id)[0];
+      if (a) {
+        const ny = a.y + dy;
+        dy += snapTextBaseline(a.x + dx, ny, texts[0].size) - ny;
+      }
+    }
     const boxes = [];
     for (const [id, pts] of dragState.snapshot) {
       const s = boardStrokes.get(id);
@@ -12818,7 +12800,6 @@
     if (notebook && !boardEditId && currentTool !== "eraser" && currentTool !== "select" && !onSomePage(world)) return;
     lastPointerWorld = world;
     if (currentTool === "text") {
-      if (tryGrabTextBox(e, world)) return;
       textDrag = { pointerId: e.pointerId, startWorld: world, cur: world };
       return;
     }
@@ -12981,12 +12962,6 @@
           startCanvasZoomDrag(e);
           return;
         }
-        if (!pinchState && !penIsDown() && tryGrabTextBox(e, screenToWorld(e.clientX, e.clientY))) {
-          tapState = null;
-          panState = null;
-          requestRedraw();
-          return;
-        }
         if (fingerDrawEnabled && currentTool !== "laser" && !pinchState && !boardPageAt(screenToWorld(e.clientX, e.clientY))) {
           if (window.sofiaArmPagePull && window.sofiaArmPagePull()) {
             pullArm = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
@@ -12997,11 +12972,6 @@
         if (!pinchState) {
           // Liegt der Stift gerade auf, ist dieser Touch der Handballen: nicht greifen, nicht tippen.
           const palm = penIsDown();
-          // Textfeld-Griff: Finger verschiebt das Feld, Stift schreibt, Blatt-Pan bleibt daneben.
-          if (!palm && tryGrabTextBox(e, world)) {
-            requestRedraw();
-            return;
-          }
           // Auswahl laesst sich auch ohne Finger-Zeichnen mit dem Finger verschieben,
           // skalieren, drehen und zuschneiden.
           if (!palm && (currentTool === "select" || selection.ids.size > 0 || cropState) && !dragState && grabSelectionAt(e, world)) {
