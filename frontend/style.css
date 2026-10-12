@@ -5936,3 +5936,30 @@ html[data-theme="dark"] .swatch-menu, html[data-theme="dark"] .text-color-pop { 
 html[data-theme="dark"] .swatch-menu-btn, html[data-theme="dark"] .text-color-pop-add { color: #e6e1e5 !important; }
 html[data-theme="dark"] .swatch-menu-btn.danger { background: #3b1f1d !important; color: #f2b8b5 !important; }
 html[data-theme="dark"] .text-color-pop-title { color: #e6e1e5 !important; }
+
+/* ==== Alle Werkzeug-Leisten wie die Text-Leiste: Spuren statt Trennstriche ==== */
+#toolbar .tools-container { gap: 8px; }
+#toolbar .mode-sep, #toolbar .dock-divider { display: none !important; }
+.tool-seg .tool-wrapper { display: flex; }
+.tbar-group { gap: 8px; }
+#toolbar.zoom-inner[data-mode="shapes"] .tool-seg[data-modes~="pen"] { display: flex; }
+/* Formen: Linienart/Pfeile sind <span>s */
+#obj-dash.tbar-seg, #obj-arrow.tbar-seg { display: flex; }
+#toolbar:not([data-kind="arrow"]) #obj-arrow.tbar-seg { display: none; }
+#obj-dash .tool-btn .angle-label { font: 700 14px/1 'Google Sans', 'Inter', sans-serif; }
+/* Groessen-Punkte zentriert und in der Spur gut sichtbar */
+.tbar-seg .stroke-dot, .tbar-seg .eraser-dot { background: currentColor; border-radius: 50%; display: block; }
+/* Farben ebenfalls in einer Spur */
+#swatches-container { gap: 6px; padding: 4px 6px; border-radius: 22px; background: rgba(0, 0, 0, 0.07); }
+#swatches-container .custom-color { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14); }
+/* runde Knoepfe am Rand (Finger-Modus, Alle loeschen) */
+.tbar-round.tbar-danger { background: #fce8e6; color: #b3261e; border-color: transparent; }
+.tbar-round.tbar-danger .material-symbols-rounded { color: #b3261e; }
+#btn-text-edit-only.tbar-round.active { background: #eaddff; color: #4f378b; }
+html[data-theme="dark"] #swatches-container { background: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .tbar-round.tbar-danger { background: #3b1f1d; color: #f2b8b5; }
+html[data-theme="dark"] .tbar-round.tbar-danger .material-symbols-rounded { color: #f2b8b5; }
+html[data-theme="dark"] #btn-text-edit-only.tbar-round.active { background: #4a4458; color: #f4f1f8; }
+/* senkrecht angedockte Leiste: Spuren stehen untereinander */
+#toolbar.dock-left #swatches-container, #toolbar.dock-right #swatches-container { flex-direction: column; }
+#toolbar.dock-left .tool-seg, #toolbar.dock-right .tool-seg, #toolbar.free-drag.orient-vertical .tool-seg { flex-direction: column; }
