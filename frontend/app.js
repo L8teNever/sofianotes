@@ -2774,11 +2774,12 @@
       ? toolConfigs[selected[0].tool] || toolConfigs.pen
       : toolConfigs[currentTool] || toolConfigs.pen;
     const size = usingSel ? selected[0].size : activeSize();
-    popoverTitle.textContent = usingSel ? (cfg.title || "Auswahl Stärke") : cfg.title || cfg.label + " Stärke";
+    popoverTitle.textContent = usingSel ? (cfg.title || "Auswahl-Stärke") : cfg.title || cfg.label + "-Stärke";
     popoverSizeText.textContent = Math.round(size) + " px";
     sizeSlider.min = String(cfg.min);
     sizeSlider.max = String(cfg.max);
     sizeSlider.value = String(size);
+    fillSlider();
     popoverPresets.innerHTML = "";
     const presetTool = usingSel ? selected[0].tool : currentTool;
     const presets = sizePresetsFor(presetTool, cfg);
@@ -3393,6 +3394,13 @@
   });
   renderSwatches();
 
+  // gefuellte Spur bis zum Griff (Safari/Chrome kennen kein ::range-progress)
+  function fillSlider() {
+    const min = +sizeSlider.min || 0;
+    const max = +sizeSlider.max || 100;
+    sizeSlider.style.setProperty("--fill", ((+sizeSlider.value - min) / Math.max(1, max - min)) * 100 + "%");
+  }
+  sizeSlider.addEventListener("input", fillSlider);
   sizeSlider.addEventListener("input", () => {
     setActiveSize(sizeSlider.value);
     restyleSelection({ size: Number(sizeSlider.value) }, "size");
