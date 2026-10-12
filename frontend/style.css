@@ -1894,7 +1894,8 @@ html[data-theme="dark"] .app-toast {
 .mode-btn.active,
 #btn-ruler.active,
 #btn-objects.active,
-#btn-zoom-window.active {
+#btn-zoom-window.active,
+#btn-auto-advance.active {
   background: var(--accent);
   color: #fff;
 }
@@ -4000,6 +4001,7 @@ body.view-only #mode-switch,
 body.view-only .insert-menu-wrap,
 body.view-only .objects-menu-wrap,
 body.view-only #btn-zoom-window,
+body.view-only #btn-auto-advance,
 body.view-only #toolbar,
 body.view-only #undo-btn,
 body.view-only #redo-btn,

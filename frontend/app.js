@@ -69,6 +69,7 @@
     "sofianotes-zoom-rows",
     "sofianotes-zoom-step",
     "sofianotes-zoom-hide-media",
+    "sofianotes-auto-advance",
     "sofianotes-zoom-chrome",
     "sofianotes-zoom-inner-bar",
     "sofianotes-object-dash",
@@ -4258,6 +4259,7 @@
     { key: "laser", label: "Laserpointer", icon: "flashlight_on", sel: "#btn-laser" },
     { key: "objects", label: "Objekte", icon: "shapes", sel: ".objects-menu-wrap" },
     { key: "zoom", label: "Zoom-Fenster", icon: "zoom_in_map", sel: "#btn-zoom-window" },
+    { key: "autoadv", label: "Auto-Weiter", icon: "east", sel: "#btn-auto-advance" },
     { key: "calc", label: "Rechner", icon: "calculate", sel: "#btn-calc" },
     { key: "hw", label: "Aufgabe", icon: "assignment", sel: "#btn-hw-panel" },
     { key: "insert", label: "Einfügen", icon: "add_box", sel: ".insert-menu-wrap" },
@@ -4478,6 +4480,7 @@
     if (want("laser")) helpers.push(["flashlight_on", "Laserpointer", "#btn-laser"]);
     if (want("objects")) helpers.push(["shapes", "Objekte", "#btn-objects"]);
     if (want("zoom")) helpers.push(["zoom_in_map", "Zoom-Fenster", "#btn-zoom-window"]);
+    if (want("autoadv")) helpers.push(["east", "Auto-Weiter", "#btn-auto-advance"]);
     if (want("calc")) helpers.push(["calculate", "Rechner", "#btn-calc"]);
     if (want("hw") && hwOk) helpers.push(["assignment", "Aufgabe", "#btn-hw-panel"]);
     if (helpers.length) {
@@ -8966,9 +8969,92 @@
   }
   if (zoomWinBtn) zoomWinBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    if (autoAdvanceOn) setAutoAdvance(false);
     if (zoomWin) closeZoomWindow();
     else openZoomWindow();
   });
+
+  // ---- Zweite Zoom-Art "Auto-Weiter": kein Fenster, kein Rahmen ----
+  // Man schreibt normal (reingezoomt) direkt aufs Blatt. Kommt man rechts an den Rand
+  // des Bildschirms, rutscht das Blatt nach dem Absetzen von allein nach links, so dass
+  // man weiterschreiben kann. Am Seitenende geht es an den Anfang der naechsten Zeile.
+  const autoAdvBtn = document.getElementById("btn-auto-advance");
+  let autoAdvanceOn = false;
+  try {
+    autoAdvanceOn = localStorage.getItem("sofianotes-auto-advance") === "1";
+  } catch (err) {}
+  let autoAdvTimer = null;
+  function setAutoAdvance(on) {
+    autoAdvanceOn = !!on;
+    try {
+      localStorage.setItem("sofianotes-auto-advance", autoAdvanceOn ? "1" : "0");
+    } catch (err) {}
+    if (autoAdvanceOn && zoomWin) closeZoomWindow();
+    if (autoAdvBtn) autoAdvBtn.classList.toggle("active", autoAdvanceOn);
+    clearTimeout(autoAdvTimer);
+  }
+  if (autoAdvBtn) {
+    autoAdvBtn.classList.toggle("active", autoAdvanceOn);
+    autoAdvBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setAutoAdvance(!autoAdvanceOn);
+      showToast(autoAdvanceOn ? "Auto-Weiter an: am rechten Rand rutscht das Blatt weiter" : "Auto-Weiter aus");
+    });
+  }
+  // neu ansetzen = noch nicht fertig mit dem Wort: dann (noch) nicht verschieben
+  canvas.addEventListener("pointerdown", () => clearTimeout(autoAdvTimer), true);
+  function autoAdvanceAfter(st) {
+    clearTimeout(autoAdvTimer);
+    if (!autoAdvanceOn || zoomWin || viewOnly || historyView) return;
+    if (st.tool !== "pen" && st.tool !== "marker") return;
+    if (st.locked || st.rulerEdge || st.objectKind) return;
+    const b = st.bbox || makeBBox(st.points);
+    if (!b) return;
+    const sx = worldToScreen(b.maxX, b.minY).x;
+    const visL = viewLeft;
+    const visR = window.innerWidth - viewRight;
+    const visW = visR - visL;
+    if (visW < 120 || sx < visR - visW * 0.2) return;
+    autoAdvTimer = setTimeout(() => autoAdvance(b), 550);
+  }
+  function autoAdvance(b) {
+    if (!autoAdvanceOn || zoomWin || currentStroke) return;
+    const visL = viewLeft;
+    const visR = window.innerWidth - viewRight;
+    const visW = visR - visL;
+    const wL = screenToWorld(visL, 0).x;
+    const wR = screenToWorld(visR, 0).x;
+    const pad = 24 / scale;
+    // Seite unter dem Strich (im Notizbuch): rechts nicht ueber die Seite hinaus
+    let page = null;
+    if (notebook && !boardEditId) {
+      const cy = (b.minY + b.maxY) / 2;
+      const cx = (b.minX + b.maxX) / 2;
+      page = pageRects(notebook).find((r) => cx >= r.x - 40 && cx <= r.x + r.w + 40 && cy >= r.y && cy <= r.y + r.h) || null;
+      if (!page) return;
+    }
+    const v = { scale, offsetX, offsetY };
+    if (!page || page.x + page.w > wR + 4 / scale) {
+      // nach rechts: was man gerade geschrieben hat, bleibt links noch sichtbar
+      let shift = (visW * 0.6) / scale;
+      if (page) shift = Math.min(shift, page.x + page.w + pad - wR);
+      if (shift <= 2 / scale) return;
+      v.offsetX = offsetX - shift * scale;
+    } else {
+      // Seite ist rechts zu Ende: an den Anfang der naechsten Zeile
+      if (page.x >= wL - 4 / scale) return; // ganze Breite sichtbar: nichts zu tun
+      const lines = page.page && page.page.paper === "lines" && !page.page.mediaId;
+      const lineH = lines ? NB_LINE : Math.max(NB_GRID * 2, Math.min(160, (b.maxY - b.minY) * 1.25));
+      v.offsetX = visL + 16 - page.x * scale;
+      v.offsetY = offsetY - lineH * scale;
+    }
+    if (window.sofiaAnimateView) window.sofiaAnimateView(v, 320);
+    else {
+      offsetX = v.offsetX;
+      offsetY = v.offsetY;
+      requestRedraw();
+    }
+  }
 
   // Rahmen und Raender auf dem Blatt verschieben (Stift, Maus oder Finger)
   for (const [id, kind] of [
@@ -13119,7 +13205,9 @@
         currentStroke = null;
         restoreToolAfterEraser({ keepEraser });
       } else {
+        const fin = currentStroke;
         endStroke();
+        if (fin && boardStrokes.has(fin.id)) autoAdvanceAfter(fin);
       }
     }
     if (currentTool === "eraser") {
