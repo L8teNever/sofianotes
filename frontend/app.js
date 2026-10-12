@@ -8504,24 +8504,34 @@
     moveZoomBox(nx, zoomWin.y);
   }
 
-  // Rechter Rand fuer die Zeile bei y: liegt darin ein Bild, endet das Schreiben vor dem Bild
-  // (Rand rueckt nach links). Unter der Zeile wieder die volle Breite.
-  function zoomRightAt(y) {
-    if (!zoomWin) return 0;
-    let r = zoomWin.right;
-    if (zoomHideMedia) return r;
+  // Schreibbereich der Zeile bei y: links und rechts rueckt der Rand an einem Bild
+  // in dieser Zeile vorbei, so dass man nicht auf das Bild schreibt. Das Bild bleibt
+  // sichtbar. Unter der Zeile wieder die volle Breite.
+  function zoomRowBounds(y) {
+    if (!zoomWin) return { left: 0, right: 0 };
+    let L = zoomWin.left;
+    let R = zoomWin.right;
+    if (zoomHideMedia) return { left: L, right: R };
     const y0 = y;
     const y1 = y + zoomRowH();
+    const gap = zoomWin.w * 0.04;
+    const minW = zoomWin.w * 0.3;
     for (const st of boardStrokes.values()) {
       if (st.tool !== "image") continue;
       const pageId = st.extra && st.extra.boardPage;
       if (boardEditId ? pageId !== boardEditId : pageId) continue;
       const b = st.bbox || strokeWorldBBox(st);
       if (!b || b.maxY < y0 || b.minY > y1) continue;
-      if (b.maxX <= zoomWin.left || b.minX >= r) continue;
-      r = Math.min(r, b.minX - zoomWin.w * 0.04);
+      if (b.maxX <= L || b.minX >= R) continue;
+      if ((b.minX + b.maxX) / 2 < (L + R) / 2) {
+        const nl = b.maxX + gap;
+        if (R - nl >= minW) L = Math.max(L, nl);
+      } else {
+        const nr = b.minX - gap;
+        if (nr - L >= minW) R = Math.min(R, nr);
+      }
     }
-    return Math.max(zoomWin.left + zoomWin.w * 0.3, r);
+    return { left: L, right: R };
   }
 
   // Nach einem Strich weit rechts: Fortsetzung vorbereiten (Kasten links). Kurze Striche
@@ -8531,18 +8541,20 @@
     const b = makeBBox(stroke.points);
     // an (oder ueber) der rechten Randlinie: wie am Zeilenende -> naechste Zeile links
     // frueher anbieten: schon kurz vor der Randlinie (nicht erst, wenn man darueber ist)
-    const R = zoomRightAt(zoomWin.y);
+    const bounds = zoomRowBounds(zoomWin.y);
+    const R = bounds.right;
+    const nextY = snapZoomY(zoomWin.y + zoomLineStep());
     const atMargin = b.maxX >= R - zoomWin.w * 0.2 && b.minX < R + zoomWin.w * 0.5;
     if (atMargin) {
-      zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
+      zoomNext = { x: zoomRowBounds(nextY).left, y: nextY };
       requestRedraw();
       return;
     }
     if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
     const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
     // die Fortsetzung soll nicht ueber die Randlinie hinausragen
-    if (nx > R - zoomWin.w * 0.3) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
-    else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
+    if (nx > R - zoomWin.w * 0.3) zoomNext = { x: zoomRowBounds(nextY).left, y: nextY };
+    else zoomNext = { x: Math.max(bounds.left, nx), y: zoomWin.y };
     requestRedraw();
   }
 
@@ -8637,8 +8649,9 @@
     if (currentStroke && !currentStroke.eraser && currentStroke.points && currentStroke.points.length) {
       const lp = currentStroke.points[currentStroke.points.length - 1];
       const nextY = snapZoomY(zoomWin.y + zoomLineStep());
-      if (lp.x >= zoomRightAt(zoomWin.y) - zoomWin.w * 0.2 && lp.y >= zoomWin.y - zoomBoxH() * 0.5 && lp.y <= zoomWin.y + zoomBoxH() * 1.5 && !(zoomNext && zoomNext.y === nextY && zoomNext.x === zoomWin.left)) {
-        zoomNext = { x: zoomWin.left, y: nextY };
+      const nb = zoomRowBounds(nextY);
+      if (lp.x >= zoomRowBounds(zoomWin.y).right - zoomWin.w * 0.2 && lp.y >= zoomWin.y - zoomBoxH() * 0.5 && lp.y <= zoomWin.y + zoomBoxH() * 1.5 && !(zoomNext && zoomNext.y === nextY && zoomNext.x === nb.left)) {
+        zoomNext = { x: nb.left, y: nextY };
       }
     }
     layoutZoomPane();
@@ -8663,7 +8676,8 @@
     zctx.setTransform(d, 0, 0, d, 0, 0);
     zctx.lineWidth = 1;
     zctx.setLineDash([5, 5]);
-    for (const mx of [zoomWin.left, zoomRightAt(zoomWin.y)]) {
+    const rowB = zoomRowBounds(zoomWin.y);
+    for (const mx of [rowB.left, rowB.right]) {
       const px = (mx - zoomWin.x) * k;
       if (px < 0 || px > r.width) continue;
       zctx.strokeStyle = "rgba(234,67,53,0.45)";
