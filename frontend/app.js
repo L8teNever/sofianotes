@@ -2453,7 +2453,9 @@
     if (ruler.visible) positionRulerBar();
   }
 
+  let drawFrameNo = 0; // zaehlt die Bilder, fuer Zwischenspeicher pro Bild
   function tick() {
+    drawFrameNo++;
     if (holdHint) dirty = true; // Fortschrittsring laeuft fluessig mit
     if (laser) {
       // Spitze bleibt hell, solange noch etwas aufliegt; der Schweif altert von hinten
@@ -8488,20 +8490,40 @@
   }
 
   function zoomNextLine(animate) {
-    moveZoomBox(zoomWin.left, snapZoomY(zoomWin.y + zoomLineStep()), animate);
+    const ny = snapZoomY(zoomWin.y + zoomLineStep());
+    moveZoomBox(zoomRowBounds(ny).left, ny, animate);
   }
   function zoomStep(dir) {
     const step = zoomWin.w * 0.6;
+    const row = zoomRowBounds(zoomWin.y);
     let nx = zoomWin.x + dir * step;
-    if (dir > 0 && nx + zoomWin.w > zoomWin.right + zoomWin.w * 0.25) return zoomNextLine();
-    if (dir < 0 && nx < zoomWin.left) {
-      if (zoomWin.x <= zoomWin.left + 1) {
+    if (dir > 0 && nx + zoomWin.w > row.right + zoomWin.w * 0.25) return zoomNextLine();
+    if (dir < 0 && nx < row.left) {
+      if (zoomWin.x <= row.left + 1) {
         // am linken Rand: zurueck ans Ende der vorigen Zeile
-        return moveZoomBox(Math.max(zoomWin.left, zoomWin.right - zoomWin.w), snapZoomY(zoomWin.y - zoomLineStep()));
+        const py = snapZoomY(zoomWin.y - zoomLineStep());
+        const prev = zoomRowBounds(py);
+        return moveZoomBox(Math.max(prev.left, prev.right - zoomWin.w), py);
       }
-      nx = zoomWin.left;
+      nx = row.left;
     }
     moveZoomBox(nx, zoomWin.y);
+  }
+
+  // Rahmen aller Bilder auf dem Blatt, einmal pro Bild gesammelt (nicht pro Zeilen-Abfrage)
+  let zoomImgCache = { frame: -1, list: [] };
+  function zoomImageBoxes() {
+    if (zoomImgCache.frame === drawFrameNo) return zoomImgCache.list;
+    const list = [];
+    for (const st of boardStrokes.values()) {
+      if (st.tool !== "image") continue;
+      const pageId = st.extra && st.extra.boardPage;
+      if (boardEditId ? pageId !== boardEditId : pageId) continue;
+      const b = st.bbox || strokeWorldBBox(st);
+      if (b) list.push(b);
+    }
+    zoomImgCache = { frame: drawFrameNo, list };
+    return list;
   }
 
   // Schreibbereich der Zeile bei y: links und rechts rueckt der Rand an einem Bild
@@ -8513,15 +8535,13 @@
     let R = zoomWin.right;
     if (zoomHideMedia) return { left: L, right: R };
     const y0 = y;
-    const y1 = y + zoomRowH();
+    const rowH = zoomRowH();
+    const y1 = y + rowH;
     const gap = zoomWin.w * 0.04;
     const minW = zoomWin.w * 0.3;
-    for (const st of boardStrokes.values()) {
-      if (st.tool !== "image") continue;
-      const pageId = st.extra && st.extra.boardPage;
-      if (boardEditId ? pageId !== boardEditId : pageId) continue;
-      const b = st.bbox || strokeWorldBBox(st);
-      if (!b || b.maxY < y0 || b.minY > y1) continue;
+    for (const b of zoomImageBoxes()) {
+      // nur Bilder, die wirklich in der Zeile liegen (nicht nur ein Anschnitt am Rand)
+      if (Math.min(b.maxY, y1) - Math.max(b.minY, y0) < rowH * 0.25) continue;
       if (b.maxX <= L || b.minX >= R) continue;
       if ((b.minX + b.maxX) / 2 < (L + R) / 2) {
         const nl = b.maxX + gap;
@@ -8573,7 +8593,8 @@
     // Raender als kurze Markierungen in Zeilenhoehe
     ctx.strokeStyle = "rgba(26,115,232,0.55)";
     ctx.setLineDash([4 / scale, 4 / scale]);
-    for (const mx of [zoomWin.left, zoomWin.right]) {
+    const boxRow = zoomRowBounds(zoomWin.y);
+    for (const mx of [boxRow.left, boxRow.right]) {
       ctx.beginPath();
       ctx.moveTo(mx, zoomWin.y - h * 0.5);
       ctx.lineTo(mx, zoomWin.y + h * 1.5);
