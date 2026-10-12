@@ -1094,7 +1094,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             persist_changed = False
             room = client.board_id
             # Nur ansehen: nichts aendern (Cursor ist ok)
-            if client.role == "view" and msg_type in ("stroke_start", "stroke_points", "stroke_end", "stroke_replace", "stroke_move", "erase"):
+            if client.role == "view" and msg_type in ("stroke_start", "stroke_points", "stroke_end", "stroke_replace", "stroke_move", "erase", "text_live"):
                 if msg_type in ("stroke_end", "stroke_move", "erase"):
                     await websocket.send_json({"type": "board_reload"})
                 continue
@@ -1114,6 +1114,15 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     exclude=websocket,
                     board_id=room,
                 )
+
+            elif msg_type == "text_live":
+                # Text, der gerade getippt wird: nur weiterreichen, nicht speichern
+                # (gespeichert wird wie bisher per stroke_move, wenn das Feld geschlossen wird)
+                payload = {"type": "text_live", "id": client.id, "color": client.color, "person": client.person_id, "editId": msg.get("editId")}
+                for key in ("stroke", "cell", "caret", "done"):
+                    if key in msg:
+                        payload[key] = msg[key]
+                await manager.broadcast(payload, exclude=websocket, board_id=room)
 
             elif msg_type == "stroke_start":
                 stroke_id = msg.get("strokeId")

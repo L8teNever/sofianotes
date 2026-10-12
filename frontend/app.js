@@ -2473,6 +2473,7 @@
     drawHoldHint();
     drawShapeGuide();
     drawLaser();
+    drawRemoteCarets();
     drawPagePullRing();
     positionTextEditor();
     positionInkChips();
@@ -5233,6 +5234,7 @@
         if (window.sofiaShareRefresh) window.sofiaShareRefresh();
         break;
       case "presence_leave":
+        endTextLiveOf(msg.id);
         removePresence(msg.id);
         renderPeopleJumpList();
         if (window.sofiaShareRefresh) window.sofiaShareRefresh();
@@ -5248,6 +5250,9 @@
         requestRedraw();
         break;
       }
+      case "text_live":
+        applyTextLive(msg);
+        break;
       case "stroke_start": {
         remoteInProgress.set(msg.strokeId, {
           id: msg.strokeId,
@@ -5286,6 +5291,7 @@
         break;
       case "stroke_move": {
         const s = msg.stroke;
+        if (s && s.id) settleTextLive(s.id);
         if (s && s.id) {
           if (s.author ? s.author !== currentPersonId : !boardStrokes.has(s.id)) foreignIds.add(s.id);
           s.bbox = strokeWorldBBox(s);
@@ -5296,6 +5302,7 @@
         break;
       }
       case "erase":
+        for (const id of msg.strokeIds) settleTextLive(id);
         for (const id of msg.strokeIds) {
           boardStrokes.delete(id);
           remoteInProgress.delete(id);
@@ -5313,6 +5320,88 @@
   const PRESENCE_TIMEOUT_MS = 4000;
   // Werkzeug als Symbol (statt Emoji), dazu der Name der Person in ihrer festen Farbe
   const TOOL_ICONS = { pen: "ink_pen", marker: "ink_highlighter", eraser: "ink_eraser", select: "lasso_select", text: "text_fields" };
+
+  // ---- Text, den andere gerade tippen ----
+  // editId -> { owner, strokeId, orig } - orig ist der Stand vor dem Tippen (null = neues Feld),
+  // damit beim Abbrechen wieder alles so aussieht wie vorher.
+  const liveTexts = new Map();
+  function applyTextLive(msg) {
+    const id = msg.editId;
+    if (!id) return;
+    if (msg.done) {
+      endTextLiveEntry(id);
+      const p = presence.get(msg.id);
+      if (p) p.caret = null;
+      requestRedraw();
+      return;
+    }
+    let st = null;
+    if (msg.stroke && msg.stroke.id && msg.stroke.tool === "text") st = msg.stroke;
+    else if (msg.cell && msg.cell.tableId) {
+      const t = boardStrokes.get(msg.cell.tableId);
+      if (!t) return;
+      const ent = liveTexts.get(id);
+      const base = ent && ent.orig ? ent.orig : t;
+      const cells = Object.assign({}, (base.extra && base.extra.cells) || {});
+      const key = msg.cell.r + "," + msg.cell.c;
+      if (msg.cell.text) cells[key] = String(msg.cell.text);
+      else delete cells[key];
+      st = cloneStroke(base);
+      st.extra = Object.assign({}, st.extra, { cells });
+      growTableRows(st);
+    }
+    if (!st) return;
+    if (!liveTexts.has(id)) {
+      const cur = boardStrokes.get(st.id);
+      liveTexts.set(id, { owner: msg.id, strokeId: st.id, orig: cur ? cloneStroke(cur) : null });
+    }
+    if (st.author ? st.author !== currentPersonId : !boardStrokes.has(st.id)) foreignIds.add(st.id);
+    st.bbox = strokeWorldBBox(st);
+    boardStrokes.set(st.id, st);
+    if (msg.caret && Number.isFinite(msg.caret.x) && Number.isFinite(msg.caret.y)) {
+      const p = ensurePresence(msg.id, msg.color);
+      if (msg.person) p.person = msg.person;
+      p.caret = { x: msg.caret.x, y: msg.caret.y, h: Number(msg.caret.h) || st.size || 16 };
+      p.x = p.caret.x;
+      p.y = p.caret.y;
+      p.tool = "text";
+      p.lastSeen = performance.now();
+    }
+    requestRedraw();
+  }
+  // Tippen beendet ohne Speichern: alten Stand zurueck (bzw. neues Feld wieder weg)
+  function endTextLiveEntry(id) {
+    const ent = liveTexts.get(id);
+    if (!ent) return;
+    liveTexts.delete(id);
+    if (ent.orig) {
+      ent.orig.bbox = strokeWorldBBox(ent.orig);
+      boardStrokes.set(ent.strokeId, ent.orig);
+    } else boardStrokes.delete(ent.strokeId);
+  }
+  // Gespeichert oder geloescht: der echte Stand gilt, nichts zurueckholen
+  function settleTextLive(strokeId) {
+    for (const [id, ent] of liveTexts) if (ent.strokeId === strokeId) liveTexts.delete(id);
+  }
+  function endTextLiveOf(clientId) {
+    for (const [id, ent] of liveTexts) if (ent.owner === clientId) endTextLiveEntry(id);
+    requestRedraw();
+  }
+  // Cursor der anderen im Textfeld: senkrechter Strich in ihrer Farbe (Name steht schon im Schild)
+  function drawRemoteCarets() {
+    const now = performance.now();
+    for (const [id, p] of presence) {
+      if (!p.caret || id === myClientId || now - p.lastSeen > PRESENCE_TIMEOUT_MS) continue;
+      const a = worldToScreen(p.caret.x, p.caret.y);
+      const h = Math.max(10, p.caret.h * scale);
+      ctx.save();
+      ctx.setTransform(dpr, 0, 0, dpr, -canvasLeft * dpr, 0);
+      ctx.fillStyle = p.color || "#888";
+      ctx.fillRect(a.x - 1, a.y, 2.5, h);
+      ctx.fillRect(a.x - 3.5, a.y, 7.5, 2);
+      ctx.restore();
+    }
+  }
 
   function ensurePresence(id, color) {
     let p = presence.get(id);
@@ -7575,6 +7664,7 @@
   }
 
   function showTextEditor(value, runs) {
+    if (textEdit && !textEdit.liveId) textEdit.liveId = (textEdit.kind === "text" && textEdit.strokeId) || uuid();
     const rich = runs && runs.length ? normalizeRuns(runs) : [{ t: value || "" }];
     textEditorEl.innerHTML = runsToHtml(rich);
     textEditorEl.classList.remove("hidden");
@@ -7589,6 +7679,7 @@
     sel.addRange(range);
     editorRange = range.cloneRange();
     syncFormatBar();
+    sendTextLive();
   }
 
   function applyTextEditStyle(patch) {
@@ -7600,6 +7691,7 @@
       textEdit.y += (textEdit.size - old) * 0.95;
     }
     positionTextEditor();
+    sendTextLive();
   }
 
   function positionTextEditor() {
@@ -7707,6 +7799,7 @@
         textEdit.x = d.x0 + (newLeft - d.left) / scale;
       }
       positionTextEditor();
+      sendTextLive();
     });
     const end = (e) => {
       if (teHandleDrag && teHandleDrag.id === e.pointerId) teHandleDrag = null;
@@ -7733,6 +7826,7 @@
       textEdit.x = d.origX + (e.clientX - d.x0) / scale;
       textEdit.y = d.origY + (e.clientY - d.y0) / scale;
       positionTextEditor();
+      sendTextLive();
     });
     const endMove = (e) => {
       if (teMoveDrag && teMoveDrag.id === e.pointerId) teMoveDrag = null;
@@ -7743,7 +7837,9 @@
   }
 
   function cancelTextEditor() {
+    const ed = textEdit;
     textEdit = null;
+    endTextLive(ed);
     syncTextHandles();
     textFormatBar.classList.add("hidden");
     textEditorEl.classList.add("hidden");
@@ -7757,6 +7853,9 @@
     const runs = serializeEditor();
     const value = runsText(runs);
     textEdit = null;
+    // erst speichern (stroke_move/erase), dann die Live-Sitzung beenden - in dieser Reihenfolge
+    // kommen sie auch bei den anderen an
+    queueMicrotask(() => endTextLive(ed));
     syncTextHandles();
     textFormatBar.classList.add("hidden");
     textEditorEl.classList.add("hidden");
@@ -7784,7 +7883,6 @@
       }
       return requestRedraw();
     }
-    const plainRuns = runs.every((r) => !r.b && !r.i && !r.s && !r.u);
     const beforeRuns = ed.before ? JSON.stringify(normalizeRuns(strokeRuns(ed.before))) : null;
     const unchanged =
       ed.before &&
@@ -7795,20 +7893,85 @@
       ((ed.before.extra && ed.before.extra.width) || null) === (ed.width || null) &&
       ed.before.points[0].x === ed.x;
     if (unchanged) return requestRedraw();
-    const extra = Object.assign({}, (ed.before && ed.before.extra) || {}, { box: true, width: ed.width || null });
-    if (plainRuns) delete extra.runs;
-    else extra.runs = runs;
-    const stroke = {
-      id: ed.strokeId || uuid(),
-      tool: "text",
-      color: ed.color,
-      size: ed.size,
-      points: boxTextPoints(ed.x, ed.y, value, ed.size, ed.width, runs),
-      extra,
-    };
+    const stroke = textStrokeFrom(ed, runs);
     putStroke(stroke);
     pushUndo({ type: "replace", before: ed.before, after: cloneStroke(stroke) });
     requestRedraw();
+  }
+
+  // Textfeld als Strich (fuers Speichern und fuer die Live-Ansicht der anderen)
+  function textStrokeFrom(ed, runs) {
+    const extra = Object.assign({}, (ed.before && ed.before.extra) || {}, { box: true, width: ed.width || null });
+    if (runs.every((r) => !r.b && !r.i && !r.s && !r.u)) delete extra.runs;
+    else extra.runs = runs;
+    return {
+      id: ed.strokeId || ed.liveId || uuid(),
+      tool: "text",
+      color: ed.color,
+      size: ed.size,
+      points: boxTextPoints(ed.x, ed.y, runsText(runs), ed.size, ed.width, runs),
+      extra,
+    };
+  }
+
+  // ---- Text live teilen: die anderen sehen beim Tippen mit, samt Cursor ----
+  // Nur Anzeige (nicht gespeichert); gespeichert wird wie bisher beim Verlassen des Felds.
+  const TEXT_LIVE_MS = 90;
+  let textLiveLast = 0;
+  let textLiveTimer = null;
+  let textLiveSent = "";
+  function textLiveCaret() {
+    const sel = window.getSelection();
+    let rect = null;
+    if (sel && sel.rangeCount && textEditorEl.contains(sel.focusNode)) {
+      const r = document.createRange();
+      r.setStart(sel.focusNode, sel.focusOffset);
+      r.collapse(true);
+      rect = Array.from(r.getClientRects()).find((x) => x.height > 0) || null;
+      // leere Zeile: Range hat keine Box -> Box des Elements (z. B. <div><br></div>) nehmen
+      if (!rect && sel.focusNode.nodeType === 1) {
+        const el = sel.focusNode.childNodes[sel.focusOffset] || sel.focusNode;
+        if (el.getBoundingClientRect) {
+          const b = el.getBoundingClientRect();
+          if (b.height > 0) rect = { left: b.left, top: b.top, height: b.height };
+        }
+      }
+    }
+    if (!rect) {
+      const b = textEditorEl.getBoundingClientRect();
+      rect = { left: b.left + 2, top: b.top, height: Math.min(b.height, parseFloat(textEditorEl.style.fontSize || "16") * TEXT_LINE) };
+    }
+    const w = screenToWorld(rect.left, rect.top);
+    return { x: w.x, y: w.y, h: rect.height / scale };
+  }
+  function sendTextLive() {
+    if (!textEdit || viewOnly || !textEdit.liveId) return;
+    const now = performance.now();
+    if (now - textLiveLast < TEXT_LIVE_MS) {
+      if (!textLiveTimer) textLiveTimer = setTimeout(() => ((textLiveTimer = null), sendTextLive()), TEXT_LIVE_MS - (now - textLiveLast));
+      return;
+    }
+    const ed = textEdit;
+    const runs = serializeEditor();
+    const msg = { type: "text_live", editId: ed.liveId, caret: textLiveCaret() };
+    if (ed.kind === "cell") msg.cell = { tableId: ed.tableId, r: ed.r, c: ed.c, text: runsText(runs) };
+    else {
+      const st = textStrokeFrom(ed, runs);
+      stampBoardPage(st);
+      msg.stroke = serializeStroke(st);
+    }
+    const key = JSON.stringify(msg);
+    if (key === textLiveSent) return;
+    textLiveSent = key;
+    textLiveLast = now;
+    ed.liveShared = true;
+    wsSend(msg);
+  }
+  function endTextLive(ed) {
+    clearTimeout(textLiveTimer);
+    textLiveTimer = null;
+    textLiveSent = "";
+    if (ed && ed.liveId && ed.liveShared) wsSend({ type: "text_live", editId: ed.liveId, done: true });
   }
 
   const textFormatBar = document.getElementById("text-format-bar");
@@ -8207,6 +8370,14 @@
     textEditorEl.addEventListener("input", () => {
       lastExpandedRange = null;
       cleanupPlaceholders();
+    });
+    // Live teilen: jede Aenderung im Feld (Tippen, Formatieren) und jede Cursor-Bewegung
+    new MutationObserver((list) => {
+      // das Feld selbst bekommt beim Mitwandern staendig neue Styles - das ist keine Aenderung
+      if (textEdit && list.some((m) => m.type !== "attributes" || m.target !== textEditorEl)) sendTextLive();
+    }).observe(textEditorEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+    document.addEventListener("selectionchange", () => {
+      if (textEdit && document.activeElement === textEditorEl) sendTextLive();
     });
   }
 
