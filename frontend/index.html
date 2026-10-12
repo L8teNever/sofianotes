@@ -222,6 +222,10 @@
 
 <!-- ganz rechts oben: Einstellungen & Menue (Teilen, Exportieren, Verlauf ...) -->
 <div id="top-menu-bar" class="top-back-bar top-menu-bar">
+  <!-- Countdown der laufenden Schulstunde; antippen klappt Details auf -->
+  <button type="button" id="btn-school" class="icon-btn school-btn hidden" title="Schulstunde: Restzeit · antippen für mehr" aria-expanded="false">
+    <span id="school-btn-time" class="school-btn-time">–</span>
+  </button>
   <div class="canvas-menu-wrap">
     <button type="button" id="btn-canvas-menu" class="icon-btn" title="Einstellungen und mehr">
       <span class="material-symbols-rounded">settings</span>
@@ -699,9 +703,9 @@
       <div class="set-sub">Anzeige</div>
       <div class="set-radio" id="set-school-mode">
         <button type="button" data-mode="off"><strong>Aus</strong><small>Kein Timer, keine Hinweise</small></button>
-        <button type="button" data-mode="widget"><strong>Kleines Fenster</strong><small>Restzeit immer sichtbar – frei verschiebbar</small></button>
+        <button type="button" data-mode="widget"><strong>Countdown oben</strong><small>Restzeit als Knopf neben dem Zahnrad – antippen für mehr</small></button>
         <button type="button" data-mode="notes"><strong>Nur Hinweise links</strong><small>Kleine Meldungen kurz vor Stundenende / Schulschluss</small></button>
-        <button type="button" data-mode="both"><strong>Fenster und Hinweise</strong><small>Beides zusammen</small></button>
+        <button type="button" data-mode="both"><strong>Countdown und Hinweise</strong><small>Beides zusammen</small></button>
       </div>
       <div class="set-sub">Hinweis vor Stundenende</div>
       <div class="set-seg" id="set-school-before">
@@ -957,6 +961,34 @@
   </div>
 </div>
 
+<!-- Countdown aufgeklappt: Stunde, naechste Stunde, Schulschluss -->
+<div id="school-pop" class="school-pop hidden" role="dialog" aria-label="Schulstunde">
+  <div class="sp-head">
+    <div class="sp-icon"><span class="material-symbols-rounded">school</span></div>
+    <div class="sp-head-text"><div id="sp-subject" class="sp-subject"></div><div id="sp-room" class="sp-room"></div></div>
+  </div>
+  <div id="sp-big" class="sp-big"></div>
+  <div class="sp-bar"><div id="sp-fill" class="sp-fill"></div></div>
+  <div id="sp-rows" class="sp-rows"></div>
+  <div class="sp-actions">
+    <button type="button" id="sp-day" class="sp-action"><span class="material-symbols-rounded">view_agenda</span><span>Tagesplan</span></button>
+    <button type="button" id="sp-week" class="sp-action"><span class="material-symbols-rounded">calendar_month</span><span>Woche</span></button>
+  </div>
+</div>
+
+<!-- Tagesplan als Seitenleiste rechts -->
+<div id="tt-side" class="tt-side hidden" role="complementary" aria-label="Tagesplan">
+  <div class="tt-side-head">
+    <div class="chat-pill tt-side-title-pill"><span id="tt-side-title" class="chat-title">Heute</span></div>
+    <span class="chat-head-gap"></span>
+    <button type="button" id="tt-side-prev" class="chat-pill chat-round" title="Vorheriger Tag"><span class="material-symbols-rounded">chevron_left</span></button>
+    <button type="button" id="tt-side-next" class="chat-pill chat-round" title="Nächster Tag"><span class="material-symbols-rounded">chevron_right</span></button>
+    <button type="button" id="tt-side-week" class="chat-pill chat-round" title="Ganze Woche"><span class="material-symbols-rounded">calendar_month</span></button>
+    <button type="button" id="tt-side-close" class="chat-pill chat-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div id="tt-side-body" class="tt-side-body"></div>
+</div>
+
 <!-- Sofia-Chats: schwebendes Fenster oder links/rechts angedockt (Stil wie die Seiten-Leiste) -->
 <div id="chat-win" class="chat-win hidden" role="dialog" aria-label="Chats">
   <div id="chat-head" class="chat-head" title="Ziehen zum Verschieben, an den Rand ziehen zum Andocken">
@@ -1060,11 +1092,6 @@
   </div>
 </div>
 
-<div id="school-timer" class="school-timer hidden" title="Antippen: klein/groß · ziehen: verschieben">
-  <div class="st-top"><span id="st-subject"></span><button type="button" id="st-close" class="st-close" title="Ausblenden"><span class="material-symbols-rounded">close</span></button></div>
-  <div class="st-big" id="st-left"></div>
-  <div class="st-sub" id="st-end"></div>
-</div>
 <div id="school-notes" class="school-notes" aria-live="polite"></div>
 
 <div id="scan-scrim" class="scan-scrim hidden" role="dialog" aria-modal="true" aria-label="Scannen">

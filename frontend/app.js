@@ -951,14 +951,21 @@
   window.sofiaView = () => ({ scale, offsetX, offsetY });
   let pagesInsetLeft = 0; // Seiten-Leiste im Notizbuch (links)
   let requestedInsets = [0, 0];
-  let chatInsets = [0, 0]; // angedocktes Chat-Fenster (links/rechts)
-  window.sofiaSetChatInsets = (l, r) => {
-    chatInsets = [Math.round(l || 0), Math.round(r || 0)];
-    document.documentElement.style.setProperty("--chat-inset-l", chatInsets[0] + "px");
-    document.documentElement.style.setProperty("--chat-inset-r", chatInsets[1] + "px");
+  let chatInsets = [0, 0]; // angedockte Leisten (Chat, Tagesplan): links/rechts zusammen
+  const panelInsets = {};
+  window.sofiaSetPanelInsets = (key, l, r) => {
+    panelInsets[key] = [Math.round(l || 0), Math.round(r || 0)];
+    chatInsets = Object.values(panelInsets).reduce((a, v) => [a[0] + v[0], a[1] + v[1]], [0, 0]);
+    const chat = panelInsets.chat || [0, 0];
+    document.documentElement.style.setProperty("--chat-inset-l", chat[0] + "px");
+    document.documentElement.style.setProperty("--chat-inset-r", chat[1] + "px");
+    // alles rechts Angedockte zusammen (fuer die Material-Leiste)
+    document.documentElement.style.setProperty("--dock-inset-r", chatInsets[1] + "px");
+    document.documentElement.style.setProperty("--dock-inset-l", chatInsets[0] + "px");
     if (window.sofiaRelayoutHw) window.sofiaRelayoutHw();
     setViewInsets(requestedInsets[0], requestedInsets[1]);
   };
+  window.sofiaSetChatInsets = (l, r) => window.sofiaSetPanelInsets("chat", l, r);
   function setViewInsets(left, right) {
     requestedInsets = [left || 0, right || 0];
     if (splitOn() && window.sofiaSplitLayout) {
@@ -15124,7 +15131,7 @@
         top: inset + "px",
         height: Math.max(200, window.innerHeight - inset * 2) + "px",
         width: w + "px",
-        left: hwLayout.side === "left" ? "calc(var(--pages-inset, 0px) + var(--chat-inset-l, 0px))" : "calc(" + (window.innerWidth - w) + "px - var(--chat-inset-r, 0px))",
+        left: hwLayout.side === "left" ? "calc(var(--pages-inset, 0px) + var(--dock-inset-l, 0px))" : "calc(" + (window.innerWidth - w) + "px - var(--dock-inset-r, 0px))",
       });
       setViewInsets(hwLayout.side === "left" ? w : 0, hwLayout.side === "left" ? 0 : w);
     } else {
@@ -19158,13 +19165,17 @@
       return row;
     }
 
-    function renderDay() {
-      const d = addDays(today(), dayOffset);
-      const isToday = dayOffset === 0;
+    // Tagesansicht - im Popup und in der Seitenleiste (target/subEl/offset)
+    function renderDay(target, subEl, offset) {
+      target = target || body;
+      subEl = subEl || document.getElementById("tt-sub");
+      if (offset == null) offset = dayOffset;
+      const d = addDays(today(), offset);
+      const isToday = offset === 0;
       const isPast = d < today();
       const now = new Date();
       const nowMin = isToday ? now.getHours() * 60 + now.getMinutes() : null;
-      document.getElementById("tt-sub").textContent = (isToday ? "Heute" : DAYS_L[d.getDay()]) + ", " + d.getDate() + ". " + MONTHS[d.getMonth()];
+      subEl.textContent = (isToday ? "Heute" : DAYS_L[d.getDay()]) + ", " + d.getDate() + ". " + MONTHS[d.getMonth()];
       const ds = ymd(d);
       const list = lessonsOn(ds);
       const wrap = el("div", "tt-day-list");
@@ -19173,7 +19184,7 @@
         const m = el("div", "tt-msg");
         m.appendChild(el("span", "material-symbols-rounded", holiday ? "beach_access" : "celebration"));
         m.appendChild(el("p", "", holiday ? "Ferien – " + holiday.name : "Kein Unterricht"));
-        return body.appendChild(m);
+        return target.appendChild(m);
       }
       let lineDone = nowMin === null;
       list.forEach((l, i) => {
@@ -19219,7 +19230,7 @@
         wrap.appendChild(card);
       });
       if (!lineDone) wrap.appendChild(nowLine(now));
-      body.appendChild(wrap);
+      target.appendChild(wrap);
     }
 
     function renderWeek() {
@@ -19379,6 +19390,7 @@
         } else data = { error: "offline" };
       }
       if (!backdrop.classList.contains("hidden")) render();
+      if (typeof renderSide === "function") renderSide();
     }
     function open() {
       // heute, am Wochenende der naechste Montag; Woche: die aktuelle (Wochenende: naechste)
@@ -19395,6 +19407,71 @@
       }, 60000);
     }
     window.sofiaOpenTimetable = open;
+
+    // ---- Tagesplan als Seitenleiste (rechts, neben einem angedockten Chat) ----
+    const side = document.getElementById("tt-side");
+    const sideBody = document.getElementById("tt-side-body");
+    const sideTitle = document.getElementById("tt-side-title");
+    let sideOffset = 0;
+    let sideWanted = false;
+    let sideTimer = null;
+    const SIDE_W = 360;
+    const libB = document.getElementById("library-backdrop");
+    const onBoard = () => !!currentBoardId && (!libB || libB.classList.contains("hidden"));
+    function renderSide() {
+      if (!side || side.classList.contains("hidden")) return;
+      sideBody.innerHTML = "";
+      if (!data) return sideBody.appendChild(el("div", "tt-msg", "Lädt …"));
+      if (!data.weeks) return sideBody.appendChild(el("div", "tt-msg", data.enabled === false ? "Sofia ist nicht verbunden." : data.linked === false ? "Konto nicht mit Sofia verbunden." : "Stundenplan gerade nicht erreichbar."));
+      colorMap = {};
+      let ci = 0;
+      for (const l of lessons()) {
+        const k = l.short || l.subject;
+        if (k && colorMap[k] == null) colorMap[k] = ci++;
+      }
+      renderDay(sideBody, sideTitle, sideOffset);
+    }
+    function placeSide() {
+      const show = sideWanted && onBoard();
+      side.classList.toggle("hidden", !show);
+      if (window.sofiaSetPanelInsets) window.sofiaSetPanelInsets("tt", 0, show ? SIDE_W : 0);
+      clearInterval(sideTimer);
+      if (show) {
+        sideTimer = setInterval(renderSide, 60000);
+        renderSide();
+      }
+    }
+    function openSide() {
+      sideWanted = true;
+      const dow = today().getDay();
+      sideOffset = dow === 0 ? 1 : dow === 6 ? 2 : 0;
+      placeSide();
+      load().then(renderSide);
+    }
+    function closeSide() {
+      sideWanted = false;
+      placeSide();
+    }
+    window.sofiaOpenDaySide = openSide;
+    if (side) {
+      if (libB) new MutationObserver(placeSide).observe(libB, { attributes: true, attributeFilter: ["class"] });
+      const shift = (dir) => {
+        sideOffset += dir;
+        const dow = addDays(today(), sideOffset).getDay();
+        if (dow === 0) sideOffset += dir > 0 ? 1 : -2;
+        else if (dow === 6) sideOffset += dir > 0 ? 2 : -1;
+        renderSide();
+      };
+      document.getElementById("tt-side-prev").addEventListener("click", () => shift(-1));
+      document.getElementById("tt-side-next").addEventListener("click", () => shift(1));
+      document.getElementById("tt-side-week").addEventListener("click", () => {
+        mode = "week";
+        open();
+      });
+      document.getElementById("tt-side-close").addEventListener("click", closeSide);
+      for (const t of ["pointerdown", "wheel"]) side.addEventListener(t, (e) => e.stopPropagation());
+      window.addEventListener("resize", () => sideWanted && placeSide());
+    }
     document.getElementById("canvas-menu-timetable")?.addEventListener("click", (e) => {
       e.stopPropagation();
       closeCanvasMenus();
@@ -21910,16 +21987,25 @@
   // Der Stundenplan wird selten geholt (alle 10 Min.), gezaehlt wird lokal jede Sekunde -
   // die Anzeige ist dadurch sofort da und braucht den Server kaum.
   (() => {
-    const box = document.getElementById("school-timer");
-    const subjEl = document.getElementById("st-subject");
-    const leftEl = document.getElementById("st-left");
-    const endEl = document.getElementById("st-end");
+    // Countdown-Knopf links neben dem Zahnrad; antippen klappt Details auf (#school-pop)
+    const btn = document.getElementById("btn-school");
+    const btnTime = document.getElementById("school-btn-time");
+    const pop = document.getElementById("school-pop");
     const notes = document.getElementById("school-notes");
-    const DEF = { mode: "off", before: 5, end: 10, start: 0 };
+    const DEF = { mode: "widget", before: 5, end: 10, start: 0, v2: 1 };
     let cfg = Object.assign({}, DEF);
     try {
       cfg = Object.assign(cfg, JSON.parse(lsGetRaw("sofianotes-school") || "{}"));
     } catch (err) {}
+    // frueher war "Fenster" ein frei schwebendes Fensterchen und standardmaessig aus -
+    // der Countdown-Knopf ist jetzt einmalig fuer alle an
+    if (!cfg.v2) {
+      cfg.mode = cfg.mode === "notes" || cfg.mode === "both" ? "both" : "widget";
+      cfg.v2 = 1;
+      try {
+        localStorage.setItem("sofianotes-school", JSON.stringify(cfg));
+      } catch (err) {}
+    }
     let day = null; // {date, blocks:[{subject, room, s, e}]} - Minuten seit Mitternacht
     let status = "";
     let fetchedAt = 0;
@@ -21989,9 +22075,88 @@
     }
     const showWidget = () => cfg.mode === "widget" || cfg.mode === "both";
     const showNotes = () => cfg.mode === "notes" || cfg.mode === "both";
+    const clockLeft = (min) => {
+      const sec = Math.max(0, Math.round(min * 60));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const ss = String(sec % 60).padStart(2, "0");
+      return h ? h + ":" + String(m).padStart(2, "0") + ":" + ss : m + ":" + ss;
+    };
+    let btnShown = false;
+    function setBtn(show) {
+      if (show === btnShown) return;
+      btnShown = show;
+      btn.classList.toggle("hidden", !show);
+      if (!show) closePop();
+      try {
+        layoutTopBar();
+      } catch (err) {}
+    }
+    function row(icon, text) {
+      const r = document.createElement("div");
+      r.className = "sp-row";
+      r.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+      r.children[0].textContent = icon;
+      r.children[1].textContent = text;
+      return r;
+    }
+    function renderPop(cur, nxt, endOfDay, t) {
+      if (pop.classList.contains("hidden")) return;
+      const b = cur || nxt;
+      document.getElementById("sp-subject").textContent = cur ? cur.subject : "Pause";
+      document.getElementById("sp-room").textContent = cur ? (cur.room ? "Raum " + cur.room + " · " : "") + hm(cur.s) + "–" + hm(cur.e) : nxt ? "Als Nächstes " + nxt.subject + " um " + hm(nxt.s) : "";
+      document.getElementById("sp-big").textContent = cur ? "noch " + clockLeft(cur.e - t) : nxt ? "noch " + clockLeft(nxt.s - t) : "";
+      const fill = document.getElementById("sp-fill");
+      if (cur) fill.style.width = Math.min(100, Math.max(0, ((t - cur.s) / (cur.e - cur.s)) * 100)) + "%";
+      else {
+        const prev = ((day && day.blocks) || []).filter((x) => x.e <= t).pop();
+        const s0 = prev ? prev.e : b ? b.s - 15 : t;
+        fill.style.width = nxt ? Math.min(100, Math.max(0, ((t - s0) / Math.max(1, nxt.s - s0)) * 100)) + "%" : "100%";
+      }
+      pop.classList.toggle("sp-soon", !!cur && cur.e - t <= Math.max(1, cfg.before || 5));
+      const rows = document.getElementById("sp-rows");
+      rows.innerHTML = "";
+      if (cur && nxt) rows.appendChild(row("arrow_forward", "Danach " + nxt.subject + (nxt.room ? " · " + nxt.room : "") + " um " + hm(nxt.s)));
+      if (endOfDay != null) rows.appendChild(row("home", "Schulschluss " + hm(endOfDay) + " · noch " + fmt(endOfDay - t)));
+    }
+    function placePop() {
+      const bar = document.getElementById("top-menu-bar");
+      const r = bar.getBoundingClientRect();
+      pop.style.top = Math.round(r.bottom + 8) + "px";
+      pop.style.right = Math.round(window.innerWidth - r.right) + "px";
+    }
+    function openPop() {
+      pop.classList.remove("hidden");
+      btn.classList.add("active");
+      btn.setAttribute("aria-expanded", "true");
+      placePop();
+      tick();
+    }
+    function closePop() {
+      pop.classList.add("hidden");
+      btn.classList.remove("active");
+      btn.setAttribute("aria-expanded", "false");
+    }
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (pop.classList.contains("hidden")) openPop();
+      else closePop();
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!pop.classList.contains("hidden") && !pop.contains(e.target) && !btn.contains(e.target)) closePop();
+    });
+    document.getElementById("sp-day").addEventListener("click", () => {
+      closePop();
+      if (window.sofiaOpenDaySide) window.sofiaOpenDaySide();
+    });
+    document.getElementById("sp-week").addEventListener("click", () => {
+      closePop();
+      if (window.sofiaOpenTimetable) window.sofiaOpenTimetable();
+    });
+    window.addEventListener("resize", () => !pop.classList.contains("hidden") && placePop());
     function tick() {
       if (cfg.mode === "off") {
-        box.classList.add("hidden");
+        setBtn(false);
         return;
       }
       if (!day || day.date !== today() || Date.now() - fetchedAt > 10 * 60 * 1000) {
@@ -22003,19 +22168,14 @@
       const cur = blocks.find((b) => b.s <= t && t < b.e);
       const nxt = blocks.find((b) => b.s > t);
       const endOfDay = blocks.length ? blocks[blocks.length - 1].e : null;
-      const visible = showWidget() && blocks.length && (cur || nxt);
-      box.classList.toggle("hidden", !visible);
+      const visible = !!(showWidget() && blocks.length && (cur || nxt) && currentBoardId);
+      setBtn(visible);
       if (visible) {
-        if (cur) {
-          subjEl.textContent = cur.subject + (cur.room ? " · " + cur.room : "");
-          leftEl.textContent = "noch " + fmt(cur.e - t);
-          box.classList.toggle("st-soon", cur.e - t <= Math.max(1, cfg.before || 5));
-        } else {
-          subjEl.textContent = "Pause";
-          leftEl.textContent = nxt.subject + " in " + fmt(nxt.s - t);
-          box.classList.remove("st-soon");
-        }
-        endEl.textContent = "Schulschluss " + hm(endOfDay) + " · noch " + fmt(endOfDay - t);
+        btnTime.textContent = clockLeft(cur ? cur.e - t : nxt.s - t);
+        btn.classList.toggle("st-pause", !cur);
+        btn.classList.toggle("st-soon", !!cur && cur.e - t <= Math.max(1, cfg.before || 5));
+        btn.title = cur ? cur.subject + ": noch " + fmt(cur.e - t) + " · antippen für mehr" : "Pause bis " + nxt.subject + " · antippen für mehr";
+        renderPop(cur, nxt, endOfDay, t);
       }
       if (!showNotes() || !blocks.length) return;
       const key = (k) => today() + "|" + k;
@@ -22052,64 +22212,6 @@
     });
     load().then(markPast);
 
-    // ---- Fenster: ziehen zum Verschieben, antippen fuer klein/gross ----
-    function applyPos() {
-      let pos = null;
-      try {
-        pos = JSON.parse(lsGetRaw("sofianotes-school-pos") || "null");
-      } catch (err) {}
-      if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
-        box.style.left = Math.max(4, Math.min(window.innerWidth - 60, pos.x * window.innerWidth)) + "px";
-        box.style.top = Math.max(4, Math.min(window.innerHeight - 40, pos.y * window.innerHeight)) + "px";
-        box.style.right = "auto";
-        box.style.bottom = "auto";
-      }
-      box.classList.toggle("st-compact", !!(pos && pos.compact));
-    }
-    applyPos();
-    window.addEventListener("resize", applyPos);
-    let drag = null;
-    box.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#st-close")) return;
-      const r = box.getBoundingClientRect();
-      drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
-      try {
-        box.setPointerCapture(e.pointerId);
-      } catch (err) {}
-      e.preventDefault();
-    });
-    box.addEventListener("pointermove", (e) => {
-      if (!drag || e.pointerId !== drag.id) return;
-      if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
-      drag.moved = true;
-      const w = box.offsetWidth;
-      const h = box.offsetHeight;
-      box.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, e.clientX - drag.dx)) + "px";
-      box.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, e.clientY - drag.dy)) + "px";
-      box.style.right = "auto";
-      box.style.bottom = "auto";
-    });
-    const endDrag = (e) => {
-      if (!drag || e.pointerId !== drag.id) return;
-      const r = box.getBoundingClientRect();
-      const compact = drag.moved ? box.classList.contains("st-compact") : !box.classList.contains("st-compact");
-      box.classList.toggle("st-compact", compact);
-      drag = null;
-      try {
-        localStorage.setItem("sofianotes-school-pos", JSON.stringify({ x: r.left / window.innerWidth, y: r.top / window.innerHeight, compact }));
-      } catch (err) {}
-    };
-    box.addEventListener("pointerup", endDrag);
-    box.addEventListener("pointercancel", endDrag);
-    document.getElementById("st-close").addEventListener("click", (e) => {
-      e.stopPropagation();
-      cfg.mode = cfg.mode === "both" ? "notes" : "off";
-      saveCfg();
-      renderSettings();
-      tick();
-      showToast("Schul-Timer ausgeblendet – in den Einstellungen wieder an");
-    });
-
     // ---- Einstellungen ----
     function renderStatus() {
       const el = document.getElementById("set-school-status");
@@ -22121,7 +22223,7 @@
       document.querySelectorAll("#set-school-end [data-min]").forEach((b) => b.classList.toggle("active", +b.dataset.min === +cfg.end));
       document.querySelectorAll("#set-school-start [data-on]").forEach((b) => b.classList.toggle("active", +b.dataset.on === +(cfg.start ? 1 : 0)));
       const sum = document.getElementById("set-sum-school");
-      if (sum) sum.textContent = { off: "Aus", widget: "Kleines Fenster", notes: "Hinweise links", both: "Fenster + Hinweise" }[cfg.mode] || "";
+      if (sum) sum.textContent = { off: "Aus", widget: "Countdown oben", notes: "Hinweise links", both: "Countdown + Hinweise" }[cfg.mode] || "";
       renderStatus();
     }
     const bind = (sel, fn) =>
@@ -22151,7 +22253,7 @@
         cfg = Object.assign({}, DEF, JSON.parse(lsGetRaw("sofianotes-school") || "{}"));
       } catch (err) {}
       renderSettings();
-      applyPos();
+      tick();
     });
     renderSettings();
   })();
