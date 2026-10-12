@@ -437,6 +437,33 @@ class TimetableTests(unittest.TestCase):
         run(sofia_sync.timetable("simon"))
         self.assertEqual(len(self.calls), 1)
 
+    def test_one_card_per_lesson(self):
+        def raw(subject, short, teacher, room, start=1140, end=1225, date="20261014", **kw):
+            base = {"date": date, "startTime": start, "endTime": end, "subject": subject, "subject_short": short, "teacher": teacher, "room": room,
+                    "cancelled": False, "substituted": False, "original_room": None, "original_teacher": None, "subst_text": None}
+            base.update(kw)
+            return base
+
+        lessons = [
+            # Teamstunde: dieselbe Stunde pro Lehrer/Raum einmal
+            raw("PA", "PA", "Lim", "1125"), raw("PA", "PA", "Apf", "1124"), raw("PA", "PA", "Fch", "1125"),
+            # Vertretung: ausgefallene und Ersatzstunde im selben Zeitfenster
+            raw("Deutsch", "D", "Roe", "1119", date="20261015", cancelled=True),
+            raw("GGK", "GGK", "Fch", "1119", date="20261015", substituted=True),
+            # ganz ausgefallen bleibt sichtbar
+            raw("Deutsch", "D", "Roe", "1119", date="20261016", cancelled=True),
+        ]
+        sofia_sync._get = lambda path, act_as=None: {"configured": True, "this_week": {"start": "20261012", "lessons": lessons}, "next_week": {}, "holidays": []}
+        week = run(sofia_sync.timetable("simon"))["weeks"][0]["lessons"]
+        self.assertEqual(len(week), 3)
+        pa, ggk, d = week
+        self.assertEqual((pa["teacher"], pa["room"]), ("Lim, Apf, Fch", "1125, 1124"))
+        self.assertEqual(ggk["subject"], "GGK")
+        self.assertEqual(ggk["replaces"], "Deutsch")
+        self.assertFalse(ggk["cancelled"])
+        self.assertTrue(d["cancelled"])
+        self.assertNotIn("replaces", d)
+
     def test_unlinked_person(self):
         run(db.add_person_email("franz", "franz@example.com"))
         self.assertFalse(run(sofia_sync.timetable("franz"))["linked"])

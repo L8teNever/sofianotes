@@ -214,6 +214,45 @@ def _pack_lesson(l: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _join(values: list[str]) -> str:
+    out: list[str] = []
+    for v in values:
+        for part in str(v or "").split(", "):
+            if part and part not in out:
+                out.append(part)
+    return ", ".join(out)
+
+
+def _merge_slots(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Eine Karte pro Stunde: Untis liefert dieselbe Stunde einmal pro Lehrer/Raum (Teamstunden)
+    und bei Vertretung die ausgefallene und die Ersatzstunde im selben Zeitfenster."""
+    slots: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for l in lessons:
+        slots.setdefault((l["date"], l["start"], l["end"]), []).append(l)
+    out: list[dict[str, Any]] = []
+    for group in slots.values():
+        running = [l for l in group if not l["cancelled"]]
+        dropped = [l for l in group if l["cancelled"]] if running else []
+        keep = running or group
+        merged: dict[tuple[str, bool], dict[str, Any]] = {}
+        for l in keep:
+            key = (l["subject"], l["cancelled"])
+            m = merged.get(key)
+            if m is None:
+                merged[key] = dict(l)
+                continue
+            for f in ("teacher", "room", "originalTeacher", "originalRoom", "info"):
+                m[f] = _join([m[f], l[f]])
+            m["substituted"] = m["substituted"] or l["substituted"]
+        replaced = _join([l["subject"] for l in dropped if l["subject"] not in {m["subject"] for m in merged.values()}])
+        for m in merged.values():
+            if replaced:
+                m["replaces"] = replaced
+                m["substituted"] = True
+            out.append(m)
+    return out
+
+
 async def timetable(person_id: str) -> dict[str, Any]:
     """Stundenplan dieser und naechster Woche (Klasse der Person) samt Ausfall/Vertretung und Ferien."""
     if not enabled():
@@ -234,8 +273,8 @@ async def timetable(person_id: str) -> dict[str, Any]:
     for key in ("this_week", "next_week"):
         w = tt.get(key) or {}
         lessons = sorted(
-            (_pack_lesson(l) for l in w.get("lessons") or [] if isinstance(l, dict)),
-            key=lambda l: (l["date"], l["start"]),
+            _merge_slots([_pack_lesson(l) for l in w.get("lessons") or [] if isinstance(l, dict)]),
+            key=lambda l: (l["date"], l["start"], l["subject"]),
         )
         weeks.append({"start": str(w.get("start") or ""), "lessons": lessons})
     holidays = [

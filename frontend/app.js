@@ -18282,8 +18282,9 @@
       c.appendChild(meta);
       if (l.cancelled) c.appendChild(el("div", "tt-tag", "Entfällt"));
       else if (l.substituted) c.appendChild(el("div", "tt-tag", "Vertretung"));
+      if (l.replaces) c.appendChild(el("div", "tt-info", "statt " + l.replaces));
       if (l.info) c.appendChild(el("div", "tt-info", l.info));
-      c.title = [l.subject, l.start + "–" + l.end, l.room, l.teacher, l.cancelled ? "Entfällt" : "", l.info].filter(Boolean).join(" · ");
+      c.title = [l.subject, l.start + "–" + l.end, l.room, l.teacher, l.cancelled ? "Entfällt" : "", l.replaces ? "statt " + l.replaces : "", l.info].filter(Boolean).join(" · ");
       return c;
     }
     function render() {
