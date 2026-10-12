@@ -6750,7 +6750,7 @@
         if (width && !isSpace && widths[li] > 0 && widths[li] + w > width) {
           // Leerzeichen am Zeilenende gehoeren nicht in die Breite
           while (lines[li].length && /^\s+$/.test(lines[li][lines[li].length - 1].t)) widths[li] -= lines[li].pop().w;
-          lines.push([]);
+          lines.push(Object.assign([], { soft: true }));
           widths.push(0);
         }
         let text = part;
@@ -6762,12 +6762,14 @@
           const hw = measureCtx.measureText(head).width;
           lines[lines.length - 1].push({ t: head, w: hw, run });
           widths[widths.length - 1] += hw;
-          lines.push([]);
+          lines.push(Object.assign([], { soft: true }));
           widths.push(0);
           text = text.slice(cut);
           w = measureCtx.measureText(text).width;
         }
-        if (isSpace && widths[lines.length - 1] === 0 && lines.length > 1 && width) continue;
+        // Leerzeichen am Anfang einer umgebrochenen Zeile fallen weg - nach einem echten
+        // Zeilenumbruch bleiben sie stehen (Einzug, z. B. Unterpunkte einer Liste)
+        if (isSpace && widths[lines.length - 1] === 0 && lines.length > 1 && width && lines[lines.length - 1].soft) continue;
         lines[lines.length - 1].push({ t: text, w, run });
         widths[widths.length - 1] += w;
       }
@@ -8184,6 +8186,149 @@
     }
   }
 
+  // ---- Markdown im Textfeld ----
+  // Text vor und nach dem Cursor in der Zeile (Zeilen wie in serializeEditor: <br> und <div>/<p>)
+  function caretLineText() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0);
+    if (!r.collapsed || !textEditorEl.contains(r.startContainer)) return null;
+    let text = "";
+    let at = -1;
+    let any = false;
+    const hit = (node, i) => node === r.startContainer && i === r.startOffset && at < 0 && (at = text.length);
+    const walk = (node) => {
+      const kids = Array.from(node.childNodes);
+      kids.forEach((child, i) => {
+        hit(node, i);
+        if (child.nodeType === 3) {
+          const v = child.nodeValue || "";
+          if (child === r.startContainer) {
+            text += v.slice(0, r.startOffset).replace(/\u200B/g, "");
+            if (at < 0) at = text.length;
+            text += v.slice(r.startOffset).replace(/\u200B/g, "");
+          } else text += v.replace(/\u200B/g, "");
+          if (v) any = true;
+        } else if (child.nodeName === "BR") {
+          const parent = child.parentNode;
+          const placeholder = parent !== textEditorEl && /^(DIV|P)$/.test(parent.nodeName) && parent.childNodes.length === 1;
+          if (!placeholder) text += "\n";
+        } else if (child.nodeType === 1) {
+          const block = /^(DIV|P)$/.test(child.nodeName);
+          if (block && any) text += "\n";
+          walk(child);
+          if (block) any = true;
+        }
+      });
+      hit(node, kids.length);
+    };
+    walk(textEditorEl);
+    if (at < 0) return null;
+    text = text.replace(/\u00a0/g, " ");
+    const start = text.lastIndexOf("\n", at - 1) + 1;
+    let end = text.indexOf("\n", at);
+    if (end < 0) end = text.length;
+    return { before: text.slice(start, at), after: text.slice(at, end) };
+  }
+  // n Zeichen vor dem Cursor durch neuen Text ersetzen (bleibt im Rueckgaengig des Browsers)
+  function replaceBeforeCaret(n, insert) {
+    const sel = window.getSelection();
+    for (let i = 0; i < n; i++) sel.modify("extend", "backward", "character");
+    if (n && !sel.isCollapsed) document.execCommand("delete");
+    if (insert) document.execCommand("insertText", false, insert);
+  }
+  // Einruecken/Ausruecken am Zeilenanfang, Cursor bleibt an seiner Stelle im Text
+  const MD_INDENT = "    ";
+  function indentCaretLine(out) {
+    const line = caretLineText();
+    if (!line) return;
+    const sel = window.getSelection();
+    const back = line.before.length;
+    for (let i = 0; i < back; i++) sel.modify("move", "backward", "character");
+    let moved = 0;
+    if (out) {
+      const k = Math.min(MD_INDENT.length, (/^ */.exec(line.before + line.after) || [""])[0].length);
+      for (let i = 0; i < k; i++) sel.modify("extend", "forward", "character");
+      if (k) document.execCommand("delete");
+      moved = back - k;
+    } else {
+      document.execCommand("insertText", false, MD_INDENT);
+      moved = back;
+    }
+    for (let i = 0; i < Math.max(0, moved); i++) sel.modify("move", "forward", "character");
+  }
+  const MD_LIST = /^( *)(• |☐ |☑ |(\d+)([.)]) )/;
+  // Enter in einer Liste: naechster Punkt mit gleichem Einzug; leerer Punkt beendet die Liste
+  function markdownEnter() {
+    const line = caretLineText();
+    if (!line) return false;
+    const full = line.before + line.after;
+    const m = MD_LIST.exec(full);
+    if (!m || line.before.length < m[0].length) return false;
+    if (!full.slice(m[0].length).trim()) {
+      if (m[1].length) indentCaretLine(true);
+      else replaceBeforeCaret(line.before.length, "");
+      return true;
+    }
+    let next = m[2];
+    if (m[3]) next = Number(m[3]) + 1 + m[4] + " ";
+    else if (m[2] === "☑ ") next = "☐ ";
+    document.execCommand("insertParagraph");
+    document.execCommand("insertText", false, m[1] + next);
+    return true;
+  }
+  // Nach jedem getippten Zeichen: Listen-Anfaenge und **fett** & Co. umwandeln
+  const MD_INLINE = [
+    [/\*\*([^*\n]+?)\*\*$/, "bold", 2],
+    [/~~([^~\n]+?)~~$/, "strikeThrough", 2],
+    [/\+\+([^+\n]+?)\+\+$/, "underline", 2],
+    [/(?:^|[^*\w])\*([^*\s][^*\n]*?)\*$/, "italic", 1],
+    [/(?:^|[^_\w])_([^_\s][^_\n]*?)_$/, "italic", 1],
+  ];
+  function markdownAfterInput(e) {
+    if (!textEdit || textEdit.kind !== "text" || !e || e.inputType !== "insertText" || !e.data) return;
+    const line = caretLineText();
+    if (!line) return;
+    const b = line.before;
+    let m;
+    if (e.data === " ") {
+      if ((m = /^( *)(?:[-*+•] )?\[( |x|X)?\] $/.exec(b)) && !/^( *)[-*+] $/.test(b)) {
+        replaceBeforeCaret(b.length - m[1].length, m[2] && m[2] !== " " ? "☑ " : "☐ ");
+        return;
+      }
+      if ((m = /^( *)[-*+] $/.exec(b))) {
+        replaceBeforeCaret(2, "• ");
+        return;
+      }
+    }
+    for (const [re, cmd, d] of MD_INLINE) {
+      m = re.exec(b);
+      if (!m) continue;
+      const inner = m[1];
+      const sel = window.getSelection();
+      const node = sel.focusNode;
+      const off = sel.focusOffset;
+      const full = inner.length + d * 2;
+      // nur wenn alles in einem Textstueck steht (so wie gerade getippt)
+      if (!node || node.nodeType !== 3 || node.nodeValue.slice(0, off).replace(/\u200B/g, "").length < full) return;
+      const v = node.nodeValue;
+      const startIdx = off - full;
+      if (v.slice(startIdx, off) !== m[0].slice(m[0].length - full)) return;
+      node.nodeValue = v.slice(0, startIdx) + inner + v.slice(off);
+      const r = document.createRange();
+      r.setStart(node, startIdx);
+      r.setEnd(node, startIdx + inner.length);
+      if (!formatAt(node)[cmd]) toggleRange(cmd, r);
+      // Cursor hinter das Wort, Format fuer das Weitertippen wieder aus
+      const after = window.getSelection();
+      after.collapseToEnd();
+      if (formatAt(after.focusNode)[cmd]) toggleAtCaret(cmd);
+      rememberEditorRange();
+      syncFormatBar();
+      return;
+    }
+  }
+
   function applyFormat(cmd) {
     let range = pressRange && !pressRange.collapsed ? pressRange : null;
     if (!range && lastExpandedRange && performance.now() - lastExpandedAt < 1500) {
@@ -8326,6 +8471,20 @@
         commitTextEditor();
         return;
       }
+      // Markdown: Tab/Shift+Tab ruecken ein, Enter fuehrt Listen fort
+      if (textEdit && textEdit.kind === "text" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing) {
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const line = caretLineText();
+          if (e.shiftKey || (line && MD_LIST.test(line.before + line.after))) indentCaretLine(e.shiftKey);
+          else document.execCommand("insertText", false, MD_INDENT);
+          return;
+        }
+        if (e.key === "Enter" && !e.shiftKey && markdownEnter()) {
+          e.preventDefault();
+          return;
+        }
+      }
       // Strg/Cmd+B/I/U wie gewohnt; Tabellenzellen bleiben unformatiert
       const meta = e.ctrlKey || e.metaKey;
       if (meta && textEdit && textEdit.kind === "cell" && /^[biu]$/i.test(e.key)) e.preventDefault();
@@ -8339,9 +8498,10 @@
       e.stopPropagation();
       lastExpandedRange = null; // bewusst neu in den Text getippt
     });
-    textEditorEl.addEventListener("input", () => {
+    textEditorEl.addEventListener("input", (e) => {
       lastExpandedRange = null;
       cleanupPlaceholders();
+      markdownAfterInput(e);
     });
     // Live teilen: jede Aenderung im Feld (Tippen, Formatieren) und jede Cursor-Bewegung
     new MutationObserver((list) => {
