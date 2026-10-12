@@ -1,5 +1,6 @@
 """WebSocket connection + presence management for the shared whiteboard."""
 import itertools
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,6 +25,8 @@ class ClientState:
     person_id: str | None = None
     board_id: str | None = None
     role: str = "edit"  # owner / edit / add / view
+    watch: bool = False  # schaut nur zu (ueber "Freunde"), sitzt nicht selbst am Blatt
+    since: float = 0.0
     in_progress: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -44,7 +47,7 @@ class ConnectionManager:
 
     def connect(self, websocket: WebSocket) -> ClientState:
         state = ClientState(
-            id=str(uuid.uuid4()), color=next(self._color_cycle), websocket=websocket
+            id=str(uuid.uuid4()), color=next(self._color_cycle), websocket=websocket, since=time.time()
         )
         self._clients[websocket] = state
         return state
@@ -57,6 +60,9 @@ class ConnectionManager:
             c for c in list(self._clients.values())
             if c.board_id == board_id and (person_id is None or c.person_id == person_id)
         ]
+
+    def all_clients(self) -> list[ClientState]:
+        return list(self._clients.values())
 
     def get(self, websocket: WebSocket) -> ClientState | None:
         return self._clients.get(websocket)

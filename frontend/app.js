@@ -5318,7 +5318,8 @@
       `${proto}//${location.host}/ws?person=` +
       encodeURIComponent(currentPersonId) +
       "&board=" +
-      encodeURIComponent(currentBoardId);
+      encodeURIComponent(currentBoardId) +
+      (window.sofiaWatchQuery ? window.sofiaWatchQuery(currentBoardId) : "");
     ws = new WebSocket(url);
 
     ws.onopen = () => {
@@ -5330,6 +5331,7 @@
         // kein Zugriff auf dieses Blatt (z.B. fremder Link): zurueck in die Bibliothek
         // statt endlos neu zu verbinden
         wantWs = false;
+        if (window.sofiaWatchEnded) window.sofiaWatchEnded();
         currentBoardId = null;
         boardStrokes.clear();
         requestRedraw();
@@ -5445,6 +5447,10 @@
       case "board_paper":
         if (currentBoardMeta) currentBoardMeta.paper = msg.paper;
         applyPaper(msg.paper);
+        break;
+      case "watch_join":
+      case "watch_leave":
+        if (window.sofiaWatchNote) window.sofiaWatchNote(msg.name || "Jemand", msg.type === "watch_join");
         break;
       case "presence_join":
         ensurePresence(msg.id, msg.color);
@@ -14548,6 +14554,7 @@
   }
 
   function showLibrary(opts) {
+    if (window.sofiaWatchStop) window.sofiaWatchStop();
     if (boardEditId) exitBoardPage({ fit: false });
     if (currentBoardId && libraryBackdrop.classList.contains("hidden")) saveView(currentBoardId);
     hideWho();
@@ -16687,6 +16694,7 @@
 
   async function openBoard(id, title, opts) {
     sofiaLog.action("Blatt öffnen " + String(id).slice(0, 8) + (opts && opts.creating ? " (neu)" : ""));
+    if (window.sofiaWatchFor) window.sofiaWatchFor(id);
     if (window.sofiaSplitClose) window.sofiaSplitClose();
     if (window.sofiaHistoryClose && id !== currentBoardId) window.sofiaHistoryClose();
     // Immer trennen+neu verbinden, auch beim Wiedereroeffnen desselben
@@ -19703,6 +19711,204 @@
         a.onfinish = () => ghost.remove();
       }).observe(el, { attributes: true, attributeFilter: ["class"] });
     }
+  })();
+
+  // ---- Freunde: wer ist online, in welchem Dokument; zuschauen (nur ansehen) ----
+  (() => {
+    const side = document.getElementById("friends-side");
+    const body = document.getElementById("friends-body");
+    const allow = document.getElementById("friends-allow");
+    const bar = document.getElementById("watch-bar");
+    if (!side || !body) return;
+    let watching = null; // {boardId, name, color}
+    let refreshTimer = null;
+
+    // Lebenszeichen: "online" auch ohne offenes Dokument (Bibliothek)
+    const ping = () => {
+      if (currentPersonId && document.visibilityState === "visible" && navigator.onLine !== false) fetch("/api/me/ping", { method: "POST" }).catch(() => {});
+    };
+    setInterval(ping, 30000);
+    setTimeout(ping, 3000);
+    document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && ping());
+
+    const initial = (name) => (String(name || "?").trim()[0] || "?").toUpperCase();
+    function avatar(el, name, color) {
+      el.textContent = initial(name);
+      el.style.background = color || "#6750a4";
+    }
+    function render(data) {
+      body.textContent = "";
+      const people = (data && data.people) || [];
+      if (data) allow.checked = data.allowWatch !== false;
+      if (!people.length) {
+        const empty = document.createElement("div");
+        empty.className = "fr-empty";
+        empty.textContent = data ? "Noch niemand da" : "Lädt …";
+        body.appendChild(empty);
+        return;
+      }
+      let lastGroup = null;
+      for (const f of people) {
+        const group = f.online ? "Online" : "Offline";
+        if (group !== lastGroup) {
+          lastGroup = group;
+          const h = document.createElement("div");
+          h.className = "fr-group";
+          h.textContent = group;
+          body.appendChild(h);
+        }
+        const card = document.createElement("div");
+        card.className = "fr-card" + (f.online ? " online" : "");
+        const av = document.createElement("span");
+        av.className = "fr-avatar";
+        avatar(av, f.name, f.color);
+        const dot = document.createElement("span");
+        dot.className = "fr-dot";
+        av.appendChild(dot);
+        const txt = document.createElement("div");
+        txt.className = "fr-text";
+        const nm = document.createElement("div");
+        nm.className = "fr-name";
+        nm.textContent = f.name || "Unbekannt";
+        const st = document.createElement("div");
+        st.className = "fr-status";
+        if (f.doc) {
+          st.innerHTML = '<span class="material-symbols-rounded"></span><span class="fr-doc"></span>';
+          st.firstChild.textContent = f.doc.notebook ? "menu_book" : "description";
+          st.lastChild.textContent = f.doc.title;
+        } else st.textContent = f.online ? "Online" : "Offline";
+        txt.append(nm, st);
+        card.append(av, txt);
+        if (f.doc) {
+          const here = f.doc.id === currentBoardId;
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "fr-watch" + (here ? " here" : "");
+          b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+          b.firstChild.textContent = here ? "check" : "visibility";
+          b.lastChild.textContent = here ? "Hier" : "Zuschauen";
+          b.disabled = here;
+          b.addEventListener("click", () => startWatch(f));
+          card.appendChild(b);
+        }
+        body.appendChild(card);
+      }
+    }
+    async function load() {
+      try {
+        render(await api("/api/friends"));
+      } catch (err) {
+        body.textContent = "";
+        const e = document.createElement("div");
+        e.className = "fr-empty";
+        e.textContent = "Gerade nicht erreichbar";
+        body.appendChild(e);
+      }
+    }
+    function open() {
+      side.classList.remove("hidden", "closing");
+      render(null);
+      load();
+      clearInterval(refreshTimer);
+      refreshTimer = setInterval(() => !side.classList.contains("hidden") && load(), 10000);
+    }
+    function close() {
+      clearInterval(refreshTimer);
+      if (side.classList.contains("hidden")) return;
+      side.classList.add("closing");
+      setTimeout(() => {
+        side.classList.add("hidden");
+        side.classList.remove("closing");
+      }, 160);
+    }
+    document.getElementById("canvas-menu-friends")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeCanvasMenus();
+      open();
+    });
+    document.getElementById("friends-close").addEventListener("click", close);
+    document.getElementById("friends-refresh").addEventListener("click", load);
+    for (const t of ["pointerdown", "wheel"]) side.addEventListener(t, (e) => e.stopPropagation());
+    allow.addEventListener("change", async () => {
+      const on = allow.checked;
+      try {
+        await api("/api/me/prefs", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefs: { "sofianotes-allow-watch": on ? "1" : "0" }, merge: true }) });
+        showToast(on ? "Andere dürfen dir zuschauen" : "Niemand kann dir mehr zuschauen");
+      } catch (err) {
+        allow.checked = !on;
+        showToast("Ging gerade nicht");
+      }
+    });
+
+    // ---- Zuschauen ----
+    function syncBar() {
+      const show = !!watching && watching.boardId === currentBoardId && libraryBackdrop.classList.contains("hidden");
+      bar.classList.toggle("hidden", !show);
+      if (show) {
+        document.getElementById("watch-name").textContent = watching.name;
+        avatar(document.getElementById("watch-avatar"), watching.name, watching.color);
+      }
+    }
+    function startWatch(f) {
+      watching = { boardId: f.doc.id, name: f.name || "Jemand", color: f.color };
+      close();
+      openBoard(f.doc.id, f.doc.title);
+      syncBar();
+    }
+    window.sofiaWatchQuery = (bid) => (watching && watching.boardId === bid ? "&watch=1" : "");
+    window.sofiaWatchFor = (bid) => {
+      if (watching && watching.boardId !== bid) watching = null;
+      setTimeout(syncBar, 0);
+    };
+    window.sofiaWatchStop = () => {
+      watching = null;
+      syncBar();
+    };
+    window.sofiaWatchEnded = () => {
+      if (!watching) return;
+      showToast(watching.name + " ist nicht mehr da – Zuschauen beendet");
+      watching = null;
+      syncBar();
+    };
+    document.getElementById("watch-stop").addEventListener("click", () => {
+      watching = null;
+      syncBar();
+      showLibrary();
+    });
+    document.getElementById("watch-copy").addEventListener("click", async () => {
+      if (!currentBoardId) return;
+      try {
+        const res = await api("/api/boards/" + encodeURIComponent(currentBoardId) + "/copy", { method: "POST" });
+        showToast("Kopie in deiner Bibliothek: " + ((res && res.board && res.board.title) || ""));
+      } catch (err) {
+        showToast("Kopie ging gerade nicht");
+      }
+    });
+
+    // ---- Hinweis fuer den, dem zugeschaut wird ----
+    const notes = document.getElementById("school-notes");
+    window.sofiaWatchNote = (name, join) => {
+      if (!notes) return;
+      const tb = document.getElementById("top-menu-bar");
+      const r = tb && tb.getBoundingClientRect();
+      if (r && r.width) {
+        notes.style.top = Math.round(r.bottom + 8) + "px";
+        notes.style.right = Math.round(window.innerWidth - r.right) + "px";
+      }
+      const el = document.createElement("div");
+      el.className = "school-note watch-note";
+      el.innerHTML = '<span class="sn-icon"><span class="material-symbols-rounded"></span></span><span class="sn-text"></span>';
+      el.querySelector(".material-symbols-rounded").textContent = join ? "visibility" : "visibility_off";
+      el.querySelector(".sn-text").textContent = join ? name + " schaut gerade zu" : name + " schaut nicht mehr zu";
+      notes.appendChild(el);
+      requestAnimationFrame(() => el.classList.add("in"));
+      const gone = () => {
+        el.classList.remove("in");
+        setTimeout(() => el.remove(), 300);
+      };
+      el.addEventListener("click", gone);
+      setTimeout(gone, join ? 6000 : 4000);
+    };
   })();
 
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----

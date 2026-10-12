@@ -411,7 +411,10 @@ async def set_my_prefs(request: Request, person: dict = Depends(get_current_pers
         for k in body.get("removed") or []:
             merged.pop(str(k), None)
         prefs = merged
-    return await db.set_person_prefs(person["id"], prefs)
+    res = await db.set_person_prefs(person["id"], prefs)
+    if prefs.get(WATCH_PREF) == "0":
+        await _kick_watchers_of(person["id"])
+    return res
 
 
 @app.get("/api/me/settings")
@@ -1082,6 +1085,86 @@ async def _writable_ids(role: str, person: str, ids: list[str]) -> list[str]:
     return [i for i in ids if i not in owners or owners[i] == person]
 
 
+# ---- Freunde: wer ist online, in welchem Dokument, zuschauen ----------------
+# Online = eine offene Verbindung zu einem Blatt oder ein Lebenszeichen der App in den letzten 75 s.
+# Wer "Andere duerfen mir zuschauen" ausschaltet, zeigt nur "online" (kein Dokument, kein Zuschauen).
+WATCH_PREF = "sofianotes-allow-watch"
+ONLINE_SECONDS = 75
+_last_seen: dict[str, float] = {}
+
+
+async def _allows_watch(person_id: str) -> bool:
+    prefs = (await db.person_prefs(person_id)).get("prefs") or {}
+    return prefs.get(WATCH_PREF) != "0"
+
+
+async def _may_watch(person_id: str, board_id: str) -> bool:
+    """Zuschauen geht, solange jemand anderes das Blatt offen hat und es erlaubt."""
+    hosts = {c.person_id for c in manager.clients_for(board_id) if not c.watch and c.person_id and c.person_id != person_id}
+    for host in hosts:
+        if await _allows_watch(host):
+            return True
+    return False
+
+
+@app.post("/api/me/ping")
+async def me_ping(me: dict = Depends(get_current_person)) -> dict:
+    _last_seen[me["id"]] = time.time()
+    return {"ok": True}
+
+
+@app.get("/api/friends")
+async def friends(me: dict = Depends(get_current_person)) -> dict:
+    now = time.time()
+    clients = [c for c in manager.all_clients() if not c.watch and c.person_id]
+    out = []
+    for p in await db.people():
+        pid = p["id"]
+        if pid == me["id"]:
+            continue
+        mine = [c for c in clients if c.person_id == pid]
+        online = bool(mine) or now - _last_seen.get(pid, 0) < ONLINE_SECONDS
+        doc = None
+        allow = await _allows_watch(pid)
+        if mine and allow:
+            latest = max(mine, key=lambda c: c.since)
+            board = await db.get_board(latest.board_id) if latest.board_id else None
+            if board:
+                doc = {"id": board["id"], "title": board.get("title") or "Unbenannte Skizze", "notebook": bool(board.get("notebook"))}
+        out.append({"id": pid, "name": p.get("name") or "", "color": p.get("color"), "online": online, "doc": doc})
+    out.sort(key=lambda f: (not f["online"], f["doc"] is None, (f["name"] or "").lower()))
+    return {"people": out, "allowWatch": await _allows_watch(me["id"])}
+
+
+@app.post("/api/boards/{board_id}/copy")
+async def copy_board(board_id: str, me: dict = Depends(get_current_person)) -> dict:
+    """Eigene Kopie eines Blatts (auch beim Zuschauen) - landet oben in der eigenen Bibliothek."""
+    watching = any(c.watch for c in manager.clients_for(board_id, me["id"]))
+    if not (watching or await db.can_access(me["id"], board_id)):
+        raise HTTPException(status_code=404, detail="not found")
+    board = await db.get_board(board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail="not found")
+    strokes = await db.load_all(board_id)
+    parsed = board_file.parse(board_file.build(board, strokes))
+    parsed["title"] = ("Kopie – " + (board.get("title") or "Blatt"))[:200]
+    parsed["sofiaHomeworkId"] = None
+    return await _create_from_parsed(me["id"], parsed, None)
+
+
+async def _kick_watchers_of(person_id: str) -> None:
+    """Zuschauen wurde ausgeschaltet: Zuschauer ohne eigenen Zugriff verlassen die Blaetter."""
+    boards = {c.board_id for c in manager.all_clients() if c.person_id == person_id and not c.watch}
+    for c in manager.all_clients():
+        if c.watch and c.board_id in boards and not await _may_watch(c.person_id, c.board_id):
+            if await db.can_access(c.person_id, c.board_id):
+                continue
+            try:
+                await c.websocket.close(code=4403)
+            except Exception:
+                pass
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     board_id = websocket.query_params.get("board") or ""
@@ -1093,7 +1176,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.close(code=4401)
         return
     person = me["id"]
-    if not await db.can_access(person, board_id):
+    # Zuschauen (Freunde): nur ansehen, auch ohne Freigabe - solange der andere es erlaubt
+    watch = websocket.query_params.get("watch") == "1"
+    allowed = await db.can_access(person, board_id) or (watch and await _may_watch(person, board_id))
+    if not allowed:
         await websocket.accept()
         await websocket.close(code=4403)
         return
@@ -1101,8 +1187,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     client = manager.connect(websocket)
     client.person_id = person
     client.board_id = board_id
+    client.watch = watch
     client.color = (await db.person_color(person)) or color_for(person) or client.color
-    client.role = (await db.board_role(person, board_id)) or "edit"
+    client.role = "view" if watch else ((await db.board_role(person, board_id)) or "edit")
 
     # alte Notizbuecher einmalig auf mittige Seiten umstellen (Striche wandern mit);
     # andere offene Fenster laden dann neu, damit niemand mit alten Positionen weiterschreibt
@@ -1126,6 +1213,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         exclude=websocket,
         board_id=board_id,
     )
+    if watch:
+        await manager.broadcast(
+            {"type": "watch_join", "id": client.id, "person": person, "name": me.get("name") or ""},
+            exclude=websocket,
+            board_id=board_id,
+        )
 
     try:
         while True:
@@ -1301,6 +1394,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         if sofia_sync.solution_pending(board_id):
             sofia_sync.schedule_solution(board_id, delay=3)
         await manager.broadcast({"type": "presence_leave", "id": client.id}, board_id=board_id)
+        if client.watch:
+            await manager.broadcast({"type": "watch_leave", "id": client.id, "person": person, "name": me.get("name") or ""}, board_id=board_id)
 
 
 # Experimentell: Handschrift-Modell fuer die Erkennung direkt auf dem Geraet (zu gross fuers Repo,
