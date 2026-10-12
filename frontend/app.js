@@ -17183,6 +17183,7 @@
     const m = backMode();
     document.body.classList.toggle("back-in-menu", m === "menu");
     document.getElementById("canvas-menu-leave")?.classList.toggle("hidden", m !== "menu");
+    document.getElementById("canvas-menu-leave-gap")?.classList.toggle("hidden", m !== "menu");
     document.querySelectorAll("#set-back-mode [data-back]").forEach((b) => b.classList.toggle("active", b.dataset.back === m));
     try {
       layoutTopBar();

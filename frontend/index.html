@@ -226,30 +226,27 @@
     <button type="button" id="btn-canvas-menu" class="icon-btn" title="Einstellungen und mehr">
       <span class="material-symbols-rounded">settings</span>
     </button>
-    <div id="canvas-menu" class="lib-add-menu hidden">
-      <button type="button" id="canvas-menu-share" class="lib-add-opt">
-        <span class="material-symbols-rounded">share</span>
-        Teilen mit …
+    <!-- gleicher Stil wie das Seiten-Menue (GoodNotes): grosse Zeilen, Gruppen, Blatt verlassen rot -->
+    <div id="canvas-menu" class="lib-add-menu page-menu page-menu-side hidden">
+      <button type="button" id="canvas-menu-share" class="lib-add-opt page-menu-item first">
+        <span class="material-symbols-rounded">share</span><span class="pmi-label">Teilen mit …</span>
       </button>
-      <button type="button" id="canvas-menu-export" class="lib-add-opt">
-        <span class="material-symbols-rounded">download</span>
-        Exportieren …
+      <button type="button" id="canvas-menu-export" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">download</span><span class="pmi-label">Exportieren …</span>
       </button>
-      <button type="button" id="canvas-menu-history" class="lib-add-opt">
-        <span class="material-symbols-rounded">history</span>
-        Versionsverlauf
+      <button type="button" id="canvas-menu-history" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">history</span><span class="pmi-label">Versionsverlauf</span>
       </button>
-      <button type="button" id="canvas-menu-find" class="lib-add-opt hidden">
-        <span class="material-symbols-rounded">my_location</span>
-        Zurückfinden
+      <div class="page-menu-gap"></div>
+      <button type="button" id="canvas-menu-settings" class="lib-add-opt page-menu-item first">
+        <span class="material-symbols-rounded">tune</span><span class="pmi-label">Einstellungen</span>
       </button>
-      <button type="button" id="canvas-menu-settings" class="lib-add-opt">
-        <span class="material-symbols-rounded">tune</span>
-        Einstellungen
+      <button type="button" id="canvas-menu-find" class="lib-add-opt page-menu-item hidden">
+        <span class="material-symbols-rounded">my_location</span><span class="pmi-label">Zurückfinden</span>
       </button>
-      <button type="button" id="canvas-menu-leave" class="lib-add-opt hidden">
-        <span class="material-symbols-rounded">logout</span>
-        Blatt verlassen
+      <div id="canvas-menu-leave-gap" class="page-menu-gap hidden"></div>
+      <button type="button" id="canvas-menu-leave" class="lib-add-opt page-menu-item first danger hidden">
+        <span class="material-symbols-rounded">logout</span><span class="pmi-label">Blatt verlassen</span>
       </button>
     </div>
     <div id="canvas-share-submenu" class="lib-add-menu hidden"></div>

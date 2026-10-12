@@ -4585,8 +4585,10 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 #tb-more-menu.tb-more-menu { max-height: calc(100vh - 90px); overflow-y: auto; }
 /* Zurueck liegt im Zahnrad-Menue: eigener Knopf weg - auch ueber der offenen Seiten-Leiste */
 body.back-in-menu #top-back-bar { display: none; }
-#canvas-menu-leave { border-top: 1px solid rgba(0, 0, 0, 0.08) !important; margin-top: 4px; color: #b3261e; }
-#canvas-menu-leave .material-symbols-rounded { color: #b3261e; }
+/* Zahnrad-Menue im Stil des Seiten-Menues; .bar-menu sperrt transform, deshalb nur translate/scale */
+#canvas-menu.page-menu-side { min-width: 280px; transform-origin: right top; animation: canvas-menu-in 0.18s cubic-bezier(0.2, 0, 0, 1); }
+@keyframes canvas-menu-in { from { opacity: 0; scale: 0.94; translate: 0 -6px; } to { opacity: 1; scale: 1; translate: 0 0; } }
+#canvas-menu .hidden { display: none !important; }
 
 /* ---- Teilen: Personen mit Farbe, Anwesenheit und Rolle ---- */
 .share-here { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -6px 0 14px; }
@@ -5092,8 +5094,7 @@ html[data-theme="dark"] .hw-panel.docked .hw-dock-edge::after { background: rgba
 
 /* Dunkelmodus: "Blatt verlassen" bleibt rot (helles Rot wie die anderen Löschen-Knöpfe) */
 html[data-theme="dark"] #canvas-menu-leave,
-html[data-theme="dark"] #canvas-menu-leave .material-symbols-rounded { color: #ffb3b8 !important; }
-html[data-theme="dark"] #canvas-menu-leave { border-top-color: rgba(255, 255, 255, 0.1) !important; }
+html[data-theme="dark"] #canvas-menu-leave span { color: #ffb3b8 !important; }
 
 /* ---- Dunkelmodus: alle Werkzeug- und Farb-Popups (Stift-Stärke, Radierer, Textfarbe, Farbe bearbeiten, Ebenen, Seiten-Hinzufügen) ----
    Vorher blieben Vorwahl-Knöpfe, Regler und Farbfelder hell. Hier einmal zusammengefasst. */
