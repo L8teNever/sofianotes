@@ -18788,8 +18788,12 @@
     const tabMarks = document.getElementById("pages-tab-marks");
     const tabSelect = document.getElementById("pages-tab-select");
     // Umschalter oben: Seiten | Lesezeichen | Auswaehlen
+    const tabTitle = document.querySelector("#top-side-bar .tsb-title");
     function syncPanelTabs() {
       const mode = marksOpen ? "marks" : pageSel ? "select" : "pages";
+      // Titel oben passt zum Tab
+      if (tabTitle) tabTitle.textContent = mode === "marks" ? "Lesezeichen" : mode === "select" ? "Auswahl" : "Seiten";
+      document.body.classList.toggle("pages-selecting", mode === "select");
       for (const [el, m] of [[tabPages, "pages"], [tabMarks, "marks"], [tabSelect, "select"]]) {
         if (!el) continue;
         el.classList.toggle("active", m === mode);
@@ -19270,7 +19274,11 @@
       const n = pageSel.size;
       selCount.textContent = n ? n + " ausgewählt" : "Seiten antippen";
       selPdf.disabled = !n;
-      document.getElementById("pages-select-all").textContent = n && n >= allPickIds().length ? "Keine" : "Alle";
+      const allBtn = document.getElementById("pages-select-all");
+      const none = n && n >= allPickIds().length;
+      const ic = allBtn.querySelector(".material-symbols-rounded");
+      if (ic) ic.textContent = none ? "remove_done" : "done_all";
+      allBtn.title = none ? "Auswahl aufheben" : "Alle Seiten auswählen";
     }
     function startPageSelect(preId) {
       if (!notebook) return;
@@ -19314,7 +19322,7 @@
     }
     window.sofiaPageSelect = startPageSelect;
     window.sofiaExportPagesPdf = exportPagesPdf;
-    document.getElementById("pages-select-cancel").addEventListener("click", (e) => {
+    document.getElementById("pages-select-cancel")?.addEventListener("click", (e) => {
       e.stopPropagation();
       endPageSelect();
     });

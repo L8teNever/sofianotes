@@ -3846,6 +3846,44 @@ html[data-theme="dark"] #pages-panel .pages-tab,
 html[data-theme="dark"] #pages-panel .pages-tab .material-symbols-rounded { color: #cac4d0; }
 html[data-theme="dark"] #pages-panel .pages-tab.active { background: #4a4458; }
 html[data-theme="dark"] #pages-panel .pages-tab.active .material-symbols-rounded { color: #f4f1f8; }
+/* Tab "Auswahl": "Alle" und lila Export-Knopf oben links neben dem ✕ */
+.tsel-all,
+.tsel-export { display: none; }
+body.pages-open.pages-selecting .top-close-bar { gap: 2px; right: calc(100% - var(--pages-inset, 300px) + 8px); }
+body.pages-open.pages-selecting #top-side-bar .tsb-title { padding: 0 12px; }
+body.pages-open.pages-selecting .tsel-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #6750a4;
+  cursor: pointer;
+}
+.tsel-all .material-symbols-rounded { font-size: 22px; color: inherit; }
+body.pages-open.pages-selecting .tsel-all:hover { background: rgba(103, 80, 164, 0.08); }
+body.pages-open.pages-selecting .tsel-export {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: #6750a4;
+  color: #fff;
+  cursor: pointer;
+}
+.tsel-export .material-symbols-rounded { font-size: 20px; color: inherit; }
+.tsel-export:disabled { opacity: 0.4; cursor: default; }
+html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-all,
+html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-all .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-pdf,
+html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-pdf .material-symbols-rounded { background: #d0bcff; color: #381e72; }
+html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-pdf .material-symbols-rounded { background: none; }
 .pages-select.hidden,
 .pages-panel.marks-only .pages-select { display: none; }
 #pages-select-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3893,11 +3931,6 @@ html[data-theme="dark"] #pages-panel .pages-tab.active .material-symbols-rounded
 /* beim Auswaehlen zaehlt nur der Haken, nicht der Rahmen der aktuellen Seite */
 #pages-grid .page-thumb-pick:not(.picked) .page-thumb-img { outline-color: transparent; }
 html[data-theme="dark"] .pages-select { background: #4a4458; color: #e8def8; }
-html[data-theme="dark"] .pages-select-btn { background: rgba(255, 255, 255, 0.1); }
-html[data-theme="dark"] #pages-select #pages-select-pdf,
-html[data-theme="dark"] #pages-select-pdf .material-symbols-rounded { background: #d0bcff; color: #381e72; }
-html[data-theme="dark"] #pages-select-pdf .material-symbols-rounded { background: none; }
-html[data-theme="dark"] #pages-select-btn.active { background: rgba(208, 188, 255, 0.16); color: #d0bcff; }
 html[data-theme="dark"] .page-thumb-check { background: rgba(43, 41, 48, 0.92); color: #cac4d0; }
 html[data-theme="dark"] #pages-grid .page-thumb.picked .page-thumb-check,
 html[data-theme="dark"] #pages-grid .page-thumb.picked .page-thumb-check .material-symbols-rounded { background: #d0bcff; color: #381e72; }
