@@ -68,6 +68,7 @@
     "sofianotes-rulerbar-pos",
     "sofianotes-zoom-rows",
     "sofianotes-zoom-step",
+    "sofianotes-zoom-hide-media",
     "sofianotes-zoom-chrome",
     "sofianotes-zoom-inner-bar",
     "sofianotes-object-dash",
@@ -718,6 +719,24 @@
     const v = parseFloat(lsGetRaw("sofianotes-zoom-step"));
     return Number.isFinite(v) && v > 0 ? v : 0;
   })();
+  // Zoom-Fenster: Bilder und Seitenhintergründe ausblenden (nur Schrift und Tinte bleiben)
+  let zoomHideMedia = lsGetRaw("sofianotes-zoom-hide-media") === "1";
+  function syncZoomMediaBtn() {
+    const b = document.getElementById("btn-zw-media");
+    if (!b) return;
+    b.classList.toggle("active", zoomHideMedia);
+    b.title = zoomHideMedia ? "Bilder im Zoom-Fenster wieder zeigen" : "Bilder im Zoom-Fenster ausblenden";
+    const ico = b.querySelector(".material-symbols-rounded");
+    if (ico) ico.textContent = zoomHideMedia ? "hide_image" : "image";
+  }
+  function toggleZoomMedia() {
+    zoomHideMedia = !zoomHideMedia;
+    try {
+      localStorage.setItem("sofianotes-zoom-hide-media", zoomHideMedia ? "1" : "0");
+    } catch (err) {}
+    syncZoomMediaBtn();
+    requestRedraw();
+  }
   let zoomRowsDefault = (() => {
     const v = parseFloat(lsGetRaw("sofianotes-zoom-rows"));
     return Number.isFinite(v) && v > 0 ? v : 1;
@@ -8560,7 +8579,7 @@
         zctx.clip();
         zctx.fillStyle = pagePaperColor();
         zctx.fillRect(r.x, r.y, r.w, r.h);
-        const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
+        const img = r.page.mediaId && !zoomHideMedia ? ensureMedia(r.page.mediaId) : null;
         if (img && img.complete && img.naturalWidth) drawPageMedia(zctx, img, r);
         else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, zctx, k);
         if (!boardEditId && (r.page.board || r.page.boardOf)) paintBoardPage(zctx, r);
@@ -8577,7 +8596,7 @@
       if (boardEditId) return pageId === boardEditId;
       return !pageId;
     });
-    for (const st of all) if (st.tool === "image" || st.tool === "table") drawStroke(st, zctx);
+    for (const st of all) if ((st.tool === "image" && !zoomHideMedia) || st.tool === "table") drawStroke(st, zctx);
     for (const st of all) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
     for (const st of remoteInProgress.values()) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
     if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, zctx, { alpha: 0.38 });
@@ -8812,6 +8831,8 @@
     };
     act("btn-zw-in", () => setRows(zoomWin.rows - 0.5));
     act("btn-zw-out", () => setRows(zoomWin.rows + 0.5));
+    act("btn-zw-media", toggleZoomMedia);
+    syncZoomMediaBtn();
     act("btn-zw-close", closeZoomWindow);
     const penBtn = document.getElementById("btn-zw-pen");
     if (penBtn) {
