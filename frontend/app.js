@@ -8504,6 +8504,26 @@
     moveZoomBox(nx, zoomWin.y);
   }
 
+  // Rechter Rand fuer die Zeile bei y: liegt darin ein Bild, endet das Schreiben vor dem Bild
+  // (Rand rueckt nach links). Unter der Zeile wieder die volle Breite.
+  function zoomRightAt(y) {
+    if (!zoomWin) return 0;
+    let r = zoomWin.right;
+    if (zoomHideMedia) return r;
+    const y0 = y;
+    const y1 = y + zoomRowH();
+    for (const st of boardStrokes.values()) {
+      if (st.tool !== "image") continue;
+      const pageId = st.extra && st.extra.boardPage;
+      if (boardEditId ? pageId !== boardEditId : pageId) continue;
+      const b = st.bbox || strokeWorldBBox(st);
+      if (!b || b.maxY < y0 || b.minY > y1) continue;
+      if (b.maxX <= zoomWin.left || b.minX >= r) continue;
+      r = Math.min(r, b.minX - zoomWin.w * 0.04);
+    }
+    return Math.max(zoomWin.left + zoomWin.w * 0.3, r);
+  }
+
   // Nach einem Strich weit rechts: Fortsetzung vorbereiten (Kasten links). Kurze Striche
   // weiter links (i-Punkt, Korrektur) lassen ein vorhandenes Angebot stehen.
   function offerZoomContinuation(stroke) {
@@ -8511,7 +8531,8 @@
     const b = makeBBox(stroke.points);
     // an (oder ueber) der rechten Randlinie: wie am Zeilenende -> naechste Zeile links
     // frueher anbieten: schon kurz vor der Randlinie (nicht erst, wenn man darueber ist)
-    const atMargin = b.maxX >= zoomWin.right - zoomWin.w * 0.2 && b.minX < zoomWin.right + zoomWin.w * 0.5;
+    const R = zoomRightAt(zoomWin.y);
+    const atMargin = b.maxX >= R - zoomWin.w * 0.2 && b.minX < R + zoomWin.w * 0.5;
     if (atMargin) {
       zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
       requestRedraw();
@@ -8520,7 +8541,7 @@
     if (b.maxX < zoomWin.x + zoomWin.w * ZOOM_OFFER_FROM) return;
     const nx = b.maxX - zoomWin.w * ZOOM_LEAD;
     // die Fortsetzung soll nicht ueber die Randlinie hinausragen
-    if (nx > zoomWin.right - zoomWin.w * 0.3) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
+    if (nx > R - zoomWin.w * 0.3) zoomNext = { x: zoomWin.left, y: snapZoomY(zoomWin.y + zoomLineStep()) };
     else zoomNext = { x: Math.max(zoomWin.left, nx), y: zoomWin.y };
     requestRedraw();
   }
@@ -8616,7 +8637,7 @@
     if (currentStroke && !currentStroke.eraser && currentStroke.points && currentStroke.points.length) {
       const lp = currentStroke.points[currentStroke.points.length - 1];
       const nextY = snapZoomY(zoomWin.y + zoomLineStep());
-      if (lp.x >= zoomWin.right - zoomWin.w * 0.2 && lp.y >= zoomWin.y - zoomBoxH() * 0.5 && lp.y <= zoomWin.y + zoomBoxH() * 1.5 && !(zoomNext && zoomNext.y === nextY && zoomNext.x === zoomWin.left)) {
+      if (lp.x >= zoomRightAt(zoomWin.y) - zoomWin.w * 0.2 && lp.y >= zoomWin.y - zoomBoxH() * 0.5 && lp.y <= zoomWin.y + zoomBoxH() * 1.5 && !(zoomNext && zoomNext.y === nextY && zoomNext.x === zoomWin.left)) {
         zoomNext = { x: zoomWin.left, y: nextY };
       }
     }
@@ -8642,7 +8663,7 @@
     zctx.setTransform(d, 0, 0, d, 0, 0);
     zctx.lineWidth = 1;
     zctx.setLineDash([5, 5]);
-    for (const mx of [zoomWin.left, zoomWin.right]) {
+    for (const mx of [zoomWin.left, zoomRightAt(zoomWin.y)]) {
       const px = (mx - zoomWin.x) * k;
       if (px < 0 || px > r.width) continue;
       zctx.strokeStyle = "rgba(234,67,53,0.45)";
