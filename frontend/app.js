@@ -690,6 +690,9 @@
   // Versionsverlauf: Vorschau eines alten Stands und farbige Markierungen
   let creatingBoard = null; // neues Blatt, das gerade im Hintergrund angelegt wird: {id, promise}
   let viewOnly = false; // Schau-Ansicht: nur ansehen (verschieben/zoomen), nichts aendern
+  // Zuschauen (Freunde): nur ansehen, aber mit dem Lasso auswaehlen und kopieren
+  let watchPick = false;
+  const viewBlocks = () => viewOnly && !(watchPick && currentTool === "select");
   // Freigabe-Rolle im offenen Blatt: owner / edit / add (nur dazuschreiben) / view (nur ansehen)
   let myRole = "owner";
   const foreignIds = new Set(); // Striche anderer Personen (bei "add" nicht aenderbar)
@@ -1729,7 +1732,8 @@
       ctx.strokeStyle = "#3b6fe0";
       ctx.lineWidth = 1.5 / scale;
       const hs = 5 / scale;
-      for (const p of selectionHandlePoints(b, pad)) {
+      // beim Zuschauen keine Griffe: man kann nur kopieren
+      for (const p of watchPick ? [] : selectionHandlePoints(b, pad)) {
         if (p.edge) {
           // Seitengriff als kleine Pille entlang der Kante
           const horiz = p.name === "n" || p.name === "s";
@@ -1745,20 +1749,22 @@
         ctx.fillRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
         ctx.strokeRect(p.x - hs, p.y - hs, hs * 2, hs * 2);
       }
-      const rot = selectionRotateHandle(b, pad);
-      const midBottom = { x: (b.minX + b.maxX) / 2, y: b.maxY + pad };
-      ctx.beginPath();
-      ctx.moveTo(midBottom.x, midBottom.y);
-      ctx.lineTo(rot.x, rot.y);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(rot.x, rot.y, 7 / scale, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = "#3b6fe0";
-      ctx.beginPath();
-      ctx.arc(rot.x, rot.y, 2.2 / scale, 0, Math.PI * 2);
-      ctx.fill();
+      if (!watchPick) {
+        const rot = selectionRotateHandle(b, pad);
+        const midBottom = { x: (b.minX + b.maxX) / 2, y: b.maxY + pad };
+        ctx.beginPath();
+        ctx.moveTo(midBottom.x, midBottom.y);
+        ctx.lineTo(rot.x, rot.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(rot.x, rot.y, 7 / scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#3b6fe0";
+        ctx.beginPath();
+        ctx.arc(rot.x, rot.y, 2.2 / scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
       // ausgewaehlte Tabelle: kleine Griffe auf den inneren Linien (zum Ziehen)
       const selT = typeof selectedTable === "function" ? selectedTable() : null;
       if (selT) {
@@ -4567,7 +4573,7 @@
   // dem ▾ liegt); alles zum Schreiben ist weg, das ▾ auch
   const VIEW_TOOLS = ["status", "ruler", "laser", "calc", "hw", "view"];
   function applyTopBarItems() {
-    topBarHidden = viewOnly ? TOPBAR_ITEMS.map((it) => it.key).filter((k) => !VIEW_TOOLS.includes(k)) : effectiveHidden();
+    topBarHidden = watchPick ? TOPBAR_ITEMS.map((it) => it.key).filter((k) => k !== "modes") : viewOnly ? TOPBAR_ITEMS.map((it) => it.key).filter((k) => !VIEW_TOOLS.includes(k)) : effectiveHidden();
     for (const it of TOPBAR_ITEMS) {
       const el = document.querySelector(it.sel);
       if (el) el.classList.toggle("tb-off", topBarHidden.includes(it.key));
@@ -10635,8 +10641,8 @@
   }
 
   function selectStrokeIds(ids) {
-    // nur dazuschreiben: Fremdes laesst sich nicht auswaehlen
-    if (!fullRights()) {
+    // nur dazuschreiben: Fremdes laesst sich nicht auswaehlen (beim Zuschauen schon - zum Kopieren)
+    if (!fullRights() && !watchPick) {
       const own = ids.filter((id) => canEditStroke(boardStrokes.get(id)));
       if (own.length < ids.length && !own.length) showToast("Das hat jemand anderes geschrieben – nur ansehen");
       ids = own;
@@ -13068,6 +13074,7 @@
   // Startet eine Interaktion mit der bestehenden Auswahl (Zuschnitt, Knoten, Skalieren, Drehen,
   // Verschieben). Rueckgabe: "crop" | "handle" | "move" oder null, wenn nichts getroffen wurde.
   function grabSelectionAt(e, world) {
+    if (watchPick) return null; // beim Zuschauen nichts verschieben/drehen - nur neu auswaehlen
     const touch = e.pointerType === "touch";
     const slop = touch ? TOUCH_SLOP : 1;
     if (cropState) {
@@ -13171,7 +13178,7 @@
     return null;
   }
   function dispatchPrimaryDown(e) {
-    if (historyView || viewOnly) return;
+    if (historyView || viewBlocks()) return;
     const world = screenToWorld(e.clientX, e.clientY);
     // Vorschau eines Boards: nichts schreiben, nur Doppeltipp merken
     const preview = boardPageAt(world);
@@ -13252,7 +13259,7 @@
       }
     }
     // Vorschau einer alten Version: nur ansehen (Finger/Maus verschieben, nicht schreiben)
-    if ((historyView || viewOnly) && e.pointerType !== "touch") {
+    if ((historyView || viewBlocks()) && e.pointerType !== "touch") {
       if (e.pointerType === "mouse" || viewOnly) {
         try {
           canvas.setPointerCapture(e.pointerId);
@@ -19718,7 +19725,6 @@
     const side = document.getElementById("friends-side");
     const body = document.getElementById("friends-body");
     const allow = document.getElementById("friends-allow");
-    const bar = document.getElementById("watch-bar");
     if (!side || !body) return;
     let watching = null; // {boardId, name, color}
     let refreshTimer = null;
@@ -19840,20 +19846,31 @@
       }
     });
 
-    // ---- Zuschauen ----
+    // ---- Zuschauen: oben nur das Lasso - auswaehlen und kopieren, sonst nichts ----
+    let prevMode = null;
     function syncBar() {
-      const show = !!watching && watching.boardId === currentBoardId && libraryBackdrop.classList.contains("hidden");
-      bar.classList.toggle("hidden", !show);
-      if (show) {
-        document.getElementById("watch-name").textContent = watching.name;
-        avatar(document.getElementById("watch-avatar"), watching.name, watching.color);
+      const on = !!watching && watching.boardId === currentBoardId && libraryBackdrop.classList.contains("hidden");
+      if (on === watchPick) return;
+      watchPick = on;
+      document.body.classList.toggle("watching", on);
+      if (on) {
+        prevMode = currentMode;
+        setMode("lasso");
+      } else {
+        if (selection.ids.size) clearSelection();
+        lassoPoints = null;
+        lassoPointerId = null;
+        setMode(prevMode && prevMode !== "lasso" ? prevMode : "pen");
       }
+      applyTopBarItems();
+      requestRedraw();
     }
     function startWatch(f) {
       watching = { boardId: f.doc.id, name: f.name || "Jemand", color: f.color };
       close();
       openBoard(f.doc.id, f.doc.title);
       syncBar();
+      showToast("Du schaust " + watching.name + " zu – mit dem Lasso auswählen und kopieren");
     }
     window.sofiaWatchQuery = (bid) => (watching && watching.boardId === bid ? "&watch=1" : "");
     window.sofiaWatchFor = (bid) => {
@@ -19870,19 +19887,18 @@
       watching = null;
       syncBar();
     };
-    document.getElementById("watch-stop").addEventListener("click", () => {
-      watching = null;
-      syncBar();
-      showLibrary();
-    });
-    document.getElementById("watch-copy").addEventListener("click", async () => {
-      if (!currentBoardId) return;
-      try {
-        const res = await api("/api/boards/" + encodeURIComponent(currentBoardId) + "/copy", { method: "POST" });
-        showToast("Kopie in deiner Bibliothek: " + ((res && res.board && res.board.title) || ""));
-      } catch (err) {
-        showToast("Kopie ging gerade nicht");
-      }
+    // Lasso bleibt beim Zuschauen an (ein Tipp darauf schaltet es nicht ab)
+    document.querySelector('.mode-btn[data-mode="lasso"]')?.addEventListener(
+      "click",
+      (e) => {
+        if (!watchPick) return;
+        e.stopImmediatePropagation();
+        setMode("lasso");
+      },
+      true
+    );
+    document.getElementById("btn-sel-copy")?.addEventListener("click", () => {
+      if (watchPick) setTimeout(() => showToast("Kopiert – in deinem Dokument lange drücken zum Einfügen"), 0);
     });
 
     // ---- Hinweis fuer den, dem zugeschaut wird ----
@@ -23276,7 +23292,7 @@
       btn.title = lock ? "Nur ansehen freigegeben" : btn.title;
       document.body.classList.toggle("role-view", lock);
       document.body.classList.toggle("role-add", myRole === "add");
-      if (!fullRights() && selection.ids.size) clearSelection();
+      if (!fullRights() && !watchPick && selection.ids.size) clearSelection();
       if (announce && ROLE_TEXT[myRole]) showToast(ROLE_TEXT[myRole]);
     };
     const isTyping = (t) => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));

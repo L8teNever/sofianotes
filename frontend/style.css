@@ -5996,15 +5996,12 @@ html[data-theme="dark"] .fr-dot { border-color: #2b2930; }
 html[data-theme="dark"] .fr-watch { background: #4a4458; color: #eaddff; }
 html[data-theme="dark"] .fr-watch.here { background: rgba(255, 255, 255, 0.08); color: #cac4d0; }
 
-/* Zuschauen: Pille oben in der Mitte */
-.watch-bar { position: fixed; z-index: 240; top: calc(var(--safe-top, 0px) + 64px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 6px 0 10px; border-radius: 24px; background: var(--dock-bg); border: 1px solid var(--dock-border); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); font: 500 14px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; white-space: nowrap; max-width: calc(100vw - 32px); box-sizing: border-box; animation: page-menu-in 0.18s cubic-bezier(0.2, 0, 0, 1); }
-.watch-bar.hidden { display: none; }
-.watch-text { overflow: hidden; text-overflow: ellipsis; }
-.watch-btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px 0 10px; border: none; border-radius: 18px; background: #eaddff; color: #21005d; font: 600 13px/1 'Google Sans', 'Inter', sans-serif; cursor: pointer; }
-.watch-btn .material-symbols-rounded { font-size: 18px; }
-.watch-btn.round { width: 36px; padding: 0; justify-content: center; background: rgba(0, 0, 0, 0.06); color: #49454f; }
-html[data-theme="dark"] .watch-bar { color: #e6e1e5; }
-html[data-theme="dark"] .watch-btn { background: #4a4458; color: #eaddff; }
-html[data-theme="dark"] .watch-btn.round { background: rgba(255, 255, 255, 0.08); color: #cac4d0; }
+/* Zuschauen: oben nur das Lasso; Auswahl-Leiste nur mit Kopieren */
+body.watching #mode-switch { display: flex !important; }
+body.watching #mode-switch .mode-btn:not([data-mode="lasso"]) { display: none !important; }
+body.watching #btn-view-only, body.watching #undo-redo-dock > .bar-divider { display: none !important; }
+body.watching #selection-toolbar:not(.hidden) { display: flex !important; }
+body.watching #selection-toolbar > :not(#btn-sel-copy) { display: none !important; }
 .watch-note { transition: opacity 0.25s, transform 0.25s; opacity: 0; }
 .watch-note.in { opacity: 1; }
+body.watching #undo-redo-dock { display: none !important; }
