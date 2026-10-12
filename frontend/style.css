@@ -3889,8 +3889,52 @@ html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-all .mater
 html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-pdf,
 html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-pdf .material-symbols-rounded { background: #d0bcff; color: #381e72; }
 html[data-theme="dark"] body.pages-open.pages-selecting #pages-select-pdf .material-symbols-rounded { background: none; }
+/* Zeile unter den Tabs im Auswahl-Modus: nicht mehr gezeigt (Alle/Export sitzen oben) */
+.pages-select,
 .pages-select.hidden,
 .pages-panel.marks-only .pages-select { display: none; }
+/* fertige Datei: Knopf zum Sichern/Teilen (falls das Teilen-Menue einen frischen Tipp braucht) */
+.file-share-sheet {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 16px;
+  border-radius: 28px;
+  background: #fff;
+  color: #1c1b1f;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  font: 600 14px/1.2 'Google Sans', 'Inter', sans-serif;
+}
+.file-share-sheet > .material-symbols-rounded { color: #6750a4; }
+.fss-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.fss-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 20px;
+  background: #6750a4;
+  color: #fff;
+  font: 600 14px/1 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fss-go .material-symbols-rounded { font-size: 20px; color: inherit; }
+.fss-x { width: 40px; height: 40px; border: none; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+html[data-theme="dark"] .file-share-sheet { background: #2b2930; color: #f4f1f8; }
+html[data-theme="dark"] .file-share-sheet > .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] .file-share-sheet .fss-go,
+html[data-theme="dark"] .file-share-sheet .fss-go .material-symbols-rounded { background: #d0bcff; color: #381e72; }
+html[data-theme="dark"] .file-share-sheet .fss-go .material-symbols-rounded { background: none; }
+html[data-theme="dark"] .file-share-sheet .fss-x .material-symbols-rounded { color: #f4f1f8; }
 #pages-select-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pages-select-btn {
   display: inline-flex;

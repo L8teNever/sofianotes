@@ -5650,7 +5650,7 @@
   redoBtn.addEventListener("click", redo);
   function downloadCurrentBoard() {
     // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
-    window.location.href = "/api/export.pdf?board=" + encodeURIComponent(currentBoardId || "");
+    saveFileFromUrl("/api/export.pdf?board=" + encodeURIComponent(currentBoardId || ""), "blatt.pdf", "PDF wird erstellt …");
   }
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
@@ -16324,6 +16324,85 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2600);
   }
+  // Datei vom Server holen und dem Nutzer geben: auf iPad/iPhone ueber das Teilen-Menue
+  // ("In Dateien sichern", AirDrop, Mail ...), sonst als normaler Download. Nur
+  // window.location auf die Datei zu setzen oeffnet in der Home-Bildschirm-App bloss
+  // eine Ansicht ohne Speichern-Moeglichkeit.
+  const touchDevice = () =>
+    /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) || (window.matchMedia && matchMedia("(pointer: coarse)").matches);
+  function fileNameFrom(r, fallback) {
+    const cd = r.headers.get("content-disposition") || "";
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    if (star) {
+      try {
+        return decodeURIComponent(star[1].trim());
+      } catch (err) {}
+    }
+    const plain = /filename="?([^";]+)"?/i.exec(cd);
+    return plain ? plain[1] : fallback;
+  }
+  function downloadBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  // Teilen braucht einen frischen Tipp: dauerte das Erstellen zu lange, kurz nachfragen
+  function offerShare(file) {
+    document.getElementById("file-share-sheet")?.remove();
+    const box = document.createElement("div");
+    box.id = "file-share-sheet";
+    box.className = "file-share-sheet";
+    box.innerHTML =
+      '<span class="material-symbols-rounded">picture_as_pdf</span><span class="fss-name"></span>' +
+      '<button type="button" class="fss-go"><span class="material-symbols-rounded">ios_share</span>Sichern / Teilen</button>' +
+      '<button type="button" class="fss-x" title="Schließen"><span class="material-symbols-rounded">close</span></button>';
+    box.querySelector(".fss-name").textContent = file.name;
+    box.addEventListener("pointerdown", (e) => e.stopPropagation());
+    box.querySelector(".fss-go").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      box.remove();
+      try {
+        await navigator.share({ files: [file], title: file.name });
+      } catch (err) {
+        if (!err || err.name !== "AbortError") downloadBlob(file, file.name);
+      }
+    });
+    box.querySelector(".fss-x").addEventListener("click", (e) => {
+      e.stopPropagation();
+      box.remove();
+    });
+    document.body.appendChild(box);
+  }
+  async function saveFileFromUrl(url, fallbackName, waitText) {
+    if (navigator.onLine === false) return showToast("Export braucht Internet");
+    showToast(waitText || "Datei wird erstellt …");
+    let r;
+    try {
+      r = await fetch(url, { credentials: "same-origin" });
+    } catch (err) {
+      return showToast("Keine Verbindung – Export hat nicht geklappt");
+    }
+    if (!r.ok) return showToast("Export hat nicht geklappt");
+    const blob = await r.blob();
+    const name = fileNameFrom(r, fallbackName);
+    const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
+    if (touchDevice() && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: name });
+      } catch (err) {
+        if (err && err.name === "AbortError") return; // selbst abgebrochen
+        offerShare(file); // z.B. Tipp zu lange her: Knopf zum Teilen anbieten
+      }
+      return;
+    }
+    downloadBlob(file, name);
+  }
+  window.sofiaSaveFile = saveFileFromUrl;
   async function optimistic({ apply, revert, request, offlineOp, failText }) {
     apply();
     try {
@@ -17169,12 +17248,7 @@
   // ---- Eigenes Dateiformat .sofianotes: Blatt komplett sichern und wieder importieren ----
   function exportBoardFile(boardId) {
     if (!boardId) return;
-    const a = document.createElement("a");
-    a.href = "/api/boards/" + encodeURIComponent(boardId) + "/export.sofianotes";
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    saveFileFromUrl("/api/boards/" + encodeURIComponent(boardId) + "/export.sofianotes", "blatt.sofianotes", "Datei wird erstellt …");
   }
   async function importBoardFile(file) {
     showToast("Importiere „" + file.name + "“…");
@@ -17747,7 +17821,7 @@
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       closeExport();
-      if (b.dataset.format === "pdf") window.location.href = "/api/export.pdf?board=" + encodeURIComponent(exportBoardId);
+      if (b.dataset.format === "pdf") saveFileFromUrl("/api/export.pdf?board=" + encodeURIComponent(exportBoardId), "blatt.pdf", "PDF wird erstellt …");
       else exportBoardFile(exportBoardId);
     })
   );
@@ -19319,8 +19393,11 @@
       if (!currentBoardId || !ids || !ids.length) return;
       if (navigator.onLine === false) return showToast("PDF-Export braucht Internet");
       const order = allPickIds().filter((id) => ids.includes(id));
-      showToast(order.length === 1 ? "PDF der Seite wird erstellt …" : "PDF mit " + order.length + " Seiten wird erstellt …");
-      window.location.href = "/api/export.pdf?board=" + encodeURIComponent(currentBoardId) + "&pages=" + encodeURIComponent(order.join(","));
+      window.sofiaSaveFile(
+        "/api/export.pdf?board=" + encodeURIComponent(currentBoardId) + "&pages=" + encodeURIComponent(order.join(",")),
+        "seiten.pdf",
+        order.length === 1 ? "PDF der Seite wird erstellt …" : "PDF mit " + order.length + " Seiten wird erstellt …"
+      );
     }
     window.sofiaPageSelect = startPageSelect;
     window.sofiaExportPagesPdf = exportPagesPdf;
