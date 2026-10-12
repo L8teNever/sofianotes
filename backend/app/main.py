@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -249,6 +249,40 @@ async def sofia_now(person: dict = Depends(get_current_person)) -> dict:
 async def sofia_timetable(person: dict = Depends(get_current_person)) -> dict:
     """Stundenplan der Klasse dieser Person (diese und naechste Woche, mit Ausfaellen)."""
     return await sofia_sync.timetable(person["id"])
+
+
+@app.get("/api/sofia/chat-me")
+async def sofia_chat_me(person: dict = Depends(get_current_person)) -> dict:
+    return await sofia_sync.chat_me(person["id"])
+
+
+@app.get("/api/sofia/chat/{path:path}/file")
+async def sofia_chat_file(path: str, person: dict = Depends(get_current_person)) -> Response:
+    got = await sofia_sync.chat_file(person["id"], path + "/file")
+    if got is None:
+        raise HTTPException(status_code=404, detail="Datei nicht gefunden")
+    data, ctype = got
+    return Response(content=data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.post("/api/sofia/chat-upload/{conv_id}")
+async def sofia_chat_upload(conv_id: int, request: Request, name: str = "datei", person: dict = Depends(get_current_person)) -> Response:
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="leer")
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Datei zu groß (max. 50 MB)")
+    ctype = request.headers.get("content-type") or "application/octet-stream"
+    status, body = await sofia_sync.chat_upload(person["id"], conv_id, name, ctype, data)
+    return JSONResponse(content=body, status_code=status)
+
+
+@app.api_route("/api/sofia/chat/{path:path}", methods=["GET", "POST"])
+async def sofia_chat(path: str, request: Request, person: dict = Depends(get_current_person)) -> Response:
+    """Sofia-Chats: erlaubte Aufrufe als die angemeldete Person weiterreichen."""
+    payload = await _json_body(request) if request.method == "POST" else None
+    status, body = await sofia_sync.chat_call(person["id"], request.method, path, request.url.query, payload)
+    return JSONResponse(content=body, status_code=status)
 
 
 @app.get("/api/sofia/status")

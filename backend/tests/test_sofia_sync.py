@@ -467,3 +467,53 @@ class TimetableTests(unittest.TestCase):
     def test_unlinked_person(self):
         run(db.add_person_email("franz", "franz@example.com"))
         self.assertFalse(run(sofia_sync.timetable("franz"))["linked"])
+
+
+class ChatProxyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+        run(db.add_person_email("simon", "l8tenever@gmail.com"))
+        run(db.apply_sofia_sync(snapshot()))
+        self._orig = (sofia_sync.enabled, sofia_sync._send_json)
+        sofia_sync.enabled = lambda: True
+        self.calls = []
+
+        def fake(method, path, email, payload=None):
+            self.calls.append((method, path, email, payload))
+            return {"ok": True}
+
+        sofia_sync._send_json = fake
+
+    def tearDown(self):
+        sofia_sync.enabled, sofia_sync._send_json = self._orig
+        self.tmp.cleanup()
+
+    def test_only_chat_routes_pass(self):
+        ok = sofia_sync.chat_route_allowed
+        self.assertTrue(ok("GET", "conversations"))
+        self.assertTrue(ok("GET", "conversations/4/messages"))
+        self.assertTrue(ok("POST", "conversations/4/messages"))
+        self.assertTrue(ok("POST", "conversations/4/read"))
+        self.assertTrue(ok("POST", "conversations/4/messages/9/react"))
+        self.assertFalse(ok("POST", "conversations"))  # keine neuen Chats anlegen
+        self.assertFalse(ok("GET", "conversations/4/messages/../../users"))
+        self.assertFalse(ok("DELETE", "conversations/4/messages/9"))
+        self.assertFalse(ok("GET", "../users/"))
+
+    def test_call_as_person(self):
+        status, body = run(sofia_sync.chat_call("simon", "GET", "conversations/4/messages", "before=12"))
+        self.assertEqual(status, 200)
+        method, path, email, payload = self.calls[0]
+        self.assertEqual((method, path, payload), ("GET", "/chat/conversations/4/messages?before=12", None))
+        self.assertEqual(email, "l8tenever@gmail.com")
+        status, _ = run(sofia_sync.chat_call("simon", "POST", "conversations/4/messages", "", {"text": "hi"}))
+        self.assertEqual(self.calls[-1][3], {"text": "hi"})
+        status, _ = run(sofia_sync.chat_call("simon", "GET", "../users/"))
+        self.assertEqual(status, 404)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_me(self):
+        me = run(sofia_sync.chat_me("simon"))
+        self.assertTrue(me["linked"])
+        self.assertEqual(me["userId"], 1)

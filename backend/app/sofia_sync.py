@@ -403,6 +403,115 @@ async def fetch_file(path: str) -> tuple[bytes, str] | None:
         return None
 
 
+# ---- Chat (Sofia-Chats in Notes) ---------------------------------------------
+# Notes reicht nur diese Chat-Aufrufe als die angemeldete Person an Sofia weiter.
+import re as _re
+
+_CHAT_ROUTES = [
+    ("GET", _re.compile(r"conversations")),
+    ("GET", _re.compile(r"conversations/\d+/messages")),
+    ("POST", _re.compile(r"conversations/\d+/messages")),
+    ("POST", _re.compile(r"conversations/\d+/read")),
+    ("POST", _re.compile(r"conversations/\d+/messages/\d+/vote")),
+    ("POST", _re.compile(r"conversations/\d+/messages/\d+/react")),
+]
+_CHAT_FILE = _re.compile(r"conversations/\d+/messages/\d+/file")
+
+
+def chat_route_allowed(method: str, path: str) -> bool:
+    return any(m == method and rx.fullmatch(path) for m, rx in _CHAT_ROUTES)
+
+
+async def chat_me(person_id: str) -> dict[str, Any]:
+    if not enabled():
+        return {"enabled": False}
+    info = await db.sofia_person(person_id)
+    if not info or not info.get("email"):
+        return {"enabled": True, "linked": False}
+    return {"enabled": True, "linked": True, "userId": info.get("sofiaUserId")}
+
+
+async def chat_call(person_id: str, method: str, path: str, query: str = "", payload: Any = None) -> tuple[int, Any]:
+    """Ein erlaubter Chat-Aufruf als diese Person. Gibt (Status, JSON) zurueck."""
+    if not enabled():
+        return 503, {"detail": "Sofia nicht verbunden"}
+    if not chat_route_allowed(method, path):
+        return 404, {"detail": "nicht erlaubt"}
+    info = await db.sofia_person(person_id)
+    if not info or not info.get("email"):
+        return 403, {"detail": "Konto nicht mit Sofia verbunden"}
+    full = "/chat/" + path + ("?" + query if query else "")
+    try:
+        res = await asyncio.get_event_loop().run_in_executor(
+            None, _send_json, method, full, info["email"], payload if method == "POST" else None
+        )
+        return 200, res
+    except urllib.error.HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode("utf-8") or "null")
+        except Exception:  # noqa: BLE001
+            body = None
+        return exc.code, body or {"detail": "Sofia-Fehler"}
+    except Exception as exc:  # noqa: BLE001
+        return 502, {"detail": f"{type(exc).__name__}"}
+
+
+def _upload_chat(conv_id: int, email: str, filename: str, ctype: str, data: bytes) -> Any:
+    boundary = "----sofianotes" + os.urandom(8).hex()
+    safe = filename.replace('"', "").replace("\r", "").replace("\n", "") or "datei"
+    body = (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{safe}\"\r\n"
+        f"Content-Type: {ctype or 'application/octet-stream'}\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    req = urllib.request.Request(
+        API_BASE + f"/chat/conversations/{int(conv_id)}/upload",
+        data=body,
+        method="POST",
+        headers={
+            "X-Internal-Token": _token(),
+            "X-Act-As-Email": email,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8"))
+
+
+async def chat_upload(person_id: str, conv_id: int, filename: str, ctype: str, data: bytes) -> tuple[int, Any]:
+    """Datei/Bild fuer eine Chat-Nachricht zu Sofia hochladen (danach wie in Sofia die Nachricht senden)."""
+    if not enabled():
+        return 503, {"detail": "Sofia nicht verbunden"}
+    info = await db.sofia_person(person_id)
+    if not info or not info.get("email"):
+        return 403, {"detail": "Konto nicht mit Sofia verbunden"}
+    try:
+        res = await asyncio.get_event_loop().run_in_executor(None, _upload_chat, conv_id, info["email"], filename, ctype, data)
+        return 200, res
+    except urllib.error.HTTPError as exc:
+        return exc.code, {"detail": "Hochladen abgelehnt"}
+    except Exception as exc:  # noqa: BLE001
+        return 502, {"detail": f"{type(exc).__name__}"}
+
+
+def _get_bytes(path: str, email: str) -> tuple[bytes, str]:
+    req = urllib.request.Request(API_BASE + path, headers={"X-Internal-Token": _token(), "X-Act-As-Email": email})
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+        return resp.read(), resp.headers.get("Content-Type") or "application/octet-stream"
+
+
+async def chat_file(person_id: str, path: str) -> tuple[bytes, str] | None:
+    if not enabled() or not _CHAT_FILE.fullmatch(path):
+        return None
+    info = await db.sofia_person(person_id)
+    if not info or not info.get("email"):
+        return None
+    try:
+        return await asyncio.get_event_loop().run_in_executor(None, _get_bytes, "/chat/" + path, info["email"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ---- Blatt als Loesung in Sofia ------------------------------------------------
 # Ein Blatt, das zu einer Hausaufgabe gehoert, wird nach dem Schreiben (kurz warten, bis
 # Ruhe ist) als PDF zu Sofia hochgeladen und dort als Loesung der Person eingetragen bzw.

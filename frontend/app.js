@@ -948,6 +948,14 @@
   window.sofiaView = () => ({ scale, offsetX, offsetY });
   let pagesInsetLeft = 0; // Seiten-Leiste im Notizbuch (links)
   let requestedInsets = [0, 0];
+  let chatInsets = [0, 0]; // angedocktes Chat-Fenster (links/rechts)
+  window.sofiaSetChatInsets = (l, r) => {
+    chatInsets = [Math.round(l || 0), Math.round(r || 0)];
+    document.documentElement.style.setProperty("--chat-inset-l", chatInsets[0] + "px");
+    document.documentElement.style.setProperty("--chat-inset-r", chatInsets[1] + "px");
+    if (window.sofiaRelayoutHw) window.sofiaRelayoutHw();
+    setViewInsets(requestedInsets[0], requestedInsets[1]);
+  };
   function setViewInsets(left, right) {
     requestedInsets = [left || 0, right || 0];
     if (splitOn() && window.sofiaSplitLayout) {
@@ -955,8 +963,8 @@
       return;
     }
     // Seiten-Leiste und links angedockte Material-Leiste stehen nebeneinander, nicht uebereinander
-    left = pagesInsetLeft + Math.round(left || 0);
-    right = Math.max(0, Math.round(right || 0));
+    left = pagesInsetLeft + chatInsets[0] + Math.round(left || 0);
+    right = chatInsets[1] + Math.max(0, Math.round(right || 0));
     if (left === viewLeft && right === viewRight) return;
     // was vorher in der Mitte des Sichtbereichs lag, bleibt dort
     const oldMid = viewLeft + (window.innerWidth - viewLeft - viewRight) / 2;
@@ -15108,7 +15116,13 @@
     if (docked) {
       const w = hwDockWidth();
       const inset = 12;
-      Object.assign(hwPanel.style, { top: inset + "px", height: Math.max(200, window.innerHeight - inset * 2) + "px", width: w + "px", left: hwLayout.side === "left" ? "var(--pages-inset, 0px)" : window.innerWidth - w + "px" });
+      // neben einem angedockten Chat-Fenster
+      Object.assign(hwPanel.style, {
+        top: inset + "px",
+        height: Math.max(200, window.innerHeight - inset * 2) + "px",
+        width: w + "px",
+        left: hwLayout.side === "left" ? "calc(var(--pages-inset, 0px) + var(--chat-inset-l, 0px))" : "calc(" + (window.innerWidth - w) + "px - var(--chat-inset-r, 0px))",
+      });
       setViewInsets(hwLayout.side === "left" ? w : 0, hwLayout.side === "left" ? 0 : w);
     } else {
       setViewInsets(0, 0);
@@ -15118,6 +15132,9 @@
     if (open && hwViewerState().open) openHwViewer(hwViewerState().i, true);
     if (open) refreshSolutionStatus();
   }
+  window.sofiaRelayoutHw = () => {
+    if (hwLayout.mode === "dock" && hwPanelCurrent === "open") applyHwPanelState(hwPanelCurrent);
+  };
   function placeHwPanel() {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -18269,6 +18286,723 @@
       sync();
       showToast(textEditOnly ? "Nur bearbeiten: Antippen legt kein neues Textfeld an" : "Antippen legt wieder neue Textfelder an");
     });
+  })();
+
+  // ---- Sofia-Chats: schwebendes Fenster oder als Seitenleiste angedockt ----
+  // Alle Aufrufe gehen ueber den Notes-Server (/api/sofia/chat/...), der sie als die
+  // angemeldete Person an Sofia weiterreicht. Aktualisiert wird wie in Sofia per Abfrage.
+  (() => {
+    const win = document.getElementById("chat-win");
+    if (!win) return;
+    const $ = (id) => document.getElementById(id);
+    const listEl = $("chat-list");
+    const convEl = $("chat-conv");
+    const msgsEl = $("chat-msgs");
+    const input = $("chat-input");
+    const menu = $("chat-menu");
+    const badge = $("canvas-menu-chat-badge");
+    const LAYOUT_KEY = "sofianotes-chat-layout";
+    const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+    let layout = { mode: "float", side: "right", x: null, y: null, w: 360, h: 520, dockW: 360 };
+    try {
+      Object.assign(layout, JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"));
+    } catch (err) {}
+    let me = null;
+    let convs = [];
+    let current = null; // offene Unterhaltung
+    let messages = [];
+    let replyTo = null;
+    let listTimer = null;
+    let msgTimer = null;
+    let badgeTimer = null;
+    let loadingOlder = false;
+    let noOlder = false;
+
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      return e;
+    };
+    const parseUTC = (iso) => (iso ? new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z") : new Date(NaN));
+    function relTime(iso) {
+      const t = parseUTC(iso).getTime();
+      const min = Math.floor((Date.now() - t) / 60000);
+      if (!Number.isFinite(min)) return "";
+      if (min < 1) return "jetzt";
+      if (min < 60) return min + " Min.";
+      const h = Math.floor(min / 60);
+      if (h < 24) return h + " Std.";
+      const d = Math.floor(h / 24);
+      if (d < 7) return d + (d === 1 ? " Tag" : " Tagen");
+      const dt = parseUTC(iso);
+      return dt.getDate() + "." + (dt.getMonth() + 1) + ".";
+    }
+    const clock = (iso) => {
+      const d = parseUTC(iso);
+      return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    };
+    const others = (c) => (c.participants || []).filter((p) => !me || p.user_id !== me);
+    function convTitle(c) {
+      if (!c) return "Chat";
+      if (c.is_notes) return "Notizen";
+      if (c.is_group) return c.name || others(c).map((p) => p.display_name).join(", ") || "Gruppe";
+      const o = others(c)[0];
+      return o ? o.display_name : (c.participants && c.participants[0] && c.participants[0].display_name) || "?";
+    }
+    function avatarUrl(u) {
+      if (!u) return "";
+      if (u.startsWith("/uploads/")) return "/api/sofia/file?u=" + encodeURIComponent(u);
+      if (/^https:\/\//.test(u)) return u;
+      return "";
+    }
+    function avatar(url, name, size) {
+      const a = el("div", "chat-av");
+      a.style.width = a.style.height = size + "px";
+      const src = avatarUrl(url);
+      if (src) a.style.backgroundImage = "url('" + src.replace(/'/g, "%27") + "')";
+      else a.textContent = (name || "?").slice(0, 2).toUpperCase();
+      return a;
+    }
+    function previewText(m) {
+      if (!m) return "";
+      if (m.is_deleted) return "🚫 Diese Nachricht wurde gelöscht";
+      if (m.msg_type === "text") return m.text || "";
+      if (m.msg_type === "image") return m.external_url || /\.gif$/i.test(m.file_name || "") ? "👾 GIF" : "📷 Bild";
+      return { file: "📎 " + (m.file_name || "Datei"), voice: "🎤 Sprachnachricht", poll: "📊 " + (m.text || "Umfrage") }[m.msg_type] || m.text || "";
+    }
+    const fileUrl = (m) => "/api/sofia/chat/conversations/" + m.conversation_id + "/messages/" + m.id + "/file";
+    async function call(path, opts) {
+      const r = await fetch("/api/sofia/chat/" + path, opts);
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    }
+    const post = (path, body) => call(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+
+    // ---- Fenster: schweben / andocken / verschieben / Groesse ----
+    function applyLayout() {
+      const open = !win.classList.contains("hidden");
+      const docked = layout.mode === "dock";
+      win.classList.toggle("docked", docked);
+      win.classList.toggle("dock-left", docked && layout.side === "left");
+      win.classList.toggle("dock-right", docked && layout.side !== "left");
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      if (docked) {
+        const w = Math.round(Math.max(280, Math.min(W * 0.6, layout.dockW || 360)));
+        Object.assign(win.style, {
+          top: "0px",
+          height: H + "px",
+          width: w + "px",
+          left: layout.side === "left" ? "var(--pages-inset, 0px)" : W - w + "px",
+        });
+        if (window.sofiaSetChatInsets) window.sofiaSetChatInsets(open && layout.side === "left" ? w : 0, open && layout.side !== "left" ? w : 0);
+      } else {
+        const w = Math.min(W - 16, Math.max(280, layout.w || 360));
+        const h = Math.min(H - 16, Math.max(300, layout.h || 520));
+        let x = Number.isFinite(layout.x) ? layout.x : W - w - 16;
+        let y = Number.isFinite(layout.y) ? layout.y : 76;
+        x = Math.max(8, Math.min(W - w - 8, x));
+        y = Math.max(8, Math.min(H - 60, y));
+        Object.assign(win.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+        if (window.sofiaSetChatInsets) window.sofiaSetChatInsets(0, 0);
+      }
+      const mode = $("chat-mode");
+      mode.title = docked ? "Als schwebendes Fenster lösen" : "Als Seitenleiste andocken";
+      mode.firstElementChild.textContent = docked ? "picture_in_picture" : layout.side === "left" ? "dock_to_left" : "dock_to_right";
+    }
+    function saveLayout() {
+      try {
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+      } catch (err) {}
+    }
+    $("chat-mode").addEventListener("click", (e) => {
+      e.stopPropagation();
+      layout.mode = layout.mode === "dock" ? "float" : "dock";
+      saveLayout();
+      applyLayout();
+    });
+    // Kopfzeile ziehen: verschieben; nah am linken/rechten Rand loslassen dockt an,
+    // angedockt wegziehen loest das Fenster wieder
+    let drag = null;
+    $("chat-head").addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) return;
+      const r = win.getBoundingClientRect();
+      drag = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top, x0: e.clientX, y0: e.clientY, moved: false };
+      try {
+        $("chat-head").setPointerCapture(e.pointerId);
+      } catch (err) {}
+    });
+    $("chat-head").addEventListener("pointermove", (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+      if (!drag.moved && layout.mode === "dock") {
+        layout.mode = "float";
+        layout.w = Math.min(layout.w || 360, 420);
+        drag.dx = Math.min(drag.dx, layout.w - 40);
+        applyLayout();
+      }
+      drag.moved = true;
+      layout.x = e.clientX - drag.dx;
+      layout.y = e.clientY - drag.dy;
+      applyLayout();
+      win.classList.toggle("dock-hint-left", e.clientX < 40);
+      win.classList.toggle("dock-hint-right", e.clientX > window.innerWidth - 40);
+    });
+    const endDrag = (e) => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const moved = drag.moved;
+      drag = null;
+      win.classList.remove("dock-hint-left", "dock-hint-right");
+      if (!moved) return;
+      if (e.clientX < 40 || e.clientX > window.innerWidth - 40) {
+        layout.mode = "dock";
+        layout.side = e.clientX < 40 ? "left" : "right";
+      }
+      saveLayout();
+      applyLayout();
+    };
+    $("chat-head").addEventListener("pointerup", endDrag);
+    $("chat-head").addEventListener("pointercancel", endDrag);
+    // Groesse: Ecke unten rechts (schwebend) bzw. Innenkante (angedockt)
+    let rs = null;
+    $("chat-resize").addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      const r = win.getBoundingClientRect();
+      rs = { id: e.pointerId, x0: e.clientX, y0: e.clientY, w: r.width, h: r.height };
+      try {
+        $("chat-resize").setPointerCapture(e.pointerId);
+      } catch (err) {}
+    });
+    $("chat-resize").addEventListener("pointermove", (e) => {
+      if (!rs || rs.id !== e.pointerId) return;
+      const dx = e.clientX - rs.x0;
+      if (layout.mode === "dock") layout.dockW = rs.w + (layout.side === "left" ? dx : -dx);
+      else {
+        layout.w = rs.w + dx;
+        layout.h = rs.h + (e.clientY - rs.y0);
+      }
+      applyLayout();
+    });
+    const endRs = (e) => {
+      if (!rs || rs.id !== e.pointerId) return;
+      rs = null;
+      saveLayout();
+    };
+    $("chat-resize").addEventListener("pointerup", endRs);
+    $("chat-resize").addEventListener("pointercancel", endRs);
+    window.addEventListener("resize", () => {
+      if (!win.classList.contains("hidden")) applyLayout();
+    });
+
+    // ---- Liste ----
+    function message(text) {
+      listEl.innerHTML = "";
+      listEl.appendChild(el("div", "chat-empty", text));
+    }
+    function renderList() {
+      listEl.innerHTML = "";
+      if (!convs.length) return message("Noch keine Chats in Sofia.");
+      const sorted = convs.slice().sort((a, b) => (parseUTC(b.last_message_at).getTime() || 0) - (parseUTC(a.last_message_at).getTime() || 0));
+      for (const c of sorted) {
+        const row = el("button", "chat-row" + (c.unread_count ? " unread" : ""));
+        row.type = "button";
+        const o = others(c)[0];
+        row.appendChild(avatar(c.avatar_url || (!c.is_group && o ? o.avatar_url : ""), convTitle(c), 44));
+        const mid = el("div", "chat-row-mid");
+        const top = el("div", "chat-row-top");
+        top.appendChild(el("span", "chat-row-name", convTitle(c)));
+        top.appendChild(el("span", "chat-row-time", relTime(c.last_message_at)));
+        mid.appendChild(top);
+        const bottom = el("div", "chat-row-bottom");
+        bottom.appendChild(el("span", "chat-row-last", (c.is_muted ? "🔕 " : "") + (c.last_message || "")));
+        if (c.unread_count) bottom.appendChild(el("span", "chat-unread", String(c.unread_count)));
+        mid.appendChild(bottom);
+        row.appendChild(mid);
+        row.addEventListener("click", () => openConv(c));
+        listEl.appendChild(row);
+      }
+    }
+    function updateBadge() {
+      const n = convs.reduce((sum, c) => sum + (c.is_muted ? 0 : c.unread_count || 0), 0);
+      if (badge) {
+        badge.textContent = n > 99 ? "99+" : String(n);
+        badge.classList.toggle("hidden", !n);
+      }
+    }
+    async function loadList() {
+      try {
+        const fresh = await call("conversations");
+        if (JSON.stringify(fresh) !== JSON.stringify(convs)) {
+          convs = fresh || [];
+          if (!current && !win.classList.contains("hidden")) renderList();
+        }
+        updateBadge();
+      } catch (err) {
+        if (!convs.length && !win.classList.contains("hidden") && !current) message("Chats gerade nicht erreichbar.");
+      }
+    }
+
+    // ---- Unterhaltung ----
+    function showList() {
+      current = null;
+      messages = [];
+      clearInterval(msgTimer);
+      cancelReply();
+      convEl.classList.add("hidden");
+      listEl.classList.remove("hidden");
+      $("chat-back").classList.add("hidden");
+      $("chat-avatar").classList.add("hidden");
+      $("chat-title").textContent = "Chats";
+      $("chat-subtitle").textContent = "";
+      renderList();
+      loadList();
+    }
+    async function openConv(c) {
+      current = c;
+      messages = [];
+      noOlder = false;
+      listEl.classList.add("hidden");
+      convEl.classList.remove("hidden");
+      $("chat-back").classList.remove("hidden");
+      const av = $("chat-avatar");
+      av.innerHTML = "";
+      const o = others(c)[0];
+      av.appendChild(avatar(c.avatar_url || (!c.is_group && o ? o.avatar_url : ""), convTitle(c), 32));
+      av.classList.remove("hidden");
+      $("chat-title").textContent = convTitle(c);
+      $("chat-subtitle").textContent = c.is_group ? (c.participants || []).length + " Personen" : "";
+      msgsEl.innerHTML = "";
+      msgsEl.appendChild(el("div", "chat-empty", "Lädt …"));
+      await loadMessages(true);
+      clearInterval(msgTimer);
+      msgTimer = setInterval(() => {
+        if (!document.hidden && current) loadMessages(false);
+      }, 4000);
+      setTimeout(() => input.focus({ preventScroll: true }), 50);
+    }
+    async function loadMessages(first) {
+      const c = current;
+      if (!c) return;
+      let fresh;
+      try {
+        fresh = await call("conversations/" + c.id + "/messages");
+      } catch (err) {
+        if (first) {
+          msgsEl.innerHTML = "";
+          msgsEl.appendChild(el("div", "chat-empty", "Nachrichten gerade nicht erreichbar."));
+        }
+        return;
+      }
+      if (current !== c) return;
+      // aeltere, schon nachgeladene Nachrichten behalten
+      const firstNew = fresh.length ? fresh[0].id : Infinity;
+      const older = messages.filter((m) => m.id < firstNew && !m._pending);
+      const pending = messages.filter((m) => m._pending);
+      const next = older.concat(fresh, pending);
+      if (!first && JSON.stringify(next) === JSON.stringify(messages)) return;
+      const nearBottom = msgsEl.scrollTop + msgsEl.clientHeight >= msgsEl.scrollHeight - 120;
+      const grew = !first && fresh.length && messages.length && fresh[fresh.length - 1].id !== (messages.filter((m) => !m._pending).pop() || {}).id;
+      messages = next;
+      renderMessages();
+      if (first || nearBottom) msgsEl.scrollTop = msgsEl.scrollHeight;
+      if (first || grew) post("conversations/" + c.id + "/read").catch(() => {});
+      if (c.unread_count) {
+        c.unread_count = 0;
+        updateBadge();
+      }
+    }
+    async function loadOlder() {
+      if (!current || loadingOlder || noOlder || !messages.length) return;
+      loadingOlder = true;
+      const c = current;
+      try {
+        const old = await call("conversations/" + c.id + "/messages?before=" + messages[0].id);
+        if (current !== c) return;
+        if (!old.length) noOlder = true;
+        else {
+          const h = msgsEl.scrollHeight;
+          messages = old.concat(messages);
+          renderMessages();
+          msgsEl.scrollTop = msgsEl.scrollHeight - h;
+        }
+      } catch (err) {}
+      loadingOlder = false;
+    }
+    msgsEl.addEventListener("scroll", () => {
+      if (msgsEl.scrollTop < 60) loadOlder();
+    });
+    function dayLabel(d) {
+      const t = new Date();
+      const y = new Date(t);
+      y.setDate(t.getDate() - 1);
+      if (d.toDateString() === t.toDateString()) return "Heute";
+      if (d.toDateString() === y.toDateString()) return "Gestern";
+      return d.toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" });
+    }
+    function bubbleContent(m) {
+      const box = el("div", "chat-content");
+      if (m.is_deleted) {
+        box.appendChild(el("i", "chat-deleted", "Diese Nachricht wurde gelöscht"));
+        return box;
+      }
+      if (m.msg_type === "poll" && m.poll) {
+        const p = m.poll;
+        box.appendChild(el("div", "chat-poll-q", "📊 " + p.question));
+        if (p.allow_multiple) box.appendChild(el("div", "chat-poll-hint", "Mehrfachauswahl möglich"));
+        for (const o of p.options) {
+          const pct = p.total_votes ? Math.round((o.vote_count / p.total_votes) * 100) : 0;
+          const voted = (p.my_votes || []).includes(o.id);
+          const b = el("button", "chat-poll-opt" + (voted ? " voted" : ""));
+          b.type = "button";
+          const fill = el("div", "chat-poll-fill");
+          fill.style.width = pct + "%";
+          b.appendChild(fill);
+          const lab = el("div", "chat-poll-label");
+          lab.appendChild(el("span", "", (voted ? "✓ " : "") + o.option_text));
+          lab.appendChild(el("span", "", pct + "%"));
+          b.appendChild(lab);
+          b.addEventListener("click", async () => {
+            try {
+              m.poll = await post("conversations/" + m.conversation_id + "/messages/" + m.id + "/vote", { option_id: o.id });
+              renderMessages();
+            } catch (err) {
+              showToast("Abstimmen hat nicht geklappt");
+            }
+          });
+          box.appendChild(b);
+        }
+        box.appendChild(el("div", "chat-poll-hint", p.total_votes + (p.total_votes === 1 ? " Stimme" : " Stimmen")));
+        return box;
+      }
+      if (m.msg_type === "image") {
+        const src = m._local || m.external_url || fileUrl(m);
+        const img = el("img", "chat-img");
+        img.loading = "lazy";
+        img.src = src;
+        img.alt = m.file_name || "Bild";
+        img.addEventListener("load", () => {
+          if (msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 400) msgsEl.scrollTop = msgsEl.scrollHeight;
+        });
+        img.addEventListener("click", () => window.open(src, "_blank"));
+        box.appendChild(img);
+        return box;
+      }
+      if (m.msg_type === "file") {
+        const a = el("a", "chat-file");
+        a.href = fileUrl(m);
+        a.download = m.file_name || "";
+        a.target = "_blank";
+        a.appendChild(el("span", "material-symbols-rounded", "description"));
+        a.appendChild(el("span", "", m.file_name || "Datei"));
+        box.appendChild(a);
+        return box;
+      }
+      if (m.msg_type === "voice") {
+        const au = el("audio", "chat-audio");
+        au.controls = true;
+        au.preload = "metadata";
+        au.src = fileUrl(m);
+        box.appendChild(au);
+        return box;
+      }
+      // Text: Links anklickbar, Zeilenumbrueche bleiben
+      const t = el("div", "chat-text");
+      const parts = String(m.text || "").split(/(https?:\/\/[^\s<]+)/g);
+      parts.forEach((part, i) => {
+        if (i % 2) {
+          const a = el("a", "", part);
+          a.href = part;
+          a.target = "_blank";
+          a.rel = "noopener";
+          t.appendChild(a);
+        } else t.appendChild(document.createTextNode(part));
+      });
+      box.appendChild(t);
+      return box;
+    }
+    function renderMessages() {
+      msgsEl.innerHTML = "";
+      if (!messages.length) return msgsEl.appendChild(el("div", "chat-empty", "Noch keine Nachrichten."));
+      const group = current && current.is_group;
+      let lastDay = "";
+      messages.forEach((m, i) => {
+        const d = parseUTC(m.created_at);
+        const dl = Number.isFinite(d.getTime()) ? dayLabel(d) : "";
+        if (dl && dl !== lastDay) {
+          msgsEl.appendChild(el("div", "chat-day", dl));
+          lastDay = dl;
+        }
+        const mine = me != null && m.sender_id === me;
+        const prev = messages[i - 1];
+        const next = messages[i + 1];
+        const firstOfRun = !prev || prev.sender_id !== m.sender_id;
+        const lastOfRun = !next || next.sender_id !== m.sender_id;
+        const row = el("div", "chat-msg-row" + (mine ? " mine" : "") + (lastOfRun ? " last" : ""));
+        if (!mine && group) {
+          if (lastOfRun) row.appendChild(avatar(m.sender_avatar, m.sender_name, 26));
+          else row.appendChild(el("div", "chat-av-spacer"));
+        }
+        const col = el("div", "chat-msg-col");
+        if (!mine && group && firstOfRun) col.appendChild(el("div", "chat-sender", m.sender_name));
+        const bubble = el("div", "chat-bubble" + (m.is_deleted ? " deleted" : "") + (m.msg_type === "image" && !m.is_deleted ? " media" : "") + (m._pending ? " pending" : ""));
+        if (m.reply_to) {
+          const q = el("div", "chat-quote");
+          q.appendChild(el("b", "", m.reply_to.sender_name));
+          q.appendChild(el("span", "", previewText(m.reply_to)));
+          bubble.appendChild(q);
+        }
+        bubble.appendChild(bubbleContent(m));
+        bubble.appendChild(el("div", "chat-time", clock(m.created_at) + (m.is_edited ? " (bearbeitet)" : "") + (m._pending ? " …" : "")));
+        // gedrueckt halten / Rechtsklick: Antworten und Reaktionen
+        let holdT = null;
+        bubble.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          openMenu(m, e.clientX, e.clientY);
+        });
+        bubble.addEventListener("pointerdown", (e) => {
+          if (e.pointerType === "mouse") return;
+          holdT = setTimeout(() => openMenu(m, e.clientX, e.clientY), 450);
+        });
+        const clearHold = () => clearTimeout(holdT);
+        bubble.addEventListener("pointerup", clearHold);
+        bubble.addEventListener("pointercancel", clearHold);
+        bubble.addEventListener("pointermove", clearHold);
+        bubble.addEventListener("dblclick", () => !m.is_deleted && !m._pending && react(m, "👍"));
+        col.appendChild(bubble);
+        if (m.reactions && m.reactions.length) {
+          const rr = el("div", "chat-reactions");
+          for (const r of m.reactions) {
+            const b = el("button", "chat-reaction" + (r.reacted_by_me ? " me" : ""), r.emoji + " " + r.count);
+            b.type = "button";
+            b.addEventListener("click", () => react(m, r.emoji));
+            rr.appendChild(b);
+          }
+          col.appendChild(rr);
+        }
+        row.appendChild(col);
+        msgsEl.appendChild(row);
+      });
+    }
+    async function react(m, emoji) {
+      try {
+        m.reactions = await post("conversations/" + m.conversation_id + "/messages/" + m.id + "/react", { emoji });
+        renderMessages();
+      } catch (err) {
+        showToast("Reaktion hat nicht geklappt");
+      }
+    }
+    function openMenu(m, x, y) {
+      if (m.is_deleted || m._pending) return;
+      menu.innerHTML = "";
+      const em = el("div", "chat-menu-emojis");
+      for (const e of REACTIONS) {
+        const b = el("button", "", e);
+        b.type = "button";
+        b.addEventListener("click", () => {
+          closeMenu();
+          react(m, e);
+        });
+        em.appendChild(b);
+      }
+      menu.appendChild(em);
+      const rep = el("button", "chat-menu-item");
+      rep.type = "button";
+      rep.appendChild(el("span", "material-symbols-rounded", "reply"));
+      rep.appendChild(el("span", "", "Antworten"));
+      rep.addEventListener("click", () => {
+        closeMenu();
+        setReply(m);
+      });
+      menu.appendChild(rep);
+      if (m.msg_type === "text" && m.text) {
+        const cp = el("button", "chat-menu-item");
+        cp.type = "button";
+        cp.appendChild(el("span", "material-symbols-rounded", "content_copy"));
+        cp.appendChild(el("span", "", "Kopieren"));
+        cp.addEventListener("click", () => {
+          closeMenu();
+          try {
+            navigator.clipboard.writeText(m.text);
+            showToast("Kopiert");
+          } catch (err) {}
+        });
+        menu.appendChild(cp);
+      }
+      menu.classList.remove("hidden");
+      const r = menu.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - r.width - 8, x - r.width / 2)) + "px";
+      menu.style.top = Math.max(8, Math.min(window.innerHeight - r.height - 8, y - r.height - 10)) + "px";
+    }
+    const closeMenu = () => menu.classList.add("hidden");
+    document.addEventListener("pointerdown", (e) => {
+      if (!menu.classList.contains("hidden") && !menu.contains(e.target)) closeMenu();
+    });
+    function setReply(m) {
+      replyTo = m;
+      $("chat-reply-name").textContent = m.sender_name;
+      $("chat-reply-prev").textContent = previewText(m);
+      $("chat-reply").classList.remove("hidden");
+      input.focus({ preventScroll: true });
+    }
+    function cancelReply() {
+      replyTo = null;
+      $("chat-reply").classList.add("hidden");
+    }
+    $("chat-reply-x").addEventListener("click", cancelReply);
+
+    // ---- Senden ----
+    function autoGrow() {
+      input.style.height = "auto";
+      input.style.height = Math.min(140, input.scrollHeight) + "px";
+    }
+    input.addEventListener("input", autoGrow);
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // Tastenkuerzel des Blatts nicht ausloesen
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        send();
+      }
+    });
+    $("chat-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      send();
+    });
+    async function send() {
+      const text = input.value.trim();
+      if (!text || !current) return;
+      const c = current;
+      const pend = { id: "p" + Date.now(), _pending: true, conversation_id: c.id, sender_id: me, sender_name: "", msg_type: "text", text, created_at: new Date().toISOString(), reactions: [], reply_to: replyTo ? { sender_name: replyTo.sender_name, msg_type: replyTo.msg_type, text: replyTo.text } : null };
+      const body = { msg_type: "text", text, reply_to_id: replyTo ? replyTo.id : null };
+      input.value = "";
+      autoGrow();
+      cancelReply();
+      messages.push(pend);
+      renderMessages();
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      try {
+        const msg = await post("conversations/" + c.id + "/messages", body);
+        messages = messages.filter((m) => m !== pend);
+        if (current === c && !messages.some((m) => m.id === msg.id)) messages.push(msg);
+        c.last_message = previewText(msg);
+        c.last_message_at = msg.created_at;
+      } catch (err) {
+        messages = messages.filter((m) => m !== pend);
+        input.value = text;
+        autoGrow();
+        showToast("Senden hat nicht geklappt");
+      }
+      if (current === c) {
+        renderMessages();
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
+    }
+    const fileIn = document.createElement("input");
+    fileIn.type = "file";
+    fileIn.style.display = "none";
+    document.body.appendChild(fileIn);
+    $("chat-attach").addEventListener("click", () => current && fileIn.click());
+    fileIn.addEventListener("change", async () => {
+      const f = fileIn.files && fileIn.files[0];
+      fileIn.value = "";
+      if (!f || !current) return;
+      const c = current;
+      const isImg = (f.type || "").startsWith("image/");
+      const local = isImg ? URL.createObjectURL(f) : null;
+      const pend = { id: "p" + Date.now(), _pending: true, _local: local, conversation_id: c.id, sender_id: me, msg_type: isImg ? "image" : "file", file_name: f.name, created_at: new Date().toISOString(), reactions: [] };
+      const reply = replyTo;
+      cancelReply();
+      messages.push(pend);
+      renderMessages();
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      try {
+        const r = await fetch("/api/sofia/chat-upload/" + c.id + "?name=" + encodeURIComponent(f.name || "datei"), { method: "POST", headers: { "Content-Type": f.type || "application/octet-stream" }, body: f });
+        if (!r.ok) throw new Error(String(r.status));
+        const up = await r.json();
+        const msg = await post("conversations/" + c.id + "/messages", { msg_type: up.msg_type, storage_filename: up.storage_filename, file_name: up.file_name, file_size: up.file_size, mime_type: up.mime_type, reply_to_id: reply ? reply.id : null });
+        messages = messages.filter((m) => m !== pend);
+        if (current === c && !messages.some((m) => m.id === msg.id)) messages.push(msg);
+      } catch (err) {
+        messages = messages.filter((m) => m !== pend);
+        showToast(String(err && err.message) === "413" ? "Datei zu groß" : "Hochladen hat nicht geklappt");
+      }
+      if (local) setTimeout(() => URL.revokeObjectURL(local), 60000);
+      if (current === c) renderMessages();
+    });
+
+    // ---- Oeffnen / Schliessen ----
+    async function ensureMe() {
+      if (me != null) return true;
+      try {
+        const r = await (await fetch("/api/sofia/chat-me")).json();
+        if (!r.enabled || !r.linked) {
+          message(r.enabled === false ? "Die Verbindung zu Sofia ist auf diesem Server nicht eingerichtet." : "Dein Konto ist noch nicht mit Sofia verbunden.");
+          return false;
+        }
+        me = r.userId;
+        return true;
+      } catch (err) {
+        message("Chats gerade nicht erreichbar.");
+        return false;
+      }
+    }
+    async function open() {
+      win.classList.remove("hidden");
+      applyLayout();
+      if (!current) {
+        showList();
+        if (!convs.length) message("Lädt …");
+      }
+      if (!(await ensureMe())) return;
+      await loadList();
+      if (!current) renderList();
+      clearInterval(listTimer);
+      listTimer = setInterval(() => {
+        if (!document.hidden && !win.classList.contains("hidden")) loadList();
+      }, 15000);
+    }
+    function close() {
+      win.classList.add("hidden");
+      clearInterval(listTimer);
+      clearInterval(msgTimer);
+      closeMenu();
+      current = null;
+      applyLayout();
+    }
+    window.sofiaOpenChat = open;
+    $("chat-close").addEventListener("click", close);
+    $("chat-back").addEventListener("click", showList);
+    win.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        if (!menu.classList.contains("hidden")) closeMenu();
+        else if (current) showList();
+        else close();
+      }
+    });
+    // Fenster faengt Tippen/Zeichnen ab, damit nichts auf dem Blatt landet
+    for (const t of ["pointerdown", "wheel"]) win.addEventListener(t, (e) => e.stopPropagation());
+    document.getElementById("canvas-menu-chat")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeCanvasMenus();
+      open();
+    });
+    // ungelesene Nachrichten im Zahnrad-Menue anzeigen (selten nachsehen, nur wenn Sofia verbunden)
+    async function pollBadge() {
+      if (document.hidden || !win.classList.contains("hidden")) return;
+      if (me == null) {
+        try {
+          const r = await (await fetch("/api/sofia/chat-me")).json();
+          if (!r.linked) return clearInterval(badgeTimer);
+          me = r.userId;
+        } catch (err) {
+          return;
+        }
+      }
+      loadList();
+    }
+    setTimeout(pollBadge, 5000);
+    badgeTimer = setInterval(pollBadge, 60000);
   })();
 
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
@@ -21505,8 +22239,8 @@
     }
     function geometry() {
       const st = splitState;
-      const L = pagesInsetLeft + Math.round(requestedInsets[0] || 0);
-      const R = Math.round(requestedInsets[1] || 0);
+      const L = pagesInsetLeft + chatInsets[0] + Math.round(requestedInsets[0] || 0);
+      const R = chatInsets[1] + Math.round(requestedInsets[1] || 0);
       const W = window.innerWidth;
       const x = Math.round(L + (W - L - R) * st.pos);
       return { L, R, W, x, panes: [{ x0: L, x1: x - GAP }, { x0: x + GAP, x1: W - R }] };
