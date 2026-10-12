@@ -411,15 +411,17 @@ def page_rects(notebook: dict[str, Any]) -> list[tuple[dict[str, Any], float, fl
     """(Seite, x, y, w, h) in Weltkoordinaten - gleiche Anordnung wie im Frontend."""
     out = []
     horizontal = notebook.get("layout") == "horizontal"
+    centered = bool(notebook.get("centered"))
+    pages = notebook.get("pages") or []
+    sizes = [(float(pg.get("w") or A4_W), float(pg.get("h") or A4_H)) for pg in pages]
+    cross = max((h if horizontal else w) for w, h in sizes) if (centered and sizes) else 0.0
     pos = 0.0
-    for pg in notebook.get("pages") or []:
-        w = float(pg.get("w") or A4_W)
-        h = float(pg.get("h") or A4_H)
+    for pg, (w, h) in zip(pages, sizes):
         if horizontal:
-            out.append((pg, pos, 0.0, w, h))
+            out.append((pg, pos, (cross - h) / 2 if centered else 0.0, w, h))
             pos += w + PAGE_GAP
         else:
-            out.append((pg, 0.0, pos, w, h))
+            out.append((pg, (cross - w) / 2 if centered else 0.0, pos, w, h))
             pos += h + PAGE_GAP
     return out
 

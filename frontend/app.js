@@ -232,19 +232,25 @@
     if (!nb) return [];
     const pages = nb.pages || [];
     const horiz = nb.layout === "horizontal";
-    let sig = horiz ? "h" : "v";
+    // centered: Seiten unterschiedlicher Breite (Hoch-/Querformat) stehen mittig
+    // untereinander. Alte Notizbuecher stellt der Server beim Oeffnen einmal um.
+    const centered = !!nb.centered;
+    let sig = (horiz ? "h" : "v") + (centered ? "c" : "");
     for (let i = 0; i < pages.length; i++) {
       const pg = pages[i];
       sig += "|" + (pg.id || i) + ":" + (pg.w || 0) + "x" + (pg.h || 0);
     }
     const hit = pageRectCache.get(nb);
     if (hit && hit.sig === sig) return hit.rects;
+    let cross = 0;
+    if (centered) for (const pg of pages) cross = Math.max(cross, horiz ? pg.h || A4_H : pg.w || A4_W);
     const out = [];
     let pos = 0;
     for (const pg of pages) {
       const w = pg.w || A4_W;
       const h = pg.h || A4_H;
-      out.push(horiz ? { page: pg, id: pg.id, x: pos, y: 0, w, h } : { page: pg, id: pg.id, x: 0, y: pos, w, h });
+      const off = centered ? (cross - (horiz ? h : w)) / 2 : 0;
+      out.push(horiz ? { page: pg, id: pg.id, x: pos, y: off, w, h } : { page: pg, id: pg.id, x: off, y: pos, w, h });
       pos += (horiz ? w : h) + PAGE_GAP;
     }
     pageRectCache.set(nb, { sig, rects: out });
@@ -5127,6 +5133,7 @@
           // zuletzt angesehene Stelle wieder herstellen, sonst (Notizbuch) erste Seite
           const restored = !window.sofiaSplitBg && window.sofiaRestoreView && window.sofiaRestoreView(msg.board.id);
           if (!restored && notebook && firstOpen && window.sofiaFitPage && !window.sofiaSplitBg) window.sofiaFitPage(0);
+          if (!window.sofiaSplitBg) window.sofiaViewReady && window.sofiaViewReady(msg.board.id);
         }
         boardStrokes.clear();
         foreignIds.clear();
@@ -15659,14 +15666,21 @@
   }));
   // Ansicht pro Person+Blatt merken (Seite, Zoom, Ausschnitt) und beim naechsten Oeffnen dorthin
   let viewRestoreFor = null;
+  // Ansicht erst speichern, wenn das Blatt fertig geoeffnet (eingepasst/wiederhergestellt) ist -
+  // sonst landet die Standardansicht vor dem Einpassen im Speicher und wird beim naechsten
+  // Oeffnen wiederhergestellt (nur Weiss zu sehen)
+  let viewReadyFor = null;
   function viewStorageKey(bid) {
     return "sofianotes-view:" + (currentPersonId || "anon") + ":" + bid;
   }
   function saveView(bid) {
-    if (!bid || historyView || boardEditId) return;
+    if (!bid || historyView || boardEditId || bid !== viewReadyFor) return;
     try {
       const v = { s: scale, x: offsetX, y: offsetY, w: window.innerWidth, h: window.innerHeight, l: viewLeft };
-      if (notebook && window.sofiaCurrentPage) v.page = window.sofiaCurrentPage();
+      if (notebook && window.sofiaCurrentPage) {
+        v.page = window.sofiaCurrentPage();
+        if (notebook.centered) v.c = 1; // gespeichert mit mittigen Seiten
+      }
       const raw = JSON.stringify(v);
       localStorage.setItem(viewStorageKey(bid), raw);
     } catch (err) {}
@@ -15688,13 +15702,34 @@
       window.sofiaFitPage(Math.min(v.page, notebook.pages.length - 1));
       return true;
     }
+    if (notebook && Number.isFinite(v.page) && window.sofiaFitPage) {
+      const page = Math.min(v.page, notebook.pages.length - 1);
+      const fit = window.sofiaViewFor && window.sofiaViewFor(page);
+      // eingepasst gespeichert, oder mit alter Seitenanordnung: frisch einpassen
+      if ((notebook.centered && !v.c) || (fit && Math.abs(v.s / fit.scale - 1) < 0.12)) {
+        window.sofiaFitPage(page);
+        return true;
+      }
+    }
     scale = v.s;
     offsetX = v.x;
     offsetY = v.y;
     if (typeof alignNotebookX === "function") alignNotebookX(false);
+    // liegt die Bildschirmmitte auf keiner Seite (nur Weiss/Grau zu sehen): Seite einpassen
+    if (notebook && window.sofiaFitPage) {
+      const c = screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
+      const onPage = pageRects(notebook).some((r) => c.x >= r.x && c.x <= r.x + r.w && c.y >= r.y && c.y <= r.y + r.h);
+      if (!onPage) {
+        window.sofiaFitPage(Math.min(Number.isFinite(v.page) ? v.page : 0, notebook.pages.length - 1));
+        return true;
+      }
+    }
     requestRedraw();
     return true;
   }
+  window.sofiaViewReady = (bid) => {
+    viewReadyFor = bid;
+  };
   window.sofiaRestoreView = (bid) => {
     if (viewRestoreFor !== bid) return false;
     viewRestoreFor = null;

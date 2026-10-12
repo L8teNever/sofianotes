@@ -829,12 +829,101 @@ def clean_notebook(nb: Any) -> dict[str, Any] | None:
         if not pid or pid not in page_ids or not name:
             continue
         bookmarks.append({"id": bid or pid, "pageId": pid, "name": name})
-    return {
+    out = {
         "layout": "horizontal" if nb.get("layout") == "horizontal" else "vertical",
         "template": page_bg(nb.get("template")),
         "pages": pages,
         "bookmarks": bookmarks,
     }
+    if nb.get("centered"):
+        # Seiten unterschiedlicher Breite (Hoch-/Querformat) stehen mittig untereinander
+        out["centered"] = True
+    return out
+
+
+NB_PAGE_GAP = 48.0
+
+
+def notebook_page_rects(nb: dict[str, Any], centered: bool | None = None) -> list[tuple[str, float, float, float, float]]:
+    """(Seiten-ID, x, y, w, h) wie im Frontend (pageRects). centered: schmalere Seiten mittig."""
+    pages = nb.get("pages") or []
+    horizontal = nb.get("layout") == "horizontal"
+    if centered is None:
+        centered = bool(nb.get("centered"))
+    sizes = [(float(p.get("w") or 794.0), float(p.get("h") or 1123.0)) for p in pages]
+    cross = max((h if horizontal else w) for w, h in sizes) if (centered and sizes) else 0.0
+    out = []
+    pos = 0.0
+    for p, (w, h) in zip(pages, sizes):
+        if horizontal:
+            y = (cross - h) / 2 if centered else 0.0
+            out.append((str(p.get("id")), pos, y, w, h))
+            pos += w + NB_PAGE_GAP
+        else:
+            x = (cross - w) / 2 if centered else 0.0
+            out.append((str(p.get("id")), x, pos, w, h))
+            pos += h + NB_PAGE_GAP
+    return out
+
+
+def _center_notebook_sync(board_id: str) -> bool:
+    """Altes Notizbuch einmalig auf mittige Seiten umstellen. Die Striche jeder Seite
+    wandern um genau denselben Betrag mit wie ihre Seite. True = Striche wurden verschoben."""
+    row = _conn.execute("SELECT notebook FROM boards WHERE id = ?", (board_id,)).fetchone()
+    if not row or not row[0]:
+        return False
+    try:
+        nb = json.loads(row[0])
+    except ValueError:
+        return False
+    if not isinstance(nb, dict) or nb.get("centered"):
+        return False
+    old = notebook_page_rects(nb, centered=False)
+    new = {r[0]: r for r in notebook_page_rects(nb, centered=True)}
+    deltas = {pid: (new[pid][1] - x, new[pid][2] - y) for pid, x, y, _w, _h in old if pid in new}
+    moved_any = False
+    if any(dx or dy for dx, dy in deltas.values()):
+        rows = _conn.execute("SELECT id, points, extra FROM strokes WHERE board_id = ?", (board_id,)).fetchall()
+        for sid, pts_raw, extra_raw in rows:
+            try:
+                extra = json.loads(extra_raw) if extra_raw else None
+            except ValueError:
+                extra = None
+            if isinstance(extra, dict) and extra.get("boardPage"):
+                continue  # Board-Seiten haben eigene Koordinaten
+            try:
+                pts = json.loads(pts_raw)
+            except ValueError:
+                continue
+            if not pts:
+                continue
+            xs = [float(p.get("x", 0)) for p in pts]
+            ys = [float(p.get("y", 0)) for p in pts]
+            cx = (min(xs) + max(xs)) / 2
+            cy = (min(ys) + max(ys)) / 2
+            hit = next((r for r in old if r[1] <= cx <= r[1] + r[3] and r[2] <= cy <= r[2] + r[4]), None)
+            if not hit:
+                continue
+            dx, dy = deltas.get(hit[0], (0.0, 0.0))
+            if not dx and not dy:
+                continue
+            _, before = _stroke_json_sync(sid)
+            for p in pts:
+                p["x"] = float(p.get("x", 0)) + dx
+                p["y"] = float(p.get("y", 0)) + dy
+            _conn.execute("UPDATE strokes SET points = ? WHERE id = ?", (json.dumps(pts), sid))
+            _, after = _stroke_json_sync(sid)
+            _log_sync(board_id, sid, None, before, after)
+            moved_any = True
+    nb["centered"] = True
+    _conn.execute("UPDATE boards SET notebook = ? WHERE id = ?", (json.dumps(nb), board_id))
+    _conn.commit()
+    return moved_any
+
+
+async def center_notebook(board_id: str) -> bool:
+    async with _lock:
+        return await asyncio.get_event_loop().run_in_executor(None, _center_notebook_sync, board_id)
 
 
 def _set_board_notebook_sync(board_id: str, nb: dict[str, Any] | None) -> bool:

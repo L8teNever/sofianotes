@@ -67,6 +67,34 @@ class LibraryTests(unittest.TestCase):
         loaded = run(db.load_all(bid))
         self.assertEqual(loaded[0]["author"], "simon")
 
+    def test_notebook_centering_moves_strokes_once(self):
+        b = run(db.create_board("simon", "Heft", None))
+        bid = b["id"]
+        nb = {"layout": "vertical", "pages": [
+            {"id": "pq", "paper": "blank", "w": 1123, "h": 794},
+            {"id": "ph", "paper": "graph", "w": 794, "h": 1123},
+        ]}
+        run(db.set_board_notebook(bid, db.clean_notebook(nb)))
+        # Strich auf der Hochformat-Seite (alte Lage: x ab 0, y ab 794 + 48)
+        run(db.insert_stroke({"id": "s1", "tool": "pen", "color": "#000", "size": 3,
+                              "points": [{"x": 100, "y": 900}, {"x": 120, "y": 910}], "board_id": bid}, "simon"))
+        # Strich auf der Querformat-Seite bleibt, wo er ist
+        run(db.insert_stroke({"id": "s2", "tool": "pen", "color": "#000", "size": 3,
+                              "points": [{"x": 500, "y": 300}], "board_id": bid}, "simon"))
+        self.assertTrue(run(db.center_notebook(bid)))
+        board = run(db.get_board(bid))
+        self.assertTrue(board["notebook"].get("centered"))
+        pts = {s["id"]: s["points"] for s in run(db.load_all(bid))}
+        dx = (1123 - 794) / 2
+        self.assertAlmostEqual(pts["s1"][0]["x"], 100 + dx)
+        self.assertAlmostEqual(pts["s1"][0]["y"], 900)
+        self.assertAlmostEqual(pts["s2"][0]["x"], 500)
+        # zweiter Aufruf aendert nichts mehr
+        self.assertFalse(run(db.center_notebook(bid)))
+        self.assertAlmostEqual(run(db.load_all(bid))[0]["points"][0]["x"] if run(db.load_all(bid))[0]["id"] == "s1" else 100 + dx, 100 + dx)
+        rects = db.notebook_page_rects(board["notebook"])
+        self.assertAlmostEqual(rects[1][1], dx)
+
     def test_strokes_stay_on_board(self):
         a = run(db.create_board("simon", "A", None))
         b = run(db.create_board("simon", "B", None))

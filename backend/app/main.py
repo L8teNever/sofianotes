@@ -487,6 +487,10 @@ async def patch_board(board_id: str, request: Request, me: dict = Depends(get_cu
         nb = db.clean_notebook(body.get("notebook"))
         if not nb or not await db.can_access(me["id"], board_id):
             raise HTTPException(status_code=400, detail="bad notebook")
+        # einmal mittig, immer mittig: ein Fenster mit altem Stand darf das nicht zuruecksetzen
+        stored = await db.get_board(board_id)
+        if stored and (stored.get("notebook") or {}).get("centered"):
+            nb["centered"] = True
         if role == "add":
             # nur dazuschreiben: Seiten anhaengen ja, vorhandene entfernen nein
             old = await db.get_board(board_id)
@@ -814,6 +818,7 @@ async def board_history_restore(board_id: str, request: Request, me: dict = Depe
 async def board_snapshot(board_id: str, me: dict = Depends(get_current_person)) -> dict:
     if not await db.can_access(me["id"], board_id):
         raise HTTPException(status_code=404, detail="not found")
+    await db.center_notebook(board_id)
     board = await db.get_board(board_id)
     strokes = await db.load_all(board_id)
     return {"ok": True, "board": board, "strokes": strokes}
@@ -1051,6 +1056,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     client.color = (await db.person_color(person)) or color_for(person) or client.color
     client.role = (await db.board_role(person, board_id)) or "edit"
 
+    # alte Notizbuecher einmalig auf mittige Seiten umstellen (Striche wandern mit);
+    # andere offene Fenster laden dann neu, damit niemand mit alten Positionen weiterschreibt
+    if await db.center_notebook(board_id):
+        await manager.broadcast({"type": "board_reload"}, exclude=websocket, board_id=board_id)
     strokes = await db.load_all(board_id)
     board = await db.get_board(board_id)
     await websocket.send_json(
