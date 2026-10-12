@@ -19296,21 +19296,21 @@
           { transformOrigin: "0 0", translate: f.translate, scale: f.scale, opacity: 0.4 },
           { transformOrigin: "0 0", translate: "0px 0px", scale: "1 1", opacity: 1 },
         ],
-        { duration: 300, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+        { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }
       );
-      for (const c of el.children) c.animate && c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }], { duration: 300 });
+      for (const c of el.children) c.animate && c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.3 }, { opacity: 1 }], { duration: 180 });
       a.onfinish = () => done && done();
     },
     to(el, r0, done) {
       const f = this.frames(el, r0);
       if (!f) return done && done();
-      for (const c of el.children) c.animate && c.animate([{ opacity: 1 }, { opacity: 0, offset: 0.5 }, { opacity: 0 }], { duration: 240, fill: "forwards" });
+      for (const c of el.children) c.animate && c.animate([{ opacity: 1 }, { opacity: 0, offset: 0.5 }, { opacity: 0 }], { duration: 140, fill: "forwards" });
       const a = el.animate(
         [
           { transformOrigin: "0 0", translate: "0px 0px", scale: "1 1", opacity: 1 },
           { transformOrigin: "0 0", translate: f.translate, scale: f.scale, opacity: 0.3 },
         ],
-        { duration: 240, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)", fill: "forwards" }
+        { duration: 140, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)", fill: "forwards" }
       );
       a.onfinish = () => {
         done && done();
@@ -19376,11 +19376,57 @@
       const r = el.getBoundingClientRect();
       return r.width > 2 && r.height > 2 ? r : null;
     };
+    // gleiche Abstaende wie der Knopf: Menue schliesst buendig mit der Knopfkante zur
+    // naeheren Bildschirmseite ab und sitzt 8 px unter (bzw. ueber) seiner Leiste
+    const GAP = 8;
+    const barRect = (b) => {
+      // die Leiste/Pille, in der der Knopf sitzt (nur wenig hoeher als er selbst)
+      const r = b.getBoundingClientRect();
+      let best = r;
+      for (let p = b.parentElement; p && p !== document.body; p = p.parentElement) {
+        const q = p.getBoundingClientRect();
+        if (q.height > r.height + 24 || q.width > window.innerWidth * 0.9) break;
+        // nur sichtbare Leisten zaehlen (Pille mit Hintergrund/Schatten), keine unsichtbaren Huellen
+        const cs = getComputedStyle(p);
+        if (cs.boxShadow !== "none" || !/rgba\(0, 0, 0, 0\)|transparent/.test(cs.backgroundColor)) best = q;
+      }
+      return best;
+    };
+    const SIDES = ["left", "right", "top", "bottom"];
+    function align(el, b) {
+      const a = b.getBoundingClientRect();
+      if (a.width > 140 || a.height > 90) return null; // nur an Knoepfen, nicht an Kacheln/Blasen
+      const cs = getComputedStyle(el);
+      if (cs.position !== "fixed" && cs.position !== "absolute") return null;
+      const r = el.getBoundingClientRect();
+      const bar = barRect(b);
+      const below = r.top >= a.bottom - 4;
+      const above = r.bottom <= a.top + 4;
+      if (!below && !above) return null; // seitlich aufgehende Menues bleiben, wie sie sind
+      const W = window.innerWidth, H = window.innerHeight, M = 8;
+      // sitzt der Knopf am Ende seiner Leiste, schliesst das Menue mit der Leiste ab
+      const L = a.left - bar.left < 14 ? bar.left : a.left;
+      const R = bar.right - a.right < 14 ? bar.right : a.right;
+      let left = (a.left + a.right) / 2 > W / 2 ? R - r.width : L;
+      left = Math.max(M, Math.min(W - M - r.width, left));
+      let top = below ? bar.bottom + GAP : bar.top - GAP - r.height;
+      top = Math.max(M, Math.min(H - M - r.height, top));
+      const dx = left - r.left, dy = top - r.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return null;
+      const saved = {};
+      for (const k of SIDES) saved[k] = el.style[k];
+      el.style.left = parseFloat(cs.left) + dx + "px";
+      el.style.right = "auto";
+      el.style.top = parseFloat(cs.top) + dy + "px";
+      el.style.bottom = "auto";
+      return saved;
+    }
     for (const [id, btnId] of Object.entries(MENUS)) {
       const el = document.getElementById(id);
       if (!el) continue;
       let wasHidden = el.classList.contains("hidden");
       let anchor = null;
+      let saved = null;
       new MutationObserver(() => {
         const hidden = el.classList.contains("hidden");
         if (hidden === wasHidden) return;
@@ -19390,14 +19436,22 @@
           anchor = fixed || (lastAnchor && !el.contains(lastAnchor) ? lastAnchor : null);
           // Position setzt der Menue-Code direkt nach dem Einblenden - erst danach messen
           requestAnimationFrame(() => {
+            if (el.classList.contains("hidden")) return;
             const r0 = visibleRect(anchor);
-            if (r0 && !el.classList.contains("hidden") && window.sofiaMorph) window.sofiaMorph.from(el, r0);
+            if (!r0) return;
+            saved = align(el, anchor);
+            if (window.sofiaMorph) window.sofiaMorph.from(el, r0);
           });
           return;
         }
+        // eigene Position wieder freigeben, damit der Menue-Code beim naechsten Mal frei setzt
+        const restore = () => {
+          if (saved) for (const k of SIDES) el.style[k] = saved[k];
+          saved = null;
+        };
         // zugehen: Kopie an derselben Stelle schrumpft zurueck in den Knopf
         const r0 = visibleRect(anchor);
-        if (!r0 || !window.sofiaMorph || !el.parentNode) return;
+        if (!r0 || !window.sofiaMorph || !el.parentNode) return restore();
         // gleiche IDs behalten (Aussehen haengt daran); die Kopie steht hinter dem Original im
         // DOM, getElementById findet weiter das Original - und sie lebt nur ~0,25 s
         const ghost = el.cloneNode(true);
@@ -19405,9 +19459,59 @@
         ghost.classList.add("menu-ghost");
         ghost.style.cssText = el.style.cssText;
         ghost.style.pointerEvents = "none";
+        restore();
         el.parentNode.insertBefore(ghost, el.nextSibling);
         if (!visibleRect(ghost)) return ghost.remove();
         window.sofiaMorph.to(ghost, r0, () => ghost.remove());
+      }).observe(el, { attributes: true, attributeFilter: ["class"] });
+    }
+  })();
+
+  // ---- Seitenleisten & Fenster: gleiten vom Rand herein und wieder hinaus ----
+  // Angedockt (am Bildschirmrand) -> von dieser Seite; frei schwebend -> kurz aufploppen.
+  (() => {
+    const SHEETS = ["history-panel", "hw-panel", "chat-win", "calc-win"];
+    const IN = { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" };
+    const OUT = { duration: 160, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)", fill: "forwards" };
+    const edge = (r) => (r.right >= window.innerWidth - 2 ? 1 : r.left <= 2 ? -1 : 0);
+    const frames = (r) => {
+      const e = edge(r);
+      if (e) return [{ translate: e * (r.width + 24) + "px 0px", opacity: 0.4 }, { translate: "0px 0px", opacity: 1 }];
+      return [{ scale: "0.94", opacity: 0, transformOrigin: "50% 50%" }, { scale: "1", opacity: 1, transformOrigin: "50% 50%" }];
+    };
+    for (const id of SHEETS) {
+      const el = document.getElementById(id);
+      if (!el || !el.animate) continue;
+      let wasHidden = el.classList.contains("hidden");
+      new MutationObserver(() => {
+        const hidden = el.classList.contains("hidden");
+        if (hidden === wasHidden) return;
+        wasHidden = hidden;
+        if (!hidden) {
+          requestAnimationFrame(() => {
+            const r = el.getBoundingClientRect();
+            if (!el.classList.contains("hidden") && r.width > 2) el.animate(frames(r), IN);
+          });
+          return;
+        }
+        if (!el.parentNode) return;
+        // Kopie an derselben Stelle gleitet hinaus (Zeichenflaechen mit Inhalt uebernehmen)
+        const ghost = el.cloneNode(true);
+        ghost.classList.remove("hidden");
+        ghost.classList.add("menu-ghost");
+        ghost.style.cssText = el.style.cssText;
+        ghost.style.pointerEvents = "none";
+        const src = el.querySelectorAll("canvas");
+        ghost.querySelectorAll("canvas").forEach((c, i) => {
+          try {
+            c.getContext("2d").drawImage(src[i], 0, 0);
+          } catch (err) {}
+        });
+        el.parentNode.insertBefore(ghost, el.nextSibling);
+        const r = ghost.getBoundingClientRect();
+        if (r.width < 3) return ghost.remove();
+        const a = ghost.animate(frames(r).reverse(), OUT);
+        a.onfinish = () => ghost.remove();
       }).observe(el, { attributes: true, attributeFilter: ["class"] });
     }
   })();
@@ -19810,7 +19914,7 @@
         setTimeout(() => {
           side.classList.remove("closing");
           finish();
-        }, 220);
+        }, 160);
       }
     }
     window.sofiaOpenDaySide = openSide;
@@ -20923,7 +21027,7 @@
         panelHideTimer = setTimeout(() => {
           panel.classList.add("hidden");
           panel.classList.remove("closing");
-        }, 240);
+        }, 170);
       } else panel.classList.add("hidden");
       pagesBtn.classList.toggle("active", panelOpen);
       pagesInsetLeft = panelOpen ? Math.min(PANEL_W, Math.round(window.innerWidth * 0.4)) : 0;

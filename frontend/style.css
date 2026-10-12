@@ -4358,7 +4358,7 @@ body.view-narrow #top-filename-bar > * { flex-shrink: 0; }
   background: #f7f2fa;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   overflow: hidden;
-  animation: pages-in 0.28s cubic-bezier(0.2, 0, 0, 1);
+  animation: pages-in 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 .pages-head { padding: 16px 14px 10px 16px; }
 .pages-grid { padding-bottom: 16px; }
@@ -4467,7 +4467,7 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 @keyframes bar-fade { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
 .icon-swap { animation: icon-swap 0.35s cubic-bezier(0.2, 0, 0, 1); }
 @keyframes icon-swap { from { opacity: 0; transform: rotate(-90deg) scale(0.6); } to { opacity: 1; transform: none; } }
-.pages-panel.closing { animation: pages-out 0.24s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
+.pages-panel.closing { animation: pages-out 0.17s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
 @keyframes pages-out { to { transform: translateX(calc(-100% - 24px)); opacity: 0.4; } }
 
 /* ---- Einstellungs-Knopf ganz rechts oben (oeffnet das bisherige ⋯-Menue) ---- */
@@ -5751,7 +5751,7 @@ html[data-theme="dark"] .sp-row .material-symbols-rounded, html[data-theme="dark
 html[data-theme="dark"] .sp-action { color: #e6e1e5; }
 
 /* ==== Tagesplan als Seitenleiste rechts (wie die Seiten-Leiste) ==== */
-.tt-side { position: fixed; z-index: 255; top: 12px; bottom: 12px; right: var(--chat-inset-r, 0px); width: 340px; display: flex; flex-direction: column; background: #f7f2fa; border: 1px solid rgba(0, 0, 0, 0.06); border-right: none; border-radius: 28px 0 0 28px; box-shadow: -4px 0 28px rgba(0, 0, 0, 0.12); overflow: hidden; font-family: 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; animation: tt-side-in 0.28s cubic-bezier(0.2, 0, 0, 1); }
+.tt-side { position: fixed; z-index: 255; top: 12px; bottom: 12px; right: var(--chat-inset-r, 0px); width: 340px; display: flex; flex-direction: column; background: #f7f2fa; border: 1px solid rgba(0, 0, 0, 0.06); border-right: none; border-radius: 28px 0 0 28px; box-shadow: -4px 0 28px rgba(0, 0, 0, 0.12); overflow: hidden; font-family: 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; animation: tt-side-in 0.2s cubic-bezier(0.2, 0, 0, 1); }
 .tt-side.hidden { display: none; }
 @keyframes tt-side-in { from { transform: translateX(calc(100% + 24px)); opacity: 0.4; } to { transform: none; opacity: 1; } }
 .tt-side-head { display: flex; align-items: center; gap: 6px; padding: 12px 10px 10px 12px; flex-shrink: 0; }
@@ -5786,7 +5786,7 @@ html[data-theme="dark"] .tbar-round.active-pop { background: #4a4458; }
 .school-btn.morph-away { visibility: hidden; }
 .school-pop { animation: none; }
 .tt-side.no-slide { animation: none; }
-.tt-side.closing { animation: tt-side-out 0.22s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
+.tt-side.closing { animation: tt-side-out 0.16s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
 @keyframes tt-side-out { to { transform: translateX(calc(100% + 24px)); opacity: 0.4; } }
 html[data-theme="dark"] .tbar-round.text-color-btn { background: #4a4458; }
 
@@ -5948,3 +5948,8 @@ html[data-theme="dark"] #btn-text-edit-only.tbar-round.active { background: #4a4
 /* senkrecht angedockte Leiste: Spuren stehen untereinander */
 #toolbar.dock-left #swatches-container, #toolbar.dock-right #swatches-container { flex-direction: column; }
 #toolbar.dock-left .tool-seg, #toolbar.dock-right .tool-seg, #toolbar.free-drag.orient-vertical .tool-seg { flex-direction: column; }
+
+/* Seitenleisten & Fenster: Ein-/Ausgleiten macht app.js (vom Rand bzw. Aufploppen) */
+#history-panel, #hw-panel, #chat-win, #calc-win { animation: none !important; }
+/* Menues: Aufgehen/Zugehen macht app.js (wachsen aus dem Knopf) - keine zweite CSS-Animation */
+#canvas-menu, #split-menu, #insert-menu, #tb-more-menu, #lib-add-menu, #text-color-pop, #tool-popover, #page-menu, #lib-item-menu, #swatch-menu, #chat-menu, #color-picker, #zoom-popover, #canvas-share-submenu, #page-add-pop, #erase-all-menu { animation: none !important; }
