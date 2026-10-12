@@ -19120,13 +19120,18 @@
     };
     // Lange druecken: Seite wird ausgewaehlt und haengt am Finger; loslassen = neue Stelle
     let thumbDrag = null; // {from, cell, ghost, to, timer, x0, y0, active, done}
+    // Lange druecken: Seite anheben (ziehen = verschieben). Loslassen ohne zu bewegen =
+    // Auswahl starten (z.B. fuer den PDF-Export). Ohne Bearbeiten-Recht nur die Auswahl.
     function startThumbHold(e, i, cell) {
-      if (!fullRights()) return;
       if (e.button > 0) return;
       cancelThumbDrag();
-      const d = { from: i, cell, to: i, x0: e.clientX, y0: e.clientY, active: false, done: false, pointerId: e.pointerId };
+      const d = { from: i, cell, to: i, x0: e.clientX, y0: e.clientY, active: false, done: false, pointerId: e.pointerId, moved: 0, selectOnly: !fullRights() };
       d.timer = setTimeout(() => {
         d.active = true;
+        if (d.selectOnly) {
+          if (navigator.vibrate) navigator.vibrate(15);
+          return;
+        }
         cell.classList.add("lifted");
         const r = cell.getBoundingClientRect();
         const g = cell.cloneNode(true);
@@ -19176,6 +19181,8 @@
         if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > 10) cancelThumbDrag(); // war Scrollen
         return;
       }
+      d.moved = Math.max(d.moved, Math.hypot(e.clientX - d.x0, e.clientY - d.y0));
+      if (!d.ghost) return;
       d.ghost.style.left = e.clientX - d.dx + "px";
       d.ghost.style.top = e.clientY - d.dy + "px";
       grid.querySelectorAll(".drop-before,.drop-after").forEach((c) => c.classList.remove("drop-before", "drop-after"));
@@ -19195,12 +19202,21 @@
       if (!d || e.pointerId !== d.pointerId) return;
       if (!d.active) return cancelThumbDrag();
       const { from, to } = d;
+      // lange gedrueckt, aber nicht bewegt: Seite auswaehlen statt verschieben
+      const pick = e.type === "pointerup" && d.moved < 12;
       d.done = true;
       cancelThumbDrag();
       thumbDrag = { done: true };
       setTimeout(() => {
         if (thumbDrag && thumbDrag.done && !thumbDrag.cell) thumbDrag = null;
       }, 50);
+      if (pick) {
+        const id = pickIdOf(from);
+        if (pageSel) {
+          if (!pageSel.has(id)) togglePick(id);
+        } else startPageSelect(id);
+        return;
+      }
       if (e.type === "pointerup" && to !== from) movePage(from, to);
     };
     window.addEventListener("pointerup", endThumb, true);
@@ -19215,7 +19231,6 @@
     const selBar = document.getElementById("pages-select");
     const selCount = document.getElementById("pages-select-count");
     const selPdf = document.getElementById("pages-select-pdf");
-    const selBtn = document.getElementById("pages-select-btn");
     function pickIdOf(i) {
       const pg = notebook && notebook.pages[i];
       return pg ? pg.boardOf || pg.id : null;
@@ -19230,7 +19245,6 @@
     }
     function syncSelectBar() {
       selBar.classList.toggle("hidden", !pageSel);
-      document.getElementById("pages-select-idle").classList.toggle("hidden", !!pageSel);
       if (!pageSel) return;
       const n = pageSel.size;
       selCount.textContent = n ? n + " ausgewählt" : "Seiten antippen";
@@ -19273,11 +19287,6 @@
     }
     window.sofiaPageSelect = startPageSelect;
     window.sofiaExportPagesPdf = exportPagesPdf;
-    selBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (pageSel) endPageSelect();
-      else startPageSelect();
-    });
     document.getElementById("pages-select-cancel").addEventListener("click", (e) => {
       e.stopPropagation();
       endPageSelect();
@@ -19338,13 +19347,11 @@
         cell.appendChild(foot);
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (thumbDrag && thumbDrag.done) return; // Klick nach langem Druecken ignorieren
           if (pageSel) return togglePick(pickId);
-          if (thumbDrag && thumbDrag.done) return;
           activateNotebookPage(i);
         });
-        cv.addEventListener("pointerdown", (e) => {
-          if (!pageSel) startThumbHold(e, i, cell);
-        });
+        cv.addEventListener("pointerdown", (e) => startThumbHold(e, i, cell));
         cv.addEventListener("contextmenu", (e) => e.preventDefault());
         foot.querySelector(".page-thumb-menu").addEventListener("click", (e) => {
           e.stopPropagation();
