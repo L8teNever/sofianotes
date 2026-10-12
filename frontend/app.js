@@ -8989,7 +8989,24 @@
   try {
     autoAdvanceOn = localStorage.getItem("sofianotes-auto-advance") === "1";
   } catch (err) {}
-  let autoBox = null; // {x, y, w, h (Bildschirm), tx, ty (Welt), view}
+  let autoBox = null; // {x, y, w, h (Bildschirm), tx, ty (Welt), view, t (letzte Aktivitaet)}
+  // 5 s nichts geschrieben: Kasten wird langsam blasser und verschwindet. Sobald wieder
+  // geschrieben wird, ist er sofort wieder voll da.
+  const AUTO_IDLE_MS = 5000;
+  const AUTO_FADE_MS = 1200;
+  let autoFadeTimer = null;
+  function autoBoxAlpha() {
+    if (!autoBox) return 0;
+    const idle = performance.now() - autoBox.t - AUTO_IDLE_MS;
+    return idle <= 0 ? 1 : Math.max(0, 1 - idle / AUTO_FADE_MS);
+  }
+  function touchAutoBox() {
+    if (!autoBox) return;
+    autoBox.t = performance.now();
+    clearTimeout(autoFadeTimer);
+    autoFadeTimer = setTimeout(requestRedraw, AUTO_IDLE_MS + 20);
+    requestRedraw();
+  }
   function setAutoAdvance(on) {
     autoAdvanceOn = !!on;
     try {
@@ -9011,6 +9028,7 @@
   const autoViewSig = () => scale + "|" + offsetX + "|" + offsetY + "|" + viewLeft + "|" + viewRight;
   function autoAdvanceAfter(st) {
     if (!autoAdvanceOn || zoomWin || viewOnly || historyView) return;
+    touchAutoBox(); // geschrieben: ein vorhandener Kasten ist wieder voll da
     if (st.tool !== "pen" && st.tool !== "marker") return;
     if (st.locked || st.rulerEdge || st.objectKind) return;
     const b = st.bbox || makeBBox(st.points);
@@ -9048,8 +9066,8 @@
       tx = page.x + (lines ? NB_MARGIN * 0.5 : 0);
       ty = topWorld + lineH;
     }
-    autoBox = { ...box, tx, ty, view: autoViewSig() };
-    requestRedraw();
+    autoBox = { ...box, tx, ty, view: autoViewSig(), t: 0 };
+    touchAutoBox();
   }
   window.sofiaAutoBox = () => autoBox;
   function drawAutoBox() {
@@ -9059,9 +9077,13 @@
       autoBox = null;
       return;
     }
+    const alpha = autoBoxAlpha();
+    if (alpha <= 0) return; // ausgeblendet (bleibt gemerkt, bis wieder geschrieben wird)
+    if (alpha < 1) requestAnimationFrame(requestRedraw); // weiter verblassen
     const B = autoBox;
     const cx = B.x - canvasLeft;
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(cx, B.y, B.w, B.h, 12);
@@ -9075,6 +9097,7 @@
     ctx.fillRect(cx, B.y, B.w, B.h);
     ctx.restore();
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.strokeStyle = "#1A73E8";
     ctx.lineWidth = 2;
@@ -9094,6 +9117,10 @@
       if (e.pointerType === "mouse" && e.button !== 0) return;
       if (currentTool !== "pen" && currentTool !== "marker" && currentTool !== "eraser") return;
       const B = autoBox;
+      // schon (fast) verblasst: nicht springen, nur wieder einblenden
+      const visible = autoBoxAlpha() > 0.15;
+      touchAutoBox();
+      if (!visible) return;
       if (e.clientX < B.x || e.clientX > B.x + B.w || e.clientY < B.y || e.clientY > B.y + B.h) return;
       if (window.sofiaCancelViewAnim) window.sofiaCancelViewAnim();
       if (typeof endZoomLock === "function") endZoomLock();

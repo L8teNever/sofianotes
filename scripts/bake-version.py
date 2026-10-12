@@ -52,6 +52,10 @@ def main() -> int:
                 data.update(loaded)
         except Exception:
             pass
+    # deploy.sh zaehlt die Version automatisch hoch (APP_VERSION) - dann die nehmen
+    app_version = (os.environ.get("APP_VERSION") or "").strip()
+    if app_version and all(p.isdigit() for p in app_version.split(".")):
+        data["version"] = app_version
     env = (os.environ.get("GIT_COMMIT") or os.environ.get("GITHUB_SHA") or "").strip()
     commit = env if looks_like_sha(env) else sha_from_gitdir(GITDIR)
     if commit:
