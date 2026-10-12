@@ -961,24 +961,34 @@
   </div>
 </div>
 
-<!-- Sofia-Chats: schwebendes Fenster oder links/rechts angedockt -->
+<!-- Sofia-Chats: schwebendes Fenster oder links/rechts angedockt (Stil wie die Seiten-Leiste) -->
 <div id="chat-win" class="chat-win hidden" role="dialog" aria-label="Chats">
   <div id="chat-head" class="chat-head" title="Ziehen zum Verschieben, an den Rand ziehen zum Andocken">
-    <button type="button" id="chat-back" class="icon-btn hidden" title="Zurück zu den Chats"><span class="material-symbols-rounded">chevron_left</span></button>
-    <div id="chat-avatar" class="chat-avatar hidden"></div>
-    <div class="chat-head-text"><div id="chat-title" class="chat-title">Chats</div><div id="chat-subtitle" class="chat-subtitle"></div></div>
-    <button type="button" id="chat-mode" class="icon-btn" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
-    <button type="button" id="chat-close" class="icon-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    <button type="button" id="chat-back" class="chat-pill chat-round hidden" title="Zurück zu den Chats"><span class="material-symbols-rounded">arrow_back</span></button>
+    <div class="chat-pill chat-title-pill">
+      <div id="chat-avatar" class="chat-avatar hidden"></div>
+      <div class="chat-head-text"><div id="chat-title" class="chat-title">Chats</div><div id="chat-subtitle" class="chat-subtitle"></div></div>
+    </div>
+    <span class="chat-head-gap"></span>
+    <button type="button" id="chat-mode" class="chat-pill chat-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+    <button type="button" id="chat-close" class="chat-pill chat-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div id="chat-tabs" class="chat-tabs" role="tablist">
+    <button type="button" class="chat-tab active" data-filter="all">Alle</button>
+    <button type="button" class="chat-tab" data-filter="groups">Gruppen</button>
+    <button type="button" class="chat-tab" data-filter="unread">Ungelesen</button>
   </div>
   <div id="chat-list" class="chat-list"></div>
   <div id="chat-conv" class="chat-conv hidden">
     <div id="chat-msgs" class="chat-msgs"></div>
-    <div id="chat-reply" class="chat-reply hidden"><div class="chat-reply-text"><b id="chat-reply-name"></b><span id="chat-reply-prev"></span></div><button type="button" id="chat-reply-x" class="icon-btn" title="Antwort abbrechen"><span class="material-symbols-rounded">close</span></button></div>
-    <form id="chat-form" class="chat-form" autocomplete="off">
-      <button type="button" id="chat-attach" class="icon-btn" title="Bild oder Datei senden"><span class="material-symbols-rounded">attach_file</span></button>
-      <textarea id="chat-input" rows="1" placeholder="Nachricht" enterkeyhint="send"></textarea>
-      <button type="submit" id="chat-send" class="icon-btn chat-send" title="Senden"><span class="material-symbols-rounded">send</span></button>
-    </form>
+    <div class="chat-compose">
+      <div id="chat-reply" class="chat-reply hidden"><div class="chat-reply-text"><b id="chat-reply-name"></b><span id="chat-reply-prev"></span></div><button type="button" id="chat-reply-x" class="chat-round chat-flat" title="Antwort abbrechen"><span class="material-symbols-rounded">close</span></button></div>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <button type="button" id="chat-attach" class="chat-round chat-flat" title="Bild oder Datei senden"><span class="material-symbols-rounded">attach_file</span></button>
+        <textarea id="chat-input" rows="1" placeholder="Nachricht" enterkeyhint="send"></textarea>
+        <button type="submit" id="chat-send" class="chat-round chat-send" title="Senden"><span class="material-symbols-rounded">send</span></button>
+      </form>
+    </div>
   </div>
   <div id="chat-resize" class="chat-resize" title="Größe ändern"></div>
 </div>

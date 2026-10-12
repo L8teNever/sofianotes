@@ -18317,6 +18317,7 @@
     let badgeTimer = null;
     let loadingOlder = false;
     let noOlder = false;
+    let filter = "all";
 
     const el = (tag, cls, text) => {
       const e = document.createElement(tag);
@@ -18383,6 +18384,7 @@
     function applyLayout() {
       const open = !win.classList.contains("hidden");
       const docked = layout.mode === "dock";
+
       win.classList.toggle("docked", docked);
       win.classList.toggle("dock-left", docked && layout.side === "left");
       win.classList.toggle("dock-right", docked && layout.side !== "left");
@@ -18390,9 +18392,10 @@
       const H = window.innerHeight;
       if (docked) {
         const w = Math.round(Math.max(280, Math.min(W * 0.6, layout.dockW || 360)));
+        // wie die Seiten-Leiste: oben und unten 12 px Luft
         Object.assign(win.style, {
-          top: "0px",
-          height: H + "px",
+          top: "12px",
+          height: H - 24 + "px",
           width: w + "px",
           left: layout.side === "left" ? "var(--pages-inset, 0px)" : W - w + "px",
         });
@@ -18503,7 +18506,9 @@
     function renderList() {
       listEl.innerHTML = "";
       if (!convs.length) return message("Noch keine Chats in Sofia.");
-      const sorted = convs.slice().sort((a, b) => (parseUTC(b.last_message_at).getTime() || 0) - (parseUTC(a.last_message_at).getTime() || 0));
+      const shown = convs.filter((c) => (filter === "groups" ? c.is_group : filter === "unread" ? c.unread_count > 0 : true));
+      if (!shown.length) return message(filter === "unread" ? "Alles gelesen." : "Keine Gruppen.");
+      const sorted = shown.slice().sort((a, b) => (parseUTC(b.last_message_at).getTime() || 0) - (parseUTC(a.last_message_at).getTime() || 0));
       for (const c of sorted) {
         const row = el("button", "chat-row" + (c.unread_count ? " unread" : ""));
         row.type = "button";
@@ -18551,6 +18556,7 @@
       cancelReply();
       convEl.classList.add("hidden");
       listEl.classList.remove("hidden");
+      $("chat-tabs").classList.remove("hidden");
       $("chat-back").classList.add("hidden");
       $("chat-avatar").classList.add("hidden");
       $("chat-title").textContent = "Chats";
@@ -18563,12 +18569,13 @@
       messages = [];
       noOlder = false;
       listEl.classList.add("hidden");
+      $("chat-tabs").classList.add("hidden");
       convEl.classList.remove("hidden");
       $("chat-back").classList.remove("hidden");
       const av = $("chat-avatar");
       av.innerHTML = "";
       const o = others(c)[0];
-      av.appendChild(avatar(c.avatar_url || (!c.is_group && o ? o.avatar_url : ""), convTitle(c), 32));
+      av.appendChild(avatar(c.avatar_url || (!c.is_group && o ? o.avatar_url : ""), convTitle(c), 34));
       av.classList.remove("hidden");
       $("chat-title").textContent = convTitle(c);
       $("chat-subtitle").textContent = c.is_group ? (c.participants || []).length + " Personen" : "";
@@ -18617,7 +18624,8 @@
       loadingOlder = true;
       const c = current;
       try {
-        const old = await call("conversations/" + c.id + "/messages?before=" + messages[0].id);
+        const have = new Set(messages.map((m) => m.id));
+        const old = (await call("conversations/" + c.id + "/messages?before=" + messages[0].id)).filter((m) => !have.has(m.id));
         if (current !== c) return;
         if (!old.length) noOlder = true;
         else {
@@ -18629,9 +18637,16 @@
       } catch (err) {}
       loadingOlder = false;
     }
+    // unten angekommen? Dann bleibt die Ansicht unten, wenn sich die Fenstergroesse aendert
+    let stickBottom = true;
     msgsEl.addEventListener("scroll", () => {
+      stickBottom = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 60;
       if (msgsEl.scrollTop < 60) loadOlder();
     });
+    if (window.ResizeObserver)
+      new ResizeObserver(() => {
+        if (stickBottom && current) msgsEl.scrollTop = msgsEl.scrollHeight;
+      }).observe(msgsEl);
     function dayLabel(d) {
       const t = new Date();
       const y = new Date(t);
@@ -18850,6 +18865,13 @@
       $("chat-reply").classList.add("hidden");
     }
     $("chat-reply-x").addEventListener("click", cancelReply);
+    win.querySelectorAll(".chat-tab").forEach((t) =>
+      t.addEventListener("click", () => {
+        filter = t.dataset.filter;
+        win.querySelectorAll(".chat-tab").forEach((x) => x.classList.toggle("active", x === t));
+        renderList();
+      })
+    );
 
     // ---- Senden ----
     function autoGrow() {
