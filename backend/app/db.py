@@ -488,7 +488,12 @@ def _delete_sync(stroke_ids: list[str], person_id: str | None = None) -> None:
             if before:
                 _log_sync(bid, sid, person_id, before, None)
     placeholders = ",".join("?" for _ in stroke_ids)
+    # Aenderungszeit der betroffenen Blaetter mitziehen (Offline-Abgleich erkennt so auch Radiertes)
+    boards = [r[0] for r in _conn.execute(f"SELECT DISTINCT board_id FROM strokes WHERE id IN ({placeholders})", stroke_ids).fetchall() if r[0]]
     _conn.execute(f"DELETE FROM strokes WHERE id IN ({placeholders})", stroke_ids)
+    now = time.time()
+    for bid in boards:
+        _conn.execute("UPDATE boards SET updated_at = ? WHERE id = ?", (now, bid))
     _conn.commit()
 
 

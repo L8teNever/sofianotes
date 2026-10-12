@@ -4767,6 +4767,15 @@
   // nie mitten im Schreiben und nicht nach jedem einzelnen Strich.
   let saveBoardTimer = null;
   let saveBoardFor = null;
+  // Blatt-Daten (Titel, Papier, Notizbuch-Seiten, Rolle) lokal merken: so laesst es sich
+  // offline genauso oeffnen wie online (Notizbuch mit Seiten statt leerem Board)
+  function saveBoardMeta(bid) {
+    if (!window.SofiaOffline || !bid || bid !== currentBoardId || !currentBoardMeta || historyView) return;
+    const board = { ...currentBoardMeta, id: bid };
+    if (notebookBoardId === bid) board.notebook = notebook || null;
+    SofiaOffline.setKv("board:" + bid, { board, role: myRole || "owner", t: Date.now() }).catch(() => {});
+  }
+  window.sofiaSaveBoardMeta = () => saveBoardMeta(currentBoardId);
   function scheduleSaveBoard() {
     if (!currentBoardId || !window.SofiaOffline) return;
     saveBoardFor = currentBoardId;
@@ -4793,6 +4802,7 @@
     const bid = saveBoardFor;
     saveBoardFor = null;
     if (!bid || bid !== currentBoardId || !window.SofiaOffline) return;
+    saveBoardMeta(bid);
     // Stand jetzt festhalten - laeuft auch weiter, wenn man das Blatt schon verlassen hat
     const all = Array.from(boardStrokes.values());
     const job = (saveJobs.get(bid) || 0) + 1;
@@ -5181,6 +5191,7 @@
         notebook = msg.notebook || null;
         if (window.sofiaPagesChanged) window.sofiaPagesChanged(true);
         if (currentBoardMeta) currentBoardMeta.notebook = notebook;
+        saveBoardMeta(currentBoardId);
         requestRedraw();
         break;
       case "board_refs":
@@ -14151,6 +14162,124 @@
     if (!window.SofiaOffline) return;
     SofiaOffline.setKv("lib:" + currentPersonId + ":" + (currentFolderId || ""), libraryCache).catch(() => {});
   }
+  // ---- Alles offline verfuegbar: Ordner, Blaetter und ihre Bilder aufs Geraet ----
+  // Laeuft still im Hintergrund, solange Netz da ist: holt die Bibliothek aller Ordner und
+  // von jedem Blatt, das sich seit dem letzten Mal geaendert hat, Striche, Seiten und Bilder.
+  // Offline laesst sich dann jedes Blatt oeffnen und bearbeiten; Aenderungen gehen ueber
+  // die Warteschlange hoch, sobald wieder Netz da ist.
+  const offlineSync = (() => {
+    let running = false;
+    let timer = null;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const online = () => navigator.onLine !== false;
+    // Blaetter mit noch nicht hochgeladenen Aenderungen nicht ueberschreiben
+    async function pendingBoards() {
+      const ids = new Set();
+      try {
+        for (const it of await SofiaOffline.outboxEntries()) {
+          const op = it.op || {};
+          if (op.boardId) ids.add(op.boardId);
+          if (op.type === "board_create" && op.id) ids.add(op.id);
+        }
+      } catch (err) {}
+      return ids;
+    }
+    function mediaIdsOf(board, strokes) {
+      const ids = new Set();
+      const nb = board && board.notebook;
+      if (nb) {
+        for (const pg of nb.pages || []) if (pg && pg.mediaId) ids.add(pg.mediaId);
+        if (nb.template && nb.template.mediaId) ids.add(nb.template.mediaId);
+      }
+      for (const st of strokes || []) if (st && st.tool === "image" && st.extra && st.extra.mediaId) ids.add(st.extra.mediaId);
+      return ids;
+    }
+    async function syncMedia(ids) {
+      for (const id of ids) {
+        if (!online()) return false;
+        if (await SofiaOffline.getMedia(id).catch(() => null)) continue;
+        try {
+          const r = await fetch("/api/media/" + encodeURIComponent(id), { credentials: "same-origin" });
+          if (r.ok) await SofiaOffline.putMedia(id, await r.blob());
+        } catch (err) {
+          return false;
+        }
+      }
+      return true;
+    }
+    async function syncBoard(entry, pending) {
+      const id = entry.id;
+      if (pending.has(id)) return;
+      const stamp = String(entry.updatedAt || "");
+      const had = await SofiaOffline.getKv("synced:" + id).catch(() => null);
+      if (had && had.stamp === stamp) return;
+      let snap;
+      try {
+        snap = await api("/api/boards/" + encodeURIComponent(id) + "/snapshot");
+      } catch (err) {
+        return;
+      }
+      if (!snap || !snap.board) return;
+      // das offene Blatt haelt seinen Stand selbst aktuell (ueber die Verbindung)
+      if (id !== currentBoardId) {
+        await SofiaOffline.setStrokes(id, JSON.stringify(snap.strokes || [])).catch(() => {});
+        const b = snap.board;
+        const role = b.ownerId === currentPersonId ? "owner" : (b.shareRoles && b.shareRoles[currentPersonId]) || "edit";
+        await SofiaOffline.setKv("board:" + id, { board: b, role, t: Date.now() }).catch(() => {});
+      }
+      if (!(await syncMedia(mediaIdsOf(snap.board, snap.strokes)))) return;
+      await SofiaOffline.setKv("synced:" + id, { stamp, t: Date.now() }).catch(() => {});
+    }
+    async function run() {
+      if (running || !window.SofiaOffline || !currentPersonId || !online()) return;
+      running = true;
+      try {
+        // Speicher als dauerhaft markieren, damit iOS ihn nicht von selbst leert
+        if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+        const root = await fetchLibrary(null);
+        const libs = [root];
+        const folderIds = ((root && root.allFolders) || []).map((f) => f.id);
+        for (let i = 0; i < folderIds.length; i += 4) {
+          if (!online()) return;
+          const got = await Promise.all(folderIds.slice(i, i + 4).map((fid) => fetchLibrary(fid).catch(() => null)));
+          for (const l of got) if (l) libs.push(l);
+        }
+        const seen = new Set();
+        const boards = [];
+        for (const l of libs) {
+          for (const b of l.boards || []) {
+            if (!b || !b.id || seen.has(b.id)) continue;
+            seen.add(b.id);
+            boards.push(b);
+          }
+        }
+        // zuletzt geaenderte zuerst
+        boards.sort((x, y) => (y.updatedAt || 0) - (x.updatedAt || 0));
+        const pending = await pendingBoards();
+        for (const b of boards) {
+          if (!online() || !currentPersonId) return;
+          await syncBoard(b, pending);
+          await sleep(60); // Zeichnen und Verbindung nicht ausbremsen
+        }
+        await SofiaOffline.setKv("offline-sync", { t: Date.now(), boards: boards.length }).catch(() => {});
+      } catch (err) {
+        // naechster Versuch beim naechsten Mal
+      } finally {
+        running = false;
+      }
+    }
+    function schedule(ms) {
+      clearTimeout(timer);
+      timer = setTimeout(run, ms);
+    }
+    // nach dem Start, regelmaessig und wenn das Netz wiederkommt
+    schedule(8000);
+    setInterval(() => run(), 10 * 60 * 1000);
+    window.addEventListener("online", () => schedule(4000));
+    return { run, schedule };
+  })();
+  window.sofiaOfflineSync = () => offlineSync.run();
+
   // ---- Sofia: aktuelles Fach aus dem Stundenplan ----------------------------
   let sofiaNow = null;
   let sofiaNowTimer = null;
@@ -16055,8 +16184,10 @@
       } else setConnState("offline");
       return;
     }
+    let local = null;
     if (window.SofiaOffline) {
-      const local = await SofiaOffline.getStrokes(id);
+      local = await SofiaOffline.getStrokes(id).catch(() => null);
+      if (currentBoardId !== id) return;
       if (local && local.length) applyStrokeList(local);
     }
     requestRedraw();
@@ -16065,6 +16196,17 @@
       await flushOutbox();
       connectWS();
     } else {
+      if (currentBoardId !== id) return;
+      // offline: Blatt aus dem lokalen Speicher aufbauen wie nach dem Verbinden
+      // (Titel, Papier, Notizbuch-Seiten, zuletzt angesehene Stelle)
+      const meta = window.SofiaOffline ? await SofiaOffline.getKv("board:" + id).catch(() => null) : null;
+      if (currentBoardId !== id) return;
+      if (meta && meta.board) {
+        // was seit dem Laden schon lokal dazukam (z.B. waehrend des Wartens geschrieben), bleibt
+        const merged = new Map((local || []).map((st) => [st.id, st]));
+        for (const st of boardStrokes.values()) merged.set(st.id, st);
+        handleMessage({ type: "init", clientId: myClientId, color: myColor, board: { ...meta.board, id }, role: meta.role || "owner", strokes: Array.from(merged.values()), offline: true });
+      }
       setConnState("offline");
     }
   }
@@ -16892,8 +17034,16 @@
     try {
       const r = await api("/api/people");
       PEOPLE = r.people || [];
+      try {
+        localStorage.setItem("sofianotes-people", JSON.stringify(PEOPLE));
+      } catch (e) {}
     } catch (err) {
-      // offline oder Fehler: alte Liste behalten
+      // offline oder Fehler: alte Liste behalten (nach einem Offline-Start die gemerkte)
+      if (!PEOPLE || !PEOPLE.length) {
+        try {
+          PEOPLE = JSON.parse(localStorage.getItem("sofianotes-people") || "[]") || [];
+        } catch (e) {}
+      }
     }
   }
 
@@ -18081,6 +18231,7 @@
       if (opts && opts.moveStrokes) moveStrokesWithPages(pageRects(before), pageRects(next));
       notebook = next;
       if (currentBoardMeta) currentBoardMeta.notebook = next;
+      if (window.sofiaSaveBoardMeta) window.sofiaSaveBoardMeta();
       requestRedraw();
       if (window.sofiaPagesChanged) window.sofiaPagesChanged(true);
       renderNbSettings();
@@ -21501,10 +21652,28 @@
     showGate("Lädt…", "", { loading: true });
     try {
       let me;
+      let startedOffline = false;
+      let failMsg = "";
       try {
-        me = await bootWait(api("/api/me"), 10000);
+        me = await bootWait(api("/api/me"), navigator.onLine === false ? 2500 : 10000);
+        try {
+          localStorage.setItem("sofianotes-me", JSON.stringify({ id: me.id, isAdmin: !!me.isAdmin, name: me.name || "" }));
+        } catch (e) {}
       } catch (err) {
-        const msg = String(err && err.message);
+        const msg = (failMsg = String(err && err.message));
+        // ohne Netz (oder Server weg): mit dem zuletzt angemeldeten Konto weiter - alle
+        // Ordner und Blaetter liegen lokal; abgeglichen wird, sobald wieder Netz da ist
+        let cached = null;
+        try {
+          cached = JSON.parse(localStorage.getItem("sofianotes-me") || "null");
+        } catch (e) {}
+        if (msg !== "401" && msg !== "403" && cached && cached.id) {
+          me = cached;
+          startedOffline = true;
+        }
+      }
+      if (!me) {
+        const msg = failMsg;
         if (msg === "401") {
           showGate("Nicht angemeldet", "Bitte über den regulären Zugangslink erneut anmelden (Cloudflare Access).");
         } else if (msg === "403") {
@@ -21518,6 +21687,7 @@
       }
       currentPersonId = me.id;
       isAdmin = !!me.isAdmin;
+      if (startedOffline) setConnState("offline");
       document.getElementById("set-nav-people")?.classList.toggle("hidden", !isAdmin);
       localStorage.setItem("sofianotes-person", currentPersonId);
       const startParams = new URLSearchParams(location.search);
