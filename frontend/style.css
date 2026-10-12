@@ -4394,8 +4394,8 @@ body:not(.pages-open) #btn-split { animation: bar-fade 0.3s ease; }
 .tbm-view small { display: block; font: 500 12px/1.3 'Google Sans', 'Inter', sans-serif; color: #3a5a9c; }
 .tbm-view:hover { background: #c4d8fb; }
 #tb-more-menu.tb-more-menu { max-height: calc(100vh - 90px); overflow-y: auto; }
-/* Zurueck liegt im Zahnrad-Menue: eigener Knopf weg (bei offener Seiten-Leiste bleibt das ⋯) */
-body.back-in-menu:not(.pages-open) #top-back-bar { display: none; }
+/* Zurueck liegt im Zahnrad-Menue: eigener Knopf weg - auch ueber der offenen Seiten-Leiste */
+body.back-in-menu #top-back-bar { display: none; }
 #canvas-menu-leave { border-top: 1px solid rgba(0, 0, 0, 0.08) !important; margin-top: 4px; color: #b3261e; }
 #canvas-menu-leave .material-symbols-rounded { color: #b3261e; }
 
