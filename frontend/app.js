@@ -18239,23 +18239,82 @@
     findBoardHome();
   });
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
+  // Aufbau wie der Stundenplan in Sofia: Tag/Woche, Doppelstunden als ein Block,
+  // Antippen einer Stunde oeffnet alle Infos.
   (() => {
     const backdrop = document.getElementById("timetable-backdrop");
     const body = document.getElementById("tt-body");
-    if (!backdrop || !body) return;
+    const lessonBackdrop = document.getElementById("tt-lesson-backdrop");
+    const lessonBody = document.getElementById("tt-lesson-body");
+    if (!backdrop || !body || !lessonBackdrop) return;
     const TT_KEY = "sofianotes-timetable";
+    const MODE_KEY = "sofianotes-tt-mode";
+    const COLORS = ["#eaddff", "#d3e3fd", "#c4eed0", "#ffdec1", "#ffd8e4", "#e8def8", "#cfe2ff"];
+    const COLORS_DARK = ["#4a4063", "#2f4a6e", "#2d5a3c", "#6b4a2a", "#6b3a4c", "#4d4459", "#34507a"];
+    const DAYS_S = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+    const DAYS_L = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
+    const MONTHS = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+    const PX_PER_MIN = 1.4;
+    const MIN_BLOCK_H = 34;
     let data = null;
-    let week = 0;
     let offline = false;
-    const DAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+    let mode = "day";
+    let dayOffset = 0;
+    let weekOffset = 0;
+    let colorMap = {};
+    let nowTimer = null;
+    try {
+      mode = localStorage.getItem(MODE_KEY) === "week" ? "week" : "day";
+    } catch (err) {}
+
+    const today = () => {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      return d;
+    };
+    const addDays = (d, n) => {
+      const r = new Date(d);
+      r.setDate(r.getDate() + n);
+      return r;
+    };
     const ymd = (d) => d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
-    const parseYmd = (v) => new Date(Number(v.slice(0, 4)), Number(v.slice(4, 6)) - 1, Number(v.slice(6, 8)));
+    const toMin = (hhmm) => {
+      const [h, m] = String(hhmm || "0:0").split(":");
+      return Number(h) * 60 + Number(m);
+    };
+    const thisMonday = () => {
+      const t = today();
+      const dow = t.getDay();
+      return addDays(t, dow === 0 ? -6 : 1 - dow);
+    };
     const el = (tag, cls, text) => {
       const e = document.createElement(tag);
       if (cls) e.className = cls;
       if (text != null) e.textContent = text;
       return e;
     };
+    const lessons = () => ((data && data.weeks) || []).flatMap((w) => w.lessons || []);
+    const holidayFor = (d) => ((data && data.holidays) || []).find((h) => d >= h.start && d <= h.end) || null;
+    const colorOf = (l) => {
+      const i = colorMap[l.short || l.subject];
+      const pal = document.documentElement.getAttribute("data-theme") === "dark" ? COLORS_DARK : COLORS;
+      return pal[(i == null ? 0 : i) % pal.length];
+    };
+    // Doppelstunde: gleiches Fach direkt hintereinander (hoechstens 5 Min. Pause) -> ein Block
+    function mergeDoubles(list) {
+      const out = [];
+      for (const l of list) {
+        const cur = out[out.length - 1];
+        if (cur && l.short && l.short === cur.short && l.date === cur.date && toMin(l.start) - toMin(cur.end) <= 5 && !l.cancelled && !cur.cancelled) {
+          out[out.length - 1] = { ...cur, end: l.end, double: true };
+        } else out.push({ ...l });
+      }
+      return out;
+    }
+    const lessonsOn = (d) => mergeDoubles(lessons().filter((l) => l.date === d).sort((a, b) => toMin(a.start) - toMin(b.start)));
+    const changedRoom = (l) => l.originalRoom && l.originalRoom !== l.room;
+    const changedTeacher = (l) => l.originalTeacher && l.originalTeacher !== l.teacher;
+
     function message(icon, text) {
       body.innerHTML = "";
       const m = el("div", "tt-msg");
@@ -18263,104 +18322,216 @@
       m.appendChild(el("p", "", text));
       body.appendChild(m);
     }
-    function lessonCard(l, now, past) {
-      const c = el("div", "tt-lesson" + (l.cancelled ? " cancelled" : l.substituted || l.originalRoom || l.originalTeacher ? " changed" : "") + (now ? " now" : "") + (past ? " past" : ""));
-      c.appendChild(el("div", "tt-subj", l.subject || l.short || "?"));
-      const meta = el("div", "tt-meta");
-      const part = (cur, orig) => {
-        const span = el("span", "");
-        if (orig && orig !== cur) {
-          span.appendChild(el("s", "", orig));
-          span.appendChild(document.createTextNode(" → "));
-        }
-        span.appendChild(document.createTextNode(cur || "–"));
-        return span;
-      };
-      meta.appendChild(part(l.room, l.originalRoom));
-      meta.appendChild(document.createTextNode(" · "));
-      meta.appendChild(part(l.teacher, l.originalTeacher));
-      c.appendChild(meta);
-      if (l.cancelled) c.appendChild(el("div", "tt-tag", "Entfällt"));
-      else if (l.substituted) c.appendChild(el("div", "tt-tag", "Vertretung"));
-      if (l.replaces) c.appendChild(el("div", "tt-info", "statt " + l.replaces));
-      if (l.info) c.appendChild(el("div", "tt-info", l.info));
-      c.title = [l.subject, l.start + "–" + l.end, l.room, l.teacher, l.cancelled ? "Entfällt" : "", l.replaces ? "statt " + l.replaces : "", l.info].filter(Boolean).join(" · ");
-      return c;
+    function chip(text, cls) {
+      return el("span", "tt-chip-s" + (cls ? " " + cls : ""), text);
     }
+    function nowLine(now) {
+      const row = el("div", "tt-nowline");
+      row.appendChild(el("i"));
+      row.appendChild(el("span", "", "Jetzt · " + String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0")));
+      row.appendChild(el("i"));
+      return row;
+    }
+
+    function renderDay() {
+      const d = addDays(today(), dayOffset);
+      const isToday = dayOffset === 0;
+      const isPast = d < today();
+      const now = new Date();
+      const nowMin = isToday ? now.getHours() * 60 + now.getMinutes() : null;
+      document.getElementById("tt-sub").textContent = (isToday ? "Heute" : DAYS_L[d.getDay()]) + ", " + d.getDate() + ". " + MONTHS[d.getMonth()];
+      const ds = ymd(d);
+      const list = lessonsOn(ds);
+      const wrap = el("div", "tt-day-list");
+      const holiday = holidayFor(ds);
+      if (!list.length) {
+        const m = el("div", "tt-msg");
+        m.appendChild(el("span", "material-symbols-rounded", holiday ? "beach_access" : "celebration"));
+        m.appendChild(el("p", "", holiday ? "Ferien – " + holiday.name : "Kein Unterricht"));
+        return body.appendChild(m);
+      }
+      let lineDone = nowMin === null;
+      list.forEach((l, i) => {
+        const prev = list[i - 1];
+        if (prev) {
+          const gap = toMin(l.start) - toMin(prev.end);
+          if (gap > 5) {
+            const p = el("div", "tt-pause");
+            p.appendChild(el("i"));
+            p.appendChild(el("span", "", "Pause · " + (gap >= 60 ? Math.floor(gap / 60) + "h" + (gap % 60 ? " " + (gap % 60) + " min" : "") : gap + " min")));
+            p.appendChild(el("i"));
+            wrap.appendChild(p);
+          }
+        }
+        if (!lineDone && nowMin < toMin(l.end)) {
+          wrap.appendChild(nowLine(now));
+          lineDone = true;
+        }
+        const past = isPast || (nowMin !== null && toMin(l.end) <= nowMin);
+        const card = el("button", "tt-card" + (l.cancelled ? " cancelled" : "") + (past ? " past" : "") + (l.double ? " double" : ""));
+        card.type = "button";
+        if (!l.cancelled) card.style.background = past ? "" : colorOf(l);
+        const time = el("div", "tt-card-time");
+        time.appendChild(el("b", "", l.start));
+        time.appendChild(el("span", "", "–"));
+        time.appendChild(el("b", "", l.end));
+        card.appendChild(time);
+        const mid = el("div", "tt-card-mid");
+        mid.appendChild(el("div", "tt-card-subj", l.subject || "–"));
+        const chips = el("div", "tt-card-chips");
+        if (changedTeacher(l)) chips.appendChild(chip(l.originalTeacher + " → " + (l.teacher || "–"), "warn"));
+        else if (l.teacher) chips.appendChild(chip(l.teacher));
+        if (changedRoom(l)) chips.appendChild(chip(l.originalRoom + " → " + (l.room || "–"), "warn"));
+        else if (l.room) chips.appendChild(chip(l.room));
+        mid.appendChild(chips);
+        if (l.replaces) mid.appendChild(el("div", "tt-card-note", "statt " + l.replaces));
+        if (l.info) mid.appendChild(el("div", "tt-card-note", l.info));
+        card.appendChild(mid);
+        if (l.double) card.appendChild(chip("2×", "badge"));
+        if (l.cancelled) card.appendChild(chip("Ausfall", "badge bad"));
+        if (l.substituted) card.appendChild(chip("Vertr.", "badge warn"));
+        card.addEventListener("click", () => openLesson(l));
+        wrap.appendChild(card);
+      });
+      if (!lineDone) wrap.appendChild(nowLine(now));
+      body.appendChild(wrap);
+    }
+
+    function renderWeek() {
+      const monday = addDays(thisMonday(), weekOffset * 7);
+      const friday = addDays(monday, 4);
+      document.getElementById("tt-sub").textContent = monday.getDate() + ". – " + friday.getDate() + ". " + MONTHS[friday.getMonth()];
+      const todayStr = ymd(today());
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const days = Array.from({ length: 5 }, (_, i) => addDays(monday, i));
+      const perDay = days.map((d) => lessonsOn(ymd(d)));
+      const all = perDay.flat();
+      let minStart = all.length ? Math.min(...all.map((l) => toMin(l.start))) : 8 * 60;
+      let maxEnd = all.length ? Math.max(...all.map((l) => toMin(l.end))) : 16 * 60;
+      minStart = Math.floor(minStart / 60) * 60;
+      maxEnd = Math.max(Math.ceil(maxEnd / 60) * 60, minStart + 60);
+      const H = (maxEnd - minStart) * PX_PER_MIN;
+      const grid = el("div", "tt-week");
+      grid.appendChild(el("div"));
+      for (const d of days) {
+        const ds = ymd(d);
+        const h = el("div", "tt-week-head" + (ds === todayStr ? " today" : ""), DAYS_S[d.getDay()] + " " + d.getDate() + ".");
+        if (holidayFor(ds)) h.appendChild(el("div", "tt-week-hol", "Ferien"));
+        grid.appendChild(h);
+      }
+      const axis = el("div", "tt-axis");
+      axis.style.height = H + "px";
+      for (let m = minStart; m <= maxEnd; m += 60) {
+        const t = el("div", "", String(Math.floor(m / 60)));
+        t.style.top = (m - minStart) * PX_PER_MIN - 5 + "px";
+        axis.appendChild(t);
+      }
+      grid.appendChild(axis);
+      days.forEach((d, di) => {
+        const ds = ymd(d);
+        const col = el("div", "tt-col" + (holidayFor(ds) ? " holiday" : ""));
+        col.style.height = H + "px";
+        for (let m = minStart; m <= maxEnd; m += 60) {
+          const line = el("div", "tt-hour");
+          line.style.top = (m - minStart) * PX_PER_MIN + "px";
+          col.appendChild(line);
+        }
+        const dayPast = d < today();
+        const isToday = ds === todayStr;
+        for (const l of perDay[di]) {
+          const top = (toMin(l.start) - minStart) * PX_PER_MIN;
+          const height = Math.max((toMin(l.end) - toMin(l.start)) * PX_PER_MIN, MIN_BLOCK_H);
+          const past = dayPast || (isToday && toMin(l.end) <= nowMin);
+          const b = el("button", "tt-block" + (l.cancelled ? " cancelled" : "") + (l.substituted && !l.cancelled ? " subst" : "") + (past ? " past" : ""));
+          b.type = "button";
+          b.style.top = top + "px";
+          b.style.height = height + "px";
+          if (!l.cancelled && !past) b.style.background = colorOf(l);
+          const name = el("div", "tt-block-name", l.short || l.subject || "–");
+          if (l.double) name.appendChild(el("small", "", " 2×"));
+          if (l.substituted) name.appendChild(el("small", "", " ↻"));
+          b.appendChild(name);
+          if (height >= 44) b.appendChild(el("div", "tt-block-sub", (l.cancelled ? "Ausfall · " : l.replaces ? "statt " + l.replaces + " · " : "") + l.start + "–" + l.end));
+          if (height >= 60 && !l.cancelled && l.room) b.appendChild(el("div", "tt-block-room" + (changedRoom(l) ? " warn" : ""), changedRoom(l) ? l.originalRoom + "→" + l.room : l.room));
+          b.addEventListener("click", () => openLesson(l));
+          col.appendChild(b);
+        }
+        if (isToday && nowMin >= minStart && nowMin <= maxEnd) {
+          const n = el("div", "tt-now");
+          n.style.top = (nowMin - minStart) * PX_PER_MIN + "px";
+          col.appendChild(n);
+        }
+        grid.appendChild(col);
+      });
+      body.appendChild(grid);
+    }
+
+    function openLesson(l) {
+      lessonBody.innerHTML = "";
+      const head = el("div", "tt-l-head");
+      const icon = el("div", "tt-l-icon");
+      icon.style.background = l.cancelled ? "" : colorOf(l);
+      if (l.cancelled) icon.classList.add("cancelled");
+      icon.appendChild(el("span", "material-symbols-rounded", "menu_book"));
+      head.appendChild(icon);
+      head.appendChild(el("div", "tt-l-title" + (l.cancelled ? " cancelled" : ""), l.subject || "–"));
+      head.appendChild(el("div", "tt-l-time", l.start + " – " + l.end + " Uhr"));
+      const badges = el("div", "tt-l-badges");
+      if (l.double) badges.appendChild(chip("2× Doppelstunde", "badge"));
+      if (l.cancelled) badges.appendChild(chip("Ausfall", "badge bad"));
+      if (l.substituted) badges.appendChild(chip("Vertretung", "badge warn"));
+      if (badges.childNodes.length) head.appendChild(badges);
+      lessonBody.appendChild(head);
+      const rows = el("div", "tt-l-rows");
+      const row = (label, value) => {
+        const r = el("div", "tt-l-row");
+        r.appendChild(el("span", "", label));
+        r.appendChild(el("b", "", value));
+        rows.appendChild(r);
+      };
+      if (changedTeacher(l)) row("Lehrkraft", l.originalTeacher + " → " + (l.teacher || "–"));
+      else if (l.teacher) row("Lehrkraft", l.teacher);
+      if (changedRoom(l)) row("Raum", l.originalRoom + " → " + (l.room || "–"));
+      else if (l.room) row("Raum", l.room);
+      if (rows.childNodes.length) lessonBody.appendChild(rows);
+      if (l.replaces) lessonBody.appendChild(el("div", "tt-l-note muted", "Ersetzt: " + l.replaces));
+      if (l.info) lessonBody.appendChild(el("div", "tt-l-note", l.info));
+      lessonBackdrop.classList.remove("hidden");
+    }
+    const closeLesson = () => lessonBackdrop.classList.add("hidden");
+
     function render() {
-      backdrop.querySelectorAll(".tt-weeks .page-menu-seg-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.week) === week));
+      backdrop.querySelectorAll(".tt-chip").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+      body.innerHTML = "";
+      document.getElementById("tt-sub").textContent = "";
       if (!data) return message("progress_activity", "Stundenplan wird geladen …");
       if (data.enabled === false) return message("block", "Die Verbindung zu Sofia ist auf diesem Server nicht eingerichtet.");
       if (data.linked === false) return message("person", "Dein Konto ist noch nicht mit Sofia verbunden.");
       if (data.configured === false) return message("block", "In Sofia ist für deine Klasse noch kein Stundenplan eingerichtet.");
       if (data.error && !data.weeks) return message("sync_problem", "Stundenplan gerade nicht erreichbar.");
-      const w = (data.weeks || [])[week];
-      if (!w) return message("block", "Kein Stundenplan für diese Woche.");
-      const monday = w.start ? parseYmd(w.start) : null;
-      const days = [];
-      for (let i = 0; i < 5; i++) days.push(monday ? ymd(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)) : "");
-      // nur Montag bis Freitag - Samstag/Sonntag nie, auch wenn dort etwas eingetragen ist
-      const weekday = (d) => {
-        const wd = parseYmd(d).getDay();
-        return wd !== 0 && wd !== 6;
-      };
-      for (const l of w.lessons) if (l.date && !days.includes(l.date) && weekday(l.date)) days.push(l.date);
-      days.sort();
-      const slots = [];
-      for (const l of w.lessons) if (days.includes(l.date) && !slots.some((x) => x.start === l.start && x.end === l.end)) slots.push({ start: l.start, end: l.end });
-      slots.sort((a, b) => (a.start + a.end).localeCompare(b.start + b.end));
-      const holidayOf = (d) => (data.holidays || []).find((h) => h.start <= d && d <= h.end);
-      const today = data.today || ymd(new Date());
-      const n = new Date();
-      const hm = String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
-      body.innerHTML = "";
       if (offline) body.appendChild(el("div", "tt-summary", "Offline – zuletzt geladener Stand"));
-      if (!w.lessons.length && !days.some(holidayOf)) return body.appendChild(el("div", "tt-msg", "Keine Stunden in dieser Woche."));
-      const scroller = el("div", "tt-scroll");
-      const grid = el("div", "tt-grid");
-      grid.style.gridTemplateColumns = "auto repeat(" + days.length + ", minmax(116px, 1fr))";
-      grid.appendChild(el("div", "tt-corner"));
-      for (const d of days) {
-        const dt = parseYmd(d);
-        const h = el("div", "tt-day" + (d === today ? " today" : ""));
-        h.appendChild(el("b", "", DAYS[dt.getDay()]));
-        h.appendChild(document.createTextNode(" " + dt.getDate() + "." + (dt.getMonth() + 1) + "."));
-        grid.appendChild(h);
+      colorMap = {};
+      let ci = 0;
+      for (const l of lessons()) {
+        const k = l.short || l.subject;
+        if (k && colorMap[k] == null) colorMap[k] = ci++;
       }
-      slots.forEach((slot, si) => {
-        const t = el("div", "tt-time");
-        t.appendChild(el("b", "", slot.start));
-        t.appendChild(el("span", "", slot.end));
-        grid.appendChild(t);
-        days.forEach((d) => {
-          const hol = holidayOf(d);
-          if (hol) {
-            if (si === 0) {
-              const c = el("div", "tt-holiday", hol.name);
-              c.style.gridRow = "span " + slots.length;
-              grid.appendChild(c);
-            }
-            return;
-          }
-          const cell = el("div", "tt-cell" + (d === today ? " today" : ""));
-          for (const l of w.lessons) {
-            if (l.date !== d || l.start !== slot.start || l.end !== slot.end) continue;
-            // schon vorbei: frueherer Tag oder heute nach Stundenende -> grau
-            const past = d < today || (d === today && l.end <= hm);
-            cell.appendChild(lessonCard(l, d === today && l.start <= hm && hm < l.end, past));
-          }
-          grid.appendChild(cell);
-        });
-      });
-      scroller.appendChild(grid);
-      body.appendChild(scroller);
-      // heute sichtbar (schmale Bildschirme scrollen seitwaerts)
-      const todayHead = grid.querySelector(".tt-day.today");
-      const timeCol = grid.querySelector(".tt-corner");
-      if (todayHead) {
-        const gx = grid.getBoundingClientRect().left;
-        scroller.scrollLeft = Math.max(0, todayHead.getBoundingClientRect().left - gx - (timeCol ? timeCol.offsetWidth + 6 : 0));
-      }
+      if (mode === "day") renderDay();
+      else renderWeek();
+      document.getElementById("tt-prev").disabled = mode === "week" && weekOffset <= 0;
+      document.getElementById("tt-next").disabled = mode === "week" && weekOffset >= 1;
+    }
+    function shiftDay(dir) {
+      dayOffset += dir;
+      const dow = addDays(today(), dayOffset).getDay();
+      if (dow === 0) dayOffset += dir > 0 ? 1 : -2;
+      else if (dow === 6) dayOffset += dir > 0 ? 2 : -1;
+    }
+    function nav(dir) {
+      if (mode === "day") shiftDay(dir);
+      else weekOffset = Math.max(0, Math.min(1, weekOffset + dir));
+      render();
     }
     async function load() {
       try {
@@ -18385,18 +18556,18 @@
       if (!backdrop.classList.contains("hidden")) render();
     }
     function open() {
-      week = 0;
-      // Wochenende: gleich die naechste Woche zeigen
-      const wd = new Date().getDay();
-      if ((wd === 6 || wd === 0) && data && data.weeks && data.weeks[1]) week = 1;
+      // heute, am Wochenende der naechste Montag; Woche: die aktuelle (Wochenende: naechste)
+      const dow = today().getDay();
+      dayOffset = dow === 0 ? 1 : dow === 6 ? 2 : 0;
+      weekOffset = dow === 0 || dow === 6 ? 1 : 0;
       backdrop.classList.remove("hidden");
       render();
-      load().then(() => {
-        if ((wd === 6 || wd === 0) && week === 0 && data && data.weeks && data.weeks[1]) {
-          week = 1;
-          render();
-        }
-      });
+      load();
+      clearInterval(nowTimer);
+      nowTimer = setInterval(() => {
+        if (backdrop.classList.contains("hidden")) return clearInterval(nowTimer);
+        if (lessonBackdrop.classList.contains("hidden")) render();
+      }, 60000);
     }
     window.sofiaOpenTimetable = open;
     document.getElementById("canvas-menu-timetable")?.addEventListener("click", (e) => {
@@ -18404,19 +18575,46 @@
       closeCanvasMenus();
       open();
     });
-    backdrop.querySelectorAll(".tt-weeks .page-menu-seg-btn").forEach((b) =>
+    backdrop.querySelectorAll(".tt-chip").forEach((b) =>
       b.addEventListener("click", () => {
-        week = Number(b.dataset.week) || 0;
+        mode = b.dataset.mode === "week" ? "week" : "day";
+        try {
+          localStorage.setItem(MODE_KEY, mode);
+        } catch (err) {}
         render();
       })
     );
-    const close = () => backdrop.classList.add("hidden");
+    document.getElementById("tt-prev")?.addEventListener("click", () => nav(-1));
+    document.getElementById("tt-next")?.addEventListener("click", () => nav(1));
+    // Wischen wie in Sofia: links/rechts blaettert Tag bzw. Woche
+    let swipe = null;
+    body.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 1) swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }, { passive: true });
+    body.addEventListener("touchend", (e) => {
+      if (!swipe || !e.changedTouches.length) return;
+      const dx = e.changedTouches[0].clientX - swipe.x;
+      const dy = e.changedTouches[0].clientY - swipe.y;
+      swipe = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) nav(dx < 0 ? 1 : -1);
+    }, { passive: true });
+    const close = () => {
+      closeLesson();
+      backdrop.classList.add("hidden");
+      clearInterval(nowTimer);
+    };
     document.getElementById("btn-tt-close")?.addEventListener("click", close);
+    document.getElementById("btn-tt-lesson-close")?.addEventListener("click", closeLesson);
     backdrop.addEventListener("click", (e) => {
       if (e.target === backdrop) close();
     });
+    lessonBackdrop.addEventListener("click", (e) => {
+      if (e.target === lessonBackdrop) closeLesson();
+    });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !backdrop.classList.contains("hidden")) close();
+      if (e.key !== "Escape") return;
+      if (!lessonBackdrop.classList.contains("hidden")) closeLesson();
+      else if (!backdrop.classList.contains("hidden")) close();
     });
   })();
   document.getElementById("canvas-menu-download")?.addEventListener("click", () => {
