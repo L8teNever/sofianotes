@@ -18263,8 +18263,8 @@
       m.appendChild(el("p", "", text));
       body.appendChild(m);
     }
-    function lessonCard(l, now) {
-      const c = el("div", "tt-lesson" + (l.cancelled ? " cancelled" : l.substituted || l.originalRoom || l.originalTeacher ? " changed" : "") + (now ? " now" : ""));
+    function lessonCard(l, now, past) {
+      const c = el("div", "tt-lesson" + (l.cancelled ? " cancelled" : l.substituted || l.originalRoom || l.originalTeacher ? " changed" : "") + (now ? " now" : "") + (past ? " past" : ""));
       c.appendChild(el("div", "tt-subj", l.subject || l.short || "?"));
       const meta = el("div", "tt-meta");
       const part = (cur, orig) => {
@@ -18308,15 +18308,7 @@
       const n = new Date();
       const hm = String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
       body.innerHTML = "";
-      const cancelled = w.lessons.filter((l) => l.cancelled).length;
-      const changed = w.lessons.filter((l) => !l.cancelled && (l.substituted || l.originalRoom || l.originalTeacher)).length;
-      const sum = el("div", "tt-summary");
-      sum.textContent =
-        (cancelled ? cancelled + (cancelled === 1 ? " Stunde fällt aus" : " Stunden fallen aus") : "Kein Ausfall") +
-        (changed ? " · " + changed + (changed === 1 ? " Änderung" : " Änderungen") : "") +
-        (offline ? " · offline, letzter Stand" : "");
-      if (cancelled) sum.classList.add("has-cancel");
-      body.appendChild(sum);
+      if (offline) body.appendChild(el("div", "tt-summary", "Offline – zuletzt geladener Stand"));
       if (!w.lessons.length && !days.some(holidayOf)) return body.appendChild(el("div", "tt-msg", "Keine Stunden in dieser Woche."));
       const scroller = el("div", "tt-scroll");
       const grid = el("div", "tt-grid");
@@ -18347,7 +18339,9 @@
           const cell = el("div", "tt-cell" + (d === today ? " today" : ""));
           for (const l of w.lessons) {
             if (l.date !== d || l.start !== slot.start || l.end !== slot.end) continue;
-            cell.appendChild(lessonCard(l, d === today && l.start <= hm && hm < l.end));
+            // schon vorbei: frueherer Tag oder heute nach Stundenende -> grau
+            const past = d < today || (d === today && l.end <= hm);
+            cell.appendChild(lessonCard(l, d === today && l.start <= hm && hm < l.end, past));
           }
           grid.appendChild(cell);
         });
