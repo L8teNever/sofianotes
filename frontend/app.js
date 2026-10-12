@@ -19083,7 +19083,24 @@
     },
   };
   // Countdown-Knopf voruebergehend weg (Feld oder Tagesplan ist aus ihm "herausgewachsen")
-  window.sofiaSchoolBtnAway = (away) => document.getElementById("btn-school")?.classList.toggle("morph-away", !!away);
+  // weg = Pille schrumpft (kein leerer Platz); ghost = wieder da, aber noch unsichtbar (zum Ausmessen)
+  window.sofiaSchoolBtnAway = (away, ghost) => {
+    const b = document.getElementById("btn-school");
+    if (!b) return;
+    b.classList.toggle("morph-away", !!away);
+    b.classList.toggle("morph-ghost", !!ghost);
+    try {
+      layoutTopBar();
+    } catch (err) {}
+  };
+  // Knopf fuer die Rueckverwandlung wieder einblenden (unsichtbar) und seinen Platz liefern
+  window.sofiaSchoolBtnTarget = () => {
+    const b = document.getElementById("btn-school");
+    if (!b || b.classList.contains("hidden")) return null;
+    window.sofiaSchoolBtnAway(false, true);
+    const r = b.getBoundingClientRect();
+    return r.width ? r : null;
+  };
 
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
   // Aufbau wie der Stundenplan in Sofia: Tag/Woche, Doppelstunden als ein Block,
@@ -19470,8 +19487,7 @@
       }
     }
     function closeSide() {
-      const btnS = document.getElementById("btn-school");
-      const target = btnS && !btnS.classList.contains("hidden") ? btnS.getBoundingClientRect() : null;
+      const target = window.sofiaSchoolBtnTarget ? window.sofiaSchoolBtnTarget() : null;
       const finish = () => {
         sideWanted = false;
         placeSide();
@@ -22027,13 +22043,17 @@
     const btnTime = document.getElementById("school-btn-time");
     const pop = document.getElementById("school-pop");
     const notes = document.getElementById("school-notes");
-    const DEF = { mode: "widget", before: 5, end: 10, start: 0, v2: 1 };
+    const DEF = { mode: "widget", before: 5, befores: [5], end: 10, start: 0, v2: 1 };
     let cfg = Object.assign({}, DEF);
     try {
       cfg = Object.assign(cfg, JSON.parse(lsGetRaw("sofianotes-school") || "{}"));
     } catch (err) {}
     // frueher war "Fenster" ein frei schwebendes Fensterchen und standardmaessig aus -
     // der Countdown-Knopf ist jetzt einmalig fuer alle an
+    // mehrere Hinweise vor Stundenende (z. B. 30, 15, 10, 5 min)
+    if (!Array.isArray(cfg.befores)) cfg.befores = cfg.before ? [+cfg.before] : [];
+    const befores = () => (Array.isArray(cfg.befores) ? cfg.befores : []).map(Number).filter((m) => m > 0).sort((a, b) => b - a);
+    const soonMin = () => (befores().length ? Math.min(...befores()) : 5);
     if (!cfg.v2) {
       cfg.mode = cfg.mode === "notes" || cfg.mode === "both" ? "both" : "widget";
       cfg.v2 = 1;
@@ -22094,19 +22114,39 @@
       return h + " h" + (m ? " " + m + " min" : "");
     };
     const hm = (min) => String(Math.floor(min / 60)).padStart(2, "0") + ":" + String(min % 60).padStart(2, "0");
+    // Hinweis waechst oben aus dem Countdown-Knopf heraus und schrumpft wieder hinein
+    function placeNotes() {
+      const bar = document.getElementById("top-menu-bar");
+      const r = bar && bar.getBoundingClientRect();
+      if (r && r.width) {
+        notes.style.top = Math.round(r.bottom + 8) + "px";
+        notes.style.right = Math.round(window.innerWidth - r.right) + "px";
+      }
+    }
     function note(text, icon) {
+      placeNotes();
       const el = document.createElement("div");
       el.className = "school-note";
-      el.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
-      el.children[0].textContent = icon || "timer";
-      el.children[1].textContent = text;
-      el.addEventListener("click", () => el.remove());
+      el.innerHTML = '<span class="sn-icon"><span class="material-symbols-rounded"></span></span><span class="sn-text"></span>';
+      el.querySelector(".material-symbols-rounded").textContent = icon || "timer";
+      el.querySelector(".sn-text").textContent = text;
       notes.appendChild(el);
-      requestAnimationFrame(() => el.classList.add("in"));
-      setTimeout(() => {
-        el.classList.remove("in");
-        setTimeout(() => el.remove(), 400);
-      }, 9000);
+      const fromBtn = !btn.classList.contains("hidden") && !btn.classList.contains("morph-away") ? btn.getBoundingClientRect() : null;
+      el.classList.add("in");
+      if (fromBtn && fromBtn.width) window.sofiaMorph.from(el, fromBtn);
+      let gone = false;
+      const remove = () => {
+        if (gone) return;
+        gone = true;
+        const back = !btn.classList.contains("hidden") && !btn.classList.contains("morph-away") ? btn.getBoundingClientRect() : null;
+        if (back && back.width) window.sofiaMorph.to(el, back, () => el.remove());
+        else {
+          el.classList.remove("in");
+          setTimeout(() => el.remove(), 300);
+        }
+      };
+      el.addEventListener("click", remove);
+      setTimeout(remove, 9000);
     }
     const showWidget = () => cfg.mode === "widget" || cfg.mode === "both";
     const showNotes = () => cfg.mode === "notes" || cfg.mode === "both";
@@ -22148,7 +22188,7 @@
         const s0 = prev ? prev.e : b ? b.s - 15 : t;
         fill.style.width = nxt ? Math.min(100, Math.max(0, ((t - s0) / Math.max(1, nxt.s - s0)) * 100)) + "%" : "100%";
       }
-      pop.classList.toggle("sp-soon", !!cur && cur.e - t <= Math.max(1, cfg.before || 5));
+      pop.classList.toggle("sp-soon", !!cur && cur.e - t <= soonMin());
       const rows = document.getElementById("sp-rows");
       rows.innerHTML = "";
       if (cur && nxt) rows.appendChild(row("arrow_forward", "Danach " + nxt.subject + (nxt.room ? " · " + nxt.room : "") + " um " + hm(nxt.s)));
@@ -22183,8 +22223,8 @@
       };
       if (instant) return finish();
       popClosing = true;
-      // zurueck in den Knopf (Platz des Knopfs, auch wenn er gerade unsichtbar ist)
-      window.sofiaMorph.to(pop, btn.getBoundingClientRect(), finish);
+      // zurueck in den Knopf: Knopf unsichtbar an seinen Platz, dorthin schrumpfen
+      window.sofiaMorph.to(pop, window.sofiaSchoolBtnTarget(), finish);
     }
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -22234,17 +22274,22 @@
       if (visible) {
         btnTime.textContent = clockLeft(cur ? cur.e - t : nxt.s - t);
         btn.classList.toggle("st-pause", !cur);
-        btn.classList.toggle("st-soon", !!cur && cur.e - t <= Math.max(1, cfg.before || 5));
+        btn.classList.toggle("st-soon", !!cur && cur.e - t <= soonMin());
         btn.title = cur ? cur.subject + ": noch " + fmt(cur.e - t) + " · antippen für mehr" : "Pause bis " + nxt.subject + " · antippen für mehr";
         renderPop(cur, nxt, endOfDay, t);
       }
       if (!showNotes() || !blocks.length) return;
       const key = (k) => today() + "|" + k;
       for (const b of blocks) {
-        const kEnd = key("end" + b.s);
-        if (cfg.before && b.e !== endOfDay && t >= b.e - cfg.before && t < b.e && !fired.has(kEnd)) {
-          fired.add(kEnd);
-          note(b.subject + ": noch " + fmt(b.e - t) + " bis Stundenende", "timer");
+        if (b.e !== endOfDay) {
+          // jede gewaehlte Zeit einzeln; wer spaeter dazukommt, bekommt nur die gerade faellige
+          for (const m of befores()) {
+            const kEnd = key("end" + b.s + "-" + m);
+            if (t >= b.e - m && t < Math.min(b.e, b.e - m + 1.5) && !fired.has(kEnd)) {
+              fired.add(kEnd);
+              note(b.subject + ": noch " + fmt(b.e - t) + " bis Stundenende", "timer");
+            }
+          }
         }
         const kStart = key("start" + b.s);
         if (cfg.start && t >= b.s && t < b.s + 1 && !fired.has(kStart)) {
@@ -22280,7 +22325,8 @@
     }
     function renderSettings() {
       document.querySelectorAll("#set-school-mode [data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === cfg.mode));
-      document.querySelectorAll("#set-school-before [data-min]").forEach((b) => b.classList.toggle("active", +b.dataset.min === +cfg.before));
+      const bs = befores();
+      document.querySelectorAll("#set-school-before [data-min]").forEach((b) => b.classList.toggle("active", +b.dataset.min === 0 ? !bs.length : bs.includes(+b.dataset.min)));
       document.querySelectorAll("#set-school-end [data-min]").forEach((b) => b.classList.toggle("active", +b.dataset.min === +cfg.end));
       document.querySelectorAll("#set-school-start [data-on]").forEach((b) => b.classList.toggle("active", +b.dataset.on === +(cfg.start ? 1 : 0)));
       const sum = document.getElementById("set-sum-school");
@@ -22304,7 +22350,12 @@
         if (!fetchedAt || Date.now() - fetchedAt > 60 * 1000) load();
       }
     });
-    bind("#set-school-before [data-min]", (b) => (cfg.before = +b.dataset.min));
+    bind("#set-school-before [data-min]", (b) => {
+      const m = +b.dataset.min;
+      const cur = befores();
+      cfg.befores = m === 0 ? [] : cur.includes(m) ? cur.filter((x) => x !== m) : cur.concat(m);
+      cfg.before = cfg.befores.length ? Math.min(...cfg.befores) : 0;
+    });
     bind("#set-school-end [data-min]", (b) => (cfg.end = +b.dataset.min));
     bind("#set-school-start [data-on]", (b) => (cfg.start = +b.dataset.on));
     document.querySelector('.set-nav[data-go="school"]')?.addEventListener("click", () => setTimeout(renderSettings, 0));
