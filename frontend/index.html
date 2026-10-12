@@ -940,22 +940,18 @@
 
 <div id="timetable-backdrop" class="settings-backdrop dlg-scrim hidden">
   <div class="settings-modal dlg tt-dlg" role="dialog" aria-modal="true" aria-labelledby="tt-title">
-    <div class="settings-modal-head">
-      <h2 id="tt-title">Stundenplan</h2>
-      <button type="button" id="btn-tt-close" class="icon-btn" title="Schließen">
-        <span class="material-symbols-rounded">close</span>
-      </button>
-    </div>
-    <div class="tt-bar">
+    <!-- eine Zeile wie oben an der Seiten-Leiste: Titel-Pille, Tag|Woche, Datum, Pfeile, ✕ -->
+    <div class="tt-head">
+      <h2 id="tt-title" class="tt-title-pill">Stundenplan</h2>
       <div class="tt-chips">
         <button type="button" class="tt-chip active" data-mode="day">Tag</button>
         <button type="button" class="tt-chip" data-mode="week">Woche</button>
       </div>
-      <div class="tt-nav">
-        <span id="tt-sub" class="tt-sub"></span>
-        <button type="button" id="tt-prev" class="icon-btn" title="Zurück"><span class="material-symbols-rounded">chevron_left</span></button>
-        <button type="button" id="tt-next" class="icon-btn" title="Weiter"><span class="material-symbols-rounded">chevron_right</span></button>
-      </div>
+      <span class="tt-head-gap"></span>
+      <span id="tt-sub" class="tt-sub"></span>
+      <button type="button" id="tt-prev" class="tt-round" title="Zurück"><span class="material-symbols-rounded">chevron_left</span></button>
+      <button type="button" id="tt-next" class="tt-round" title="Weiter"><span class="material-symbols-rounded">chevron_right</span></button>
+      <button type="button" id="btn-tt-close" class="tt-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
     </div>
     <div id="tt-body" class="tt-body"></div>
   </div>

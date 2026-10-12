@@ -5678,3 +5678,27 @@ html[data-theme="dark"] .share-dlg .share-opt.active { background: #4a4458; bord
 html[data-theme="dark"] .share-dlg .share-opt.danger.active { background: #3b1f1d; border-color: #f2b8b5; }
 html[data-theme="dark"] .share-dlg .share-opt > .material-symbols-rounded { color: #d0bcff; }
 html[data-theme="dark"] .share-dlg .share-opt.danger > .material-symbols-rounded { color: #f2b8b5; }
+
+/* ==== Stundenplan: Kopfzeile in einer Zeile, große Tippflächen (iPad) ==== */
+.tt-head { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; flex-wrap: nowrap; }
+.tt-head-gap { flex: 1; min-width: 0; }
+.tt-title-pill { margin: 0; height: 44px; padding: 0 18px; display: inline-flex; align-items: center; border-radius: 22px; background: var(--dock-bg); border: 1px solid var(--dock-border); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); box-sizing: border-box; font: 700 16px/1 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; white-space: nowrap; flex-shrink: 0; }
+.tt-head .tt-chips { flex-shrink: 0; }
+.tt-head .tt-chip { height: 36px; min-width: 64px; touch-action: manipulation; }
+.tt-head .tt-sub { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 14px/1 'Google Sans', 'Inter', sans-serif; }
+.tt-round { width: 44px; height: 44px; flex-shrink: 0; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--dock-bg); border: 1px solid var(--dock-border); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); color: #1c1b1f; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.tt-round .material-symbols-rounded { font-size: 22px; color: inherit; pointer-events: none; }
+.tt-round:active { transform: scale(0.94); }
+.tt-round:disabled { opacity: 0.35; box-shadow: none; }
+/* schmale Bildschirme: Datum weg, Rest bleibt in einer Zeile */
+@media (max-width: 560px) {
+  .tt-head { gap: 6px; }
+  .tt-head .tt-sub { display: none; }
+  .tt-title-pill { padding: 0 14px; font-size: 15px; }
+  .tt-head .tt-chip { min-width: 0; padding: 0 12px; }
+}
+html[data-theme="dark"] .tt-title-pill, html[data-theme="dark"] .tt-round { color: #e6e1e5; }
+@media (max-width: 460px) {
+  .tt-title-pill { display: none; }
+  .tt-round { width: 40px; height: 40px; }
+}
