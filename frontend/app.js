@@ -21144,7 +21144,12 @@
       if (startBoard) await openBoard(startBoard, null, { fromHistory: true });
       syncUrl(false);
     } catch (err) {
-      showGate("Start fehlgeschlagen", "Bitte Seite neu laden.");
+      // Ursache melden (Fehlerprotokoll) und kurz anzeigen, sonst bleibt nur ein leerer Bildschirm
+      const why = String((err && err.message) || err || "unbekannt").slice(0, 160);
+      try {
+        sofiaLog.report("error", "Start fehlgeschlagen: " + why, err && err.stack);
+      } catch (e) {}
+      showGate("Start fehlgeschlagen", "Bitte Seite neu laden. (" + why + ")");
     }
   })();
 })();
