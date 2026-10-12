@@ -18337,8 +18337,13 @@
       const pg = notebook.pages[i];
       // eingeschraenkte Freigabe: Seiten nur hinten anhaengen, sonst nichts veraendern
       if (!fullRights()) {
-        if (myRole === "view") return showToast("Du darfst dieses Blatt nur ansehen");
-        return openMenu([{ head: "Seite " + (i + 1) }, { icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }], anchor);
+        const exp = [
+          { head: "Exportieren" },
+          { icon: "picture_as_pdf", label: "Diese Seite als PDF", run: () => window.sofiaExportPagesPdf([pg.boardOf || pg.id]) },
+          { icon: "check_circle", label: "Seiten auswählen …", run: () => window.sofiaPageSelect(pg.boardOf || pg.id) },
+        ];
+        if (myRole === "view") return openMenu([{ head: "Seite " + (i + 1) }, ...exp], anchor);
+        return openMenu([{ head: "Seite " + (i + 1) }, { icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }, ...exp], anchor);
       }
       // Drehen ganz oben, damit es schnell zu finden ist
       const items = [
@@ -18357,6 +18362,10 @@
       items.push({ head: "Seite" });
       items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
       items.push({ icon: "content_copy", label: "Neue Seite davor", run: () => addPages(i - 1, [templatePage()]) });
+      items.push({ head: "Exportieren" });
+      items.push({ icon: "picture_as_pdf", label: "Diese Seite als PDF", run: () => window.sofiaExportPagesPdf([pg.boardOf || pg.id]) });
+      items.push({ icon: "check_circle", label: "Seiten auswählen …", run: () => window.sofiaPageSelect(pg.boardOf || pg.id) });
+      items.push({ head: "Löschen" });
       items.push({ icon: "delete", label: "Seite löschen", danger: true, run: () => deletePage(i) });
       openMenu(items, anchor);
     }
@@ -18987,6 +18996,92 @@
     document.addEventListener("touchmove", (e) => {
       if (thumbDrag && thumbDrag.active) e.preventDefault();
     }, { passive: false });
+    // ---- Seiten auswaehlen (z.B. einzelne Seiten als PDF exportieren) ----
+    // pageSel: Set der ausgewaehlten Seiten-IDs (Board-Doppelseiten zaehlen als ihre erste Seite)
+    let pageSel = null;
+    const selBar = document.getElementById("pages-select");
+    const selCount = document.getElementById("pages-select-count");
+    const selPdf = document.getElementById("pages-select-pdf");
+    const selBtn = document.getElementById("pages-select-btn");
+    function pickIdOf(i) {
+      const pg = notebook && notebook.pages[i];
+      return pg ? pg.boardOf || pg.id : null;
+    }
+    function allPickIds() {
+      const out = [];
+      if (notebook) for (let i = 0; i < notebook.pages.length; i++) {
+        const id = pickIdOf(i);
+        if (id && !out.includes(id)) out.push(id);
+      }
+      return out;
+    }
+    function syncSelectBar() {
+      selBar.classList.toggle("hidden", !pageSel);
+      document.getElementById("pages-select-idle").classList.toggle("hidden", !!pageSel);
+      if (!pageSel) return;
+      const n = pageSel.size;
+      selCount.textContent = n ? n + " ausgewählt" : "Seiten antippen";
+      selPdf.disabled = !n;
+      document.getElementById("pages-select-all").textContent = n && n >= allPickIds().length ? "Keine" : "Alle";
+    }
+    function startPageSelect(preId) {
+      if (!notebook) return;
+      if (!panelOpen) setPanel(true);
+      pageSel = new Set(preId ? [preId] : []);
+      renderPanel();
+    }
+    function endPageSelect() {
+      if (!pageSel) return;
+      pageSel = null;
+      renderPanel();
+      syncSelectBar();
+    }
+    function togglePick(id) {
+      if (!pageSel || !id) return;
+      if (pageSel.has(id)) pageSel.delete(id);
+      else pageSel.add(id);
+      // nur Haken und Leiste anpassen, nicht alles neu zeichnen
+      grid.querySelectorAll(".page-thumb[data-index]").forEach((c) => {
+        if (pickIdOf(+c.dataset.index) !== id) return;
+        const on = pageSel.has(id);
+        c.classList.toggle("picked", on);
+        const ic = c.querySelector(".page-thumb-check .material-symbols-rounded");
+        if (ic) ic.textContent = on ? "check" : "";
+      });
+      syncSelectBar();
+    }
+    // PDF mit genau diesen Seiten (in Notizbuch-Reihenfolge) herunterladen
+    function exportPagesPdf(ids) {
+      if (!currentBoardId || !ids || !ids.length) return;
+      if (navigator.onLine === false) return showToast("PDF-Export braucht Internet");
+      const order = allPickIds().filter((id) => ids.includes(id));
+      showToast(order.length === 1 ? "PDF der Seite wird erstellt …" : "PDF mit " + order.length + " Seiten wird erstellt …");
+      window.location.href = "/api/export.pdf?board=" + encodeURIComponent(currentBoardId) + "&pages=" + encodeURIComponent(order.join(","));
+    }
+    window.sofiaPageSelect = startPageSelect;
+    window.sofiaExportPagesPdf = exportPagesPdf;
+    selBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (pageSel) endPageSelect();
+      else startPageSelect();
+    });
+    document.getElementById("pages-select-cancel").addEventListener("click", (e) => {
+      e.stopPropagation();
+      endPageSelect();
+    });
+    document.getElementById("pages-select-all").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pageSel) return;
+      const all = allPickIds();
+      pageSel = pageSel.size >= all.length ? new Set() : new Set(all);
+      renderPanel();
+    });
+    selPdf.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pageSel || !pageSel.size) return;
+      exportPagesPdf(Array.from(pageSel));
+      endPageSelect();
+    });
     let renderedSig = "";
     function renderPanel() {
       if (!panelOpen || !notebook) return;
@@ -19005,6 +19100,15 @@
         const cv = document.createElement("canvas");
         cv.className = "page-thumb-img";
         cell.appendChild(cv);
+        const pickId = pageSel ? pickIdOf(i) : null;
+        if (pageSel) {
+          cell.classList.add("page-thumb-pick");
+          if (pageSel.has(pickId)) cell.classList.add("picked");
+          const chk = document.createElement("span");
+          chk.className = "page-thumb-check";
+          chk.innerHTML = '<span class="material-symbols-rounded">' + (pageSel.has(pickId) ? "check" : "") + "</span>";
+          cell.appendChild(chk);
+        }
         const foot = document.createElement("div");
         foot.className = "page-thumb-foot";
         foot.innerHTML = '<span></span><button type="button" class="page-thumb-menu hw-panel-btn" title="Seite: drehen, Hintergrund, löschen …"><span class="material-symbols-rounded">expand_more</span></button>';
@@ -19021,10 +19125,13 @@
         cell.appendChild(foot);
         cv.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (pageSel) return togglePick(pickId);
           if (thumbDrag && thumbDrag.done) return;
           activateNotebookPage(i);
         });
-        cv.addEventListener("pointerdown", (e) => startThumbHold(e, i, cell));
+        cv.addEventListener("pointerdown", (e) => {
+          if (!pageSel) startThumbHold(e, i, cell);
+        });
         cv.addEventListener("contextmenu", (e) => e.preventDefault());
         foot.querySelector(".page-thumb-menu").addEventListener("click", (e) => {
           e.stopPropagation();
@@ -19046,7 +19153,8 @@
       const addCell = document.createElement("div");
       addCell.className = "page-thumb";
       addCell.appendChild(add);
-      grid.appendChild(addCell);
+      if (!pageSel) grid.appendChild(addCell);
+      syncSelectBar();
       // erst nach dem Einfuegen (Breite bekannt): Gespeichertes sofort, Rest nach und nach
       const miss = [];
       for (const [cv, r, i] of todo) if (!showCachedThumb(cv, r, i)) miss.push(i);
@@ -19378,6 +19486,7 @@
       setCls(pagesBtn, "hidden", !show);
       if (!show) {
         closeMenu();
+        pageSel = null; // Auswahl gehoert zum alten Blatt
         if (panelOpen) setPanel(false);
         return;
       }

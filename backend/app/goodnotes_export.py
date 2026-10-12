@@ -503,14 +503,18 @@ def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str
     }
 
 
-def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) -> bytes:
-    """Ein PDF mit einer Seite pro Notizbuch-Seite (A4), samt Seiten-Hintergrund."""
+def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]], only: set[str] | None = None) -> bytes:
+    """Ein PDF mit einer Seite pro Notizbuch-Seite (A4), samt Seiten-Hintergrund.
+
+    only: nur diese Seiten (IDs) exportieren, z.B. einzelne in der Seiten-Leiste ausgewaehlte."""
     buf = io.BytesIO()
     c = pdf_canvas.Canvas(buf)
     c.setTitle("sofianotes")
     rects = page_rects(notebook)
     for pg, px, py, w, h in rects:
         if pg.get("boardOf"):
+            continue
+        if only is not None and str(pg.get("id")) not in only:
             continue
         board_strokes = None
         if pg.get("board"):
@@ -613,10 +617,10 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]]) 
     return buf.getvalue()
 
 
-def build_board_pdf(board: dict[str, Any] | None, strokes: list[dict[str, Any]]) -> bytes:
+def build_board_pdf(board: dict[str, Any] | None, strokes: list[dict[str, Any]], only: set[str] | None = None) -> bytes:
     nb = (board or {}).get("notebook")
     if nb and nb.get("pages"):
-        return build_notebook_pdf(nb, strokes)
+        return build_notebook_pdf(nb, strokes, only)
     return build_pdf(strokes)
 
 
