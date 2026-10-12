@@ -924,9 +924,12 @@
   let canvasRight = 0;
   function resizeCanvas() {
     dpr = Math.max(1, window.devicePixelRatio || 1);
+    // Die Zeichenflaeche geht immer ueber die ganze Breite: Seiten-, Material- und Chat-Leiste
+    // liegen darueber, und in ihren Luecken (oben/unten, runde Ecken) sieht man den normalen
+    // Hintergrund. viewLeft/viewRight bestimmen nur noch, wo die Mitte des freien Bereichs ist.
     if (!splitOn()) {
-      canvasLeft = viewLeft;
-      canvasRight = viewRight;
+      canvasLeft = 0;
+      canvasRight = 0;
     }
     const w = Math.max(120, window.innerWidth - canvasLeft - canvasRight);
     canvas.width = Math.round(w * dpr);
