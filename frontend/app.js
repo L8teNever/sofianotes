@@ -2443,6 +2443,7 @@
     drawTextDragPreview();
     drawTextMoveHandles();
     drawZoomBoxOnPage();
+    drawAutoBox();
     drawLassoAndSelection();
     drawRuler();
     drawHoldHint();
@@ -8640,30 +8641,33 @@
   }
 
   // Zeichnet den Welt-Ausschnitt ab (ox, oy) im Massstab k in die Schreibflaeche
-  function renderZoomRegion(ox, oy, wWorld, hWorld, k, d) {
-    zctx.setTransform(k * d, 0, 0, k * d, -ox * k * d, -oy * k * d);
+  function renderZoomRegion(ox, oy, wWorld, hWorld, k, d, g, tx, ty, showMedia) {
+    // g/tx/ty: anderes Ziel (z.B. der Weiter-Kasten auf dem Hauptbild), sonst die Schreibflaeche
+    g = g || zctx;
+    const hideMedia = zoomHideMedia && !showMedia;
+    g.setTransform(k * d, 0, 0, k * d, ((tx || 0) - ox * k) * d, ((ty || 0) - oy * k) * d);
     if (zoomOnPages()) {
       // Notizbuch: die echte Seite (Hintergrund und Raster), daneben grau
-      zctx.fillStyle = darkMode ? "#121018" : "#e8e6ed";
-      zctx.fillRect(ox, oy, wWorld, hWorld);
+      g.fillStyle = darkMode ? "#121018" : "#e8e6ed";
+      g.fillRect(ox, oy, wWorld, hWorld);
       for (const r of pageRects(notebook)) {
         if (r.x > ox + wWorld || r.x + r.w < ox || r.y > oy + hWorld || r.y + r.h < oy) continue;
-        zctx.save();
-        zctx.beginPath();
-        zctx.rect(r.x, r.y, r.w, r.h);
-        zctx.clip();
-        zctx.fillStyle = pagePaperColor();
-        zctx.fillRect(r.x, r.y, r.w, r.h);
-        const img = r.page.mediaId && !zoomHideMedia ? ensureMedia(r.page.mediaId) : null;
-        if (img && img.complete && img.naturalWidth) drawPageMedia(zctx, img, r);
-        else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, zctx, k);
-        if (r.page.board || r.page.boardOf) paintBoardPage(zctx, r);
-        zctx.restore();
+        g.save();
+        g.beginPath();
+        g.rect(r.x, r.y, r.w, r.h);
+        g.clip();
+        g.fillStyle = pagePaperColor();
+        g.fillRect(r.x, r.y, r.w, r.h);
+        const img = r.page.mediaId && !hideMedia ? ensureMedia(r.page.mediaId) : null;
+        if (img && img.complete && img.naturalWidth) drawPageMedia(g, img, r);
+        else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, g, k);
+        if (r.page.board || r.page.boardOf) paintBoardPage(g, r);
+        g.restore();
       }
     } else {
-      zctx.fillStyle = deskColor();
-      zctx.fillRect(ox, oy, wWorld, hWorld);
-      drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
+      g.fillStyle = deskColor();
+      g.fillRect(ox, oy, wWorld, hWorld);
+      drawGrid(g, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
     }
     const inView = (st) => {
       const b = st.bbox || strokeWorldBBox(st);
@@ -8675,13 +8679,13 @@
       if (boardEditId) return pageId === boardEditId;
       return !pageId;
     });
-    for (const st of all) if ((st.tool === "image" && !zoomHideMedia) || st.tool === "table") drawStroke(st, zctx);
-    for (const st of all) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
-    for (const st of remoteInProgress.values()) if (st.tool === "marker") drawStroke(st, zctx, { alpha: 0.38 });
-    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, zctx, { alpha: 0.38 });
-    for (const st of all) if (st.tool !== "marker" && st.tool !== "image" && st.tool !== "table") drawStroke(st, zctx);
-    for (const st of remoteInProgress.values()) if (st.tool !== "marker") drawStroke(st, zctx);
-    if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke, zctx);
+    for (const st of all) if ((st.tool === "image" && !hideMedia) || st.tool === "table") drawStroke(st, g);
+    for (const st of all) if (st.tool === "marker") drawStroke(st, g, { alpha: 0.38 });
+    for (const st of remoteInProgress.values()) if (st.tool === "marker") drawStroke(st, g, { alpha: 0.38 });
+    if (currentStroke && currentStroke.tool === "marker") drawStroke(currentStroke, g, { alpha: 0.38 });
+    for (const st of all) if (st.tool !== "marker" && st.tool !== "image" && st.tool !== "table") drawStroke(st, g);
+    for (const st of remoteInProgress.values()) if (st.tool !== "marker") drawStroke(st, g);
+    if (currentStroke && currentStroke.tool && currentStroke.tool !== "marker") drawStroke(currentStroke, g);
   }
 
   function zoomPreviewWidthPx() {
@@ -8975,15 +8979,17 @@
   });
 
   // ---- Zweite Zoom-Art "Auto-Weiter": kein Fenster, kein Rahmen ----
-  // Man schreibt normal (reingezoomt) direkt aufs Blatt. Kommt man rechts an den Rand
-  // des Bildschirms, rutscht das Blatt nach dem Absetzen von allein nach links, so dass
-  // man weiterschreiben kann. Am Seitenende geht es an den Anfang der naechsten Zeile.
+  // Man schreibt normal (reingezoomt) direkt aufs Blatt. Schreibt man rechts am Rand des
+  // Bildschirms, erscheint links ein blauer Kasten wie im Zoom-Fenster: er zeigt die
+  // Fortsetzung (rechts daneben bzw. am Seitenende die naechste Zeile) im selben Massstab.
+  // Setzt man darin an, springt das Blatt dorthin und man schreibt einfach weiter.
+  // Von allein bewegt sich nichts.
   const autoAdvBtn = document.getElementById("btn-auto-advance");
   let autoAdvanceOn = false;
   try {
     autoAdvanceOn = localStorage.getItem("sofianotes-auto-advance") === "1";
   } catch (err) {}
-  let autoAdvTimer = null;
+  let autoBox = null; // {x, y, w, h (Bildschirm), tx, ty (Welt), view}
   function setAutoAdvance(on) {
     autoAdvanceOn = !!on;
     try {
@@ -8991,70 +8997,113 @@
     } catch (err) {}
     if (autoAdvanceOn && zoomWin) closeZoomWindow();
     if (autoAdvBtn) autoAdvBtn.classList.toggle("active", autoAdvanceOn);
-    clearTimeout(autoAdvTimer);
+    autoBox = null;
+    requestRedraw();
   }
   if (autoAdvBtn) {
     autoAdvBtn.classList.toggle("active", autoAdvanceOn);
     autoAdvBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       setAutoAdvance(!autoAdvanceOn);
-      showToast(autoAdvanceOn ? "Auto-Weiter an: am rechten Rand rutscht das Blatt weiter" : "Auto-Weiter aus");
+      showToast(autoAdvanceOn ? "Auto-Weiter an: rechts am Rand erscheint links ein Kasten zum Weiterschreiben" : "Auto-Weiter aus");
     });
   }
-  // neu ansetzen = noch nicht fertig mit dem Wort: dann (noch) nicht verschieben
-  canvas.addEventListener("pointerdown", () => clearTimeout(autoAdvTimer), true);
+  const autoViewSig = () => scale + "|" + offsetX + "|" + offsetY + "|" + viewLeft + "|" + viewRight;
   function autoAdvanceAfter(st) {
-    clearTimeout(autoAdvTimer);
     if (!autoAdvanceOn || zoomWin || viewOnly || historyView) return;
     if (st.tool !== "pen" && st.tool !== "marker") return;
     if (st.locked || st.rulerEdge || st.objectKind) return;
     const b = st.bbox || makeBBox(st.points);
     if (!b) return;
-    const sx = worldToScreen(b.maxX, b.minY).x;
     const visL = viewLeft;
     const visR = window.innerWidth - viewRight;
     const visW = visR - visL;
-    if (visW < 120 || sx < visR - visW * 0.2) return;
-    autoAdvTimer = setTimeout(() => autoAdvance(b), 550);
-  }
-  function autoAdvance(b) {
-    if (!autoAdvanceOn || zoomWin || currentStroke) return;
-    const visL = viewLeft;
-    const visR = window.innerWidth - viewRight;
-    const visW = visR - visL;
-    const wL = screenToWorld(visL, 0).x;
-    const wR = screenToWorld(visR, 0).x;
-    const pad = 24 / scale;
-    // Seite unter dem Strich (im Notizbuch): rechts nicht ueber die Seite hinaus
+    if (visW < 160) return;
+    const sxR = worldToScreen(b.maxX, b.minY).x;
+    // kurze Striche weiter links (i-Punkt, Korrektur) lassen einen Kasten stehen
+    if (sxR < visR - visW * 0.22) return;
+    // Seite unter dem Strich (im Notizbuch)
     let page = null;
+    const cy = (b.minY + b.maxY) / 2;
     if (notebook && !boardEditId) {
-      const cy = (b.minY + b.maxY) / 2;
       const cx = (b.minX + b.maxX) / 2;
       page = pageRects(notebook).find((r) => cx >= r.x - 40 && cx <= r.x + r.w + 40 && cy >= r.y && cy <= r.y + r.h) || null;
       if (!page) return;
     }
-    const v = { scale, offsetX, offsetY };
-    if (!page || page.x + page.w > wR + 4 / scale) {
-      // nach rechts: was man gerade geschrieben hat, bleibt links noch sichtbar
-      let shift = (visW * 0.6) / scale;
-      if (page) shift = Math.min(shift, page.x + page.w + pad - wR);
-      if (shift <= 2 / scale) return;
-      v.offsetX = offsetX - shift * scale;
-    } else {
-      // Seite ist rechts zu Ende: an den Anfang der naechsten Zeile
-      if (page.x >= wL - 4 / scale) return; // ganze Breite sichtbar: nichts zu tun
-      const lines = page.page && page.page.paper === "lines" && !page.page.mediaId;
-      const lineH = lines ? NB_LINE : Math.max(NB_GRID * 2, Math.min(160, (b.maxY - b.minY) * 1.25));
-      v.offsetX = visL + 16 - page.x * scale;
-      v.offsetY = offsetY - lineH * scale;
+    const lines = !!(page && page.page && page.page.paper === "lines" && !page.page.mediaId);
+    const lineH = lines ? NB_LINE : Math.max(NB_GRID * 2, Math.min(160, (b.maxY - b.minY) * 1.3));
+    // Kasten: links, drei Zeilen hoch, die mittlere auf Hoehe der Schreibzeile
+    const bw = Math.round(visW * 0.36);
+    const bh = Math.round(lineH * 3 * scale);
+    let rowTop = cy - lineH / 2;
+    if (lines) rowTop = page.y + NB_LINE_TOP + Math.floor((cy - page.y - NB_LINE_TOP) / NB_LINE) * NB_LINE;
+    const sy = worldToScreen(0, rowTop - lineH).y;
+    const box = { x: visL + 12, y: Math.max(70, Math.min(window.innerHeight - bh - 70, sy)), w: bw, h: bh };
+    // Weltpunkt, der in der linken oberen Ecke des Kastens erscheint
+    const topWorld = rowTop - lineH - (box.y - sy) / scale;
+    let tx = b.maxX - (bw / scale) * 0.25;
+    let ty = topWorld;
+    if (page && page.x + page.w - b.maxX < bw / scale) {
+      // Seite rechts zu Ende: Anfang der naechsten Zeile
+      tx = page.x + (lines ? NB_MARGIN * 0.5 : 0);
+      ty = topWorld + lineH;
     }
-    if (window.sofiaAnimateView) window.sofiaAnimateView(v, 320);
-    else {
-      offsetX = v.offsetX;
-      offsetY = v.offsetY;
-      requestRedraw();
-    }
+    autoBox = { ...box, tx, ty, view: autoViewSig() };
+    requestRedraw();
   }
+  window.sofiaAutoBox = () => autoBox;
+  function drawAutoBox() {
+    if (!autoBox) return;
+    // Ansicht verschoben/gezoomt oder Modus aus: Kasten passt nicht mehr
+    if (!autoAdvanceOn || zoomWin || autoBox.view !== autoViewSig()) {
+      autoBox = null;
+      return;
+    }
+    const B = autoBox;
+    const cx = B.x - canvasLeft;
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(cx, B.y, B.w, B.h, 12);
+    else ctx.rect(cx, B.y, B.w, B.h);
+    ctx.clip();
+    ctx.fillStyle = zoomBgColor();
+    ctx.fillRect(cx, B.y, B.w, B.h);
+    renderZoomRegion(B.tx, B.ty, B.w / scale, B.h / scale, scale, dpr, ctx, cx, B.y, true);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "rgba(26,115,232,0.13)";
+    ctx.fillRect(cx, B.y, B.w, B.h);
+    ctx.restore();
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = "#1A73E8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(cx + 1, B.y + 1, B.w - 2, B.h - 2, 12);
+    else ctx.rect(cx + 1, B.y + 1, B.w - 2, B.h - 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Im Kasten angesetzt: Blatt sofort dorthin (gleicher Massstab, also kein Versatz),
+  // dann laeuft der Strich ganz normal weiter. Laeuft vor dem normalen pointerdown.
+  canvas.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (!autoBox) return;
+      if (e.pointerType === "touch" && !fingerDrawEnabled) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (currentTool !== "pen" && currentTool !== "marker" && currentTool !== "eraser") return;
+      const B = autoBox;
+      if (e.clientX < B.x || e.clientX > B.x + B.w || e.clientY < B.y || e.clientY > B.y + B.h) return;
+      if (window.sofiaCancelViewAnim) window.sofiaCancelViewAnim();
+      if (typeof endZoomLock === "function") endZoomLock();
+      offsetX = B.x - B.tx * scale;
+      offsetY = B.y - B.ty * scale;
+      autoBox = null;
+      requestRedraw();
+    },
+    true
+  );
 
   // Rahmen und Raender auf dem Blatt verschieben (Stift, Maus oder Finger)
   for (const [id, kind] of [
