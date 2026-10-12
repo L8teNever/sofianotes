@@ -4618,6 +4618,8 @@ body.back-in-menu #top-back-bar { display: none; }
 #btn-board-open .material-symbols-rounded,
 #btn-back.in-board .material-symbols-rounded { color: #6750a4; font-size: 22px; }
 #btn-board-open.hidden { display: none; }
+/* bei offener Seiten-Leiste kein "Board öffnen" oben (geht ueber das Seiten-Menue) */
+body.pages-open #btn-board-open { display: none !important; }
 #btn-back {
   width: var(--bar-btn);
   padding: 0;

@@ -446,22 +446,36 @@
   function beginNbHold() {
     if (boardEditId || nbHold || !notebook || pinchState || !notebookPagingOn() || notebookZoomedIn()) return;
     const i = window.sofiaCurrentPage ? window.sofiaCurrentPage() : 0;
-    const v = window.sofiaViewFor && window.sofiaViewFor(i);
+    const vf = window.sofiaViewFor;
+    const v = vf && vf(i);
     if (!v) return;
-    // lange Seite (z.B. Board-Seite): innerhalb der Seite frei scrollen, erst an ihrem
-    // oberen/unteren Ende geht es (mit dem naechsten Wischen) zur Nachbarseite
-    const t = window.sofiaTallPage && window.sofiaTallPage(i);
+    const horiz = notebook.layout === "horizontal";
+    const step = window.sofiaNbSpread && window.sofiaNbSpread() ? 2 : 1;
+    const n = notebook.pages.length;
+    // Nachbarseiten: so weit darf man rueberziehen (die Seite kommt dabei schon mit),
+    // beim Loslassen rastet die ein, die ueberwiegt
+    const vNext = i + step <= n - 1 ? vf(i + step, "top") : null;
+    const vPrev = i - step >= 0 ? vf(i - step, "bottom") : null;
+    const key = horiz ? "offsetX" : "offsetY";
+    // lange Seite (z.B. Board-Seite): innerhalb der Seite frei scrollen, darueber hinaus
+    // kommt die Nachbarseite
+    const t = !horiz && window.sofiaTallPage && window.sofiaTallPage(i);
     if (t) {
       const oy = Math.max(t.oyBottom, Math.min(t.oyTop, offsetY));
-      nbHold = { i, ox: t.ox, oy, lo: t.oyBottom - oy - 48, hi: t.oyTop - oy + 48 };
-      tallGestureStart = { i, oy };
+      const nextGap = vNext ? t.oyBottom - vNext.offsetY : 180;
+      const prevGap = vPrev ? vPrev.offsetY - t.oyTop : 160;
+      nbHold = { i, ox: t.ox, oy, lo: t.oyBottom - oy - nextGap, hi: t.oyTop - oy + prevGap };
+      gestureStart = { i, o: oy, startOy: oy, tall: true, nextGap: vNext ? nextGap : null, prevGap: vPrev ? prevGap : null, used: false };
       return;
     }
-    tallGestureStart = null;
-    nbHold = { i, ox: v.offsetX, oy: v.offsetY };
+    const lo = vNext ? vNext[key] - v[key] : -180;
+    const hi = vPrev ? vPrev[key] - v[key] : 160;
+    nbHold = { i, ox: v.offsetX, oy: v.offsetY, lo, hi };
+    gestureStart = { i, o: v[key], next: vNext ? lo : null, prev: vPrev ? hi : null, used: false };
   }
-  let tallGestureStart = null; // {i, oy}: wo eine Wisch-Geste auf einer langen Seite begann
-  window.sofiaTallGestureStart = () => tallGestureStart;
+  // wo die aktuelle Blaetter-Geste begann (Seite, Ausgangslage, Abstand zu den Nachbarn)
+  let gestureStart = null;
+  window.sofiaGestureStart = () => gestureStart;
   function endNbHold() {
     nbHold = null;
   }
@@ -482,10 +496,8 @@
     if (notebookPagingOn() && !notebookZoomedIn() && nbHold) {
       const n = notebook.pages.length;
       const along = horiz ? offsetX - nbHold.ox : offsetY - nbHold.oy;
-      let lo = nbHold.lo != null ? nbHold.lo : -48;
-      let hi = nbHold.hi != null ? nbHold.hi : 48;
-      if (nbHold.i >= n - 1) lo -= 132;
-      if (nbHold.i <= 0) hi += 112;
+      const lo = nbHold.lo != null ? nbHold.lo : nbHold.i >= n - 1 ? -180 : -48;
+      const hi = nbHold.hi != null ? nbHold.hi : nbHold.i <= 0 ? 160 : 48;
       const c = Math.max(lo, Math.min(hi, along));
       if (horiz) {
         offsetX = nbHold.ox + c;
@@ -18193,7 +18205,12 @@
     window.sofiaPageSnap = (ps) => {
       if (boardEditId || pagePull) return false;
       if (!notebook || !nbPaging()) return false;
-      const cur = currentPage();
+      // Geste, die gerade zu Ende ging: von ihrer Seite aus entscheiden (die Mitte kann
+      // beim Rueberziehen schon auf der Nachbarseite liegen)
+      const gs = window.sofiaGestureStart && window.sofiaGestureStart();
+      const g = gs && !gs.used && gs.i < notebook.pages.length ? gs : null;
+      if (gs) gs.used = true;
+      const cur = g ? g.i : currentPage();
       const fit = viewFor(cur);
       if (!fit || scale > fit.scale * 1.08) return false;
       const horiz = notebook.layout === "horizontal";
@@ -18206,10 +18223,12 @@
       if (tall && !horiz) {
         const availH = window.innerHeight - 76 - 16;
         const cy = Math.max(tall.oyBottom, Math.min(tall.oyTop, offsetY));
-        const g = window.sofiaTallGestureStart && window.sofiaTallGestureStart();
-        const startOy = g && g.i === cur ? g.oy : cy;
-        const atBottom = Math.abs(startOy - tall.oyBottom) < 6 && cy - tall.oyBottom < 60;
-        const atTop = Math.abs(startOy - tall.oyTop) < 6 && tall.oyTop - cy < 60;
+        const startOy = g && g.tall ? g.startOy : cy;
+        // schon ein gutes Stueck in die Nachbarseite gezogen: die einrasten
+        if (g && g.nextGap != null && offsetY < tall.oyBottom - g.nextGap * 0.35) return goToPage(cur + 1, "top");
+        if (g && g.prevGap != null && offsetY > tall.oyTop + g.prevGap * 0.35) return goToPage(cur - 1, "bottom");
+        const atBottom = (Math.abs(startOy - tall.oyBottom) < 6 && cy - tall.oyBottom < 60) || offsetY < tall.oyBottom - 40;
+        const atTop = (Math.abs(startOy - tall.oyTop) < 6 && tall.oyTop - cy < 60) || offsetY > tall.oyTop + 40;
         let ny = cy;
         if (fresh && v < -0.25) {
           if (atBottom && cur < notebook.pages.length - 1) return goToPage(cur + 1, "top");
@@ -18226,6 +18245,12 @@
       let target = a;
       if (fresh && v < -0.25) target = a + step;
       else if (fresh && v > 0.25) target = a - step;
+      else if (g && !g.tall) {
+        // langsam rueber gezogen: weiter als gut ein Drittel -> Nachbarseite
+        const along = (horiz ? offsetX : offsetY) - g.o;
+        if (g.next != null && along <= g.next * 0.35) target = a + step;
+        else if (g.prev != null && along >= g.prev * 0.35) target = a - step;
+      }
       target = Math.max(0, Math.min(notebook.pages.length - 1, target));
       return goToPage(target, target < a ? "bottom" : "top");
     };
