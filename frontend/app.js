@@ -18784,6 +18784,8 @@
     });
     const marksEl = document.getElementById("pages-marks");
     const marksBtn = document.getElementById("btn-bookmarks");
+    const tabPages = document.getElementById("pages-tab-pages");
+    const tabMarks = document.getElementById("pages-tab-marks");
     let marksOpen = false;
     function notebookMarks() {
       return (notebook && notebook.bookmarks) || [];
@@ -18845,6 +18847,11 @@
     }
     function renderMarks() {
       marksBtn?.classList.toggle("active", marksOpen);
+      for (const [el, on] of [[tabPages, !marksOpen], [tabMarks, !!marksOpen]]) {
+        if (!el) continue;
+        el.classList.toggle("active", on);
+        el.setAttribute("aria-selected", on ? "true" : "false");
+      }
       panel?.classList.toggle("marks-only", !!marksOpen);
       if (!marksEl) return;
       marksEl.classList.toggle("hidden", !marksOpen);
@@ -18924,6 +18931,19 @@
     marksBtn?.addEventListener("click", (e) => {
       e.stopPropagation();
       marksOpen = !marksOpen;
+      renderMarks();
+    });
+    // Umschalter unter der Kopfzeile: Seiten | Lesezeichen
+    tabPages?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!marksOpen) return;
+      marksOpen = false;
+      renderMarks();
+    });
+    tabMarks?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (marksOpen) return;
+      marksOpen = true;
       renderMarks();
     });
     panel.addEventListener("pointerdown", (e) => e.stopPropagation());

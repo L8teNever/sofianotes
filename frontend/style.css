@@ -3817,6 +3817,35 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
   color: #1d192b;
   font: 600 14px/1.2 'Google Sans', 'Inter', sans-serif;
 }
+/* Umschalter Seiten | Lesezeichen (wie GoodNotes) */
+.pages-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 2px 14px 12px;
+  padding: 4px;
+  border-radius: 22px;
+  background: rgba(0, 0, 0, 0.07);
+}
+.pages-tab {
+  flex: 1;
+  height: 40px;
+  border: none;
+  border-radius: 18px;
+  background: transparent;
+  color: #49454f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.18s, box-shadow 0.18s, color 0.18s;
+}
+.pages-tab .material-symbols-rounded { font-size: 24px; }
+.pages-tab.active { background: #fff; color: #1c1b1f; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14); }
+html[data-theme="dark"] .pages-tabs { background: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] #pages-panel .pages-tab,
+html[data-theme="dark"] #pages-panel .pages-tab .material-symbols-rounded { color: #cac4d0; }
+html[data-theme="dark"] #pages-panel .pages-tab.active { background: #4a4458; }
+html[data-theme="dark"] #pages-panel .pages-tab.active .material-symbols-rounded { color: #f4f1f8; }
 .pages-select.hidden,
 .pages-panel.marks-only .pages-select { display: none; }
 #pages-select-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
