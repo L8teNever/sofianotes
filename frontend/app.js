@@ -5034,6 +5034,7 @@
     }
     const ok = await flushOutbox();
     if (!ok) return false;
+    pendingMedia.flush();
     if (wantWs && currentBoardId) connectWS();
     else setConnState("live");
     return true;
@@ -10907,6 +10908,51 @@
     });
   // Schneller Weg: JPEG asynchron erzeugen, sofort lokal anzeigen, binaer hochladen.
   // Die ID ist sofort da; der Upload laeuft im Hintergrund (bei Fehler in die Warteschlange).
+  // Bilder, die lokal schon gespeichert sind, aber noch nicht beim Server: Liste in IndexedDB.
+  // Beim Start, wenn das Netz wiederkommt und nach dem Abgleich wird nachgeladen - so geht
+  // nichts verloren, auch wenn die App direkt nach dem Einfuegen geschlossen wird oder offline ist.
+  const pendingMedia = (() => {
+    const KEY = "media-pending";
+    let chain = Promise.resolve();
+    let flushing = false;
+    const update = (fn) =>
+      (chain = chain.then(async () => {
+        if (!window.SofiaOffline) return;
+        const cur = (await SofiaOffline.getKv(KEY).catch(() => null)) || [];
+        await SofiaOffline.setKv(KEY, fn(cur)).catch(() => {});
+      }));
+    const add = (id) => update((l) => (l.includes(id) ? l : l.concat(id)));
+    const done = (id) => update((l) => l.filter((x) => x !== id));
+    async function flush() {
+      if (flushing || !window.SofiaOffline || navigator.onLine === false) return;
+      flushing = true;
+      try {
+        await chain;
+        const ids = (await SofiaOffline.getKv(KEY).catch(() => null)) || [];
+        for (const id of ids) {
+          const blob = await SofiaOffline.getMedia(id).catch(() => null);
+          if (!blob) {
+            await done(id);
+            continue;
+          }
+          let r = null;
+          try {
+            r = await fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": blob.type || "image/jpeg" }, body: blob });
+          } catch (err) {
+            break; // kein Netz: spaeter weiter
+          }
+          // angenommen, oder dauerhaft abgelehnt (zu gross, kaputt): nicht ewig wiederholen
+          if (r.ok || (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429)) await done(id);
+        }
+      } finally {
+        flushing = false;
+      }
+    }
+    return { add, done, flush };
+  })();
+  window.addEventListener("online", () => pendingMedia.flush());
+  setTimeout(() => pendingMedia.flush(), 5000);
+
   async function uploadJpeg(jpeg, opts) {
     if (typeof jpeg === "string") return uploadJpegDataUrl(jpeg);
     const blob = jpeg.blob || (await new Promise((res) => jpeg.canvas.toBlob(res, "image/jpeg", 0.82)));
@@ -10917,24 +10963,35 @@
     img.onload = () => requestRedraw();
     img.src = URL.createObjectURL(blob);
     mediaImages.set(id, img);
-    if (window.SofiaOffline) SofiaOffline.putMedia(id, blob).catch(() => {});
+    const stored = window.SofiaOffline ? SofiaOffline.putMedia(id, blob).catch(() => {}) : Promise.resolve();
     const send = () =>
       fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": "image/jpeg" }, body: blob });
-    const fallback = async () => {
-      try {
-        await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
-      } catch (err) {}
-    };
     if (opts && opts.wait) {
       const r = await send();
       if (!r.ok) throw new Error(r.status === 413 ? "too_large" : "upload");
       return id;
     }
-    send()
-      .then((r) => {
-        if (!r.ok) throw new Error("upload");
-      })
-      .catch(fallback);
+    if (!window.SofiaOffline) {
+      // ohne lokalen Speicher: wie bisher ueber die Warteschlange absichern
+      send()
+        .then((r) => {
+          if (!r.ok) throw new Error("upload");
+        })
+        .catch(async () => {
+          try {
+            await enqueueOp({ type: "media", id, image: await blobToDataUrl(blob) });
+          } catch (err) {}
+        });
+      return id;
+    }
+    // erst lokal sichern und als "noch hochzuladen" merken, dann im Hintergrund senden
+    stored.then(() => pendingMedia.add(id)).then(() =>
+      send()
+        .then((r) => {
+          if (r.ok || (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429)) pendingMedia.done(id);
+        })
+        .catch(() => {})
+    );
     return id;
   }
 
@@ -11054,7 +11111,8 @@
     jpeg.blob = await canvasToJpegBlob(jpeg.canvas, 0.5);
     return jpeg;
   }
-  async function renderPdfToImages(file, maxPages, onProgress) {
+  async function renderPdfToImages(file, maxPages, onProgress, opts) {
+    const waitUpload = !!(opts && opts.waitUpload);
     if (window.ensurePdf) await window.ensurePdf().catch(() => null);
     if (!window.pdfjsLib) throw new Error("pdfjs");
     const pdfjsLib = window.pdfjsLib;
@@ -11092,7 +11150,9 @@
       const jpeg = await fitJpegBlob(c, 2200);
       c.width = c.height = 0;
       out.push({
-        mediaId: await uploadJpeg(jpeg, { wait: true }),
+        // Hochladen laeuft im Hintergrund (auch offline nachgeholt) - nur der GoodNotes-Import
+        // wartet, weil er die Blaetter gleich fuer alle anlegt
+        mediaId: await uploadJpeg(jpeg, waitUpload ? { wait: true } : undefined),
         ratio: base.height / base.width,
         w: jpeg.w,
         h: jpeg.h,
@@ -17040,9 +17100,14 @@
     return imgs.length;
   }
   async function gnImportPdf(file, title, folderId) {
-    const imgs = await renderPdfToImages(file, 2000, (i, n) => {
-      gnSetStatus("„" + title + "“: Seite " + i + " von " + n);
-    });
+    const imgs = await renderPdfToImages(
+      file,
+      2000,
+      (i, n) => {
+        gnSetStatus("„" + title + "“: Seite " + i + " von " + n);
+      },
+      { waitUpload: true }
+    );
     if (!imgs.length) throw new Error("empty pdf");
     const kind = classifyPdfDoc(imgs);
     if (kind === "board") {
@@ -21136,6 +21201,8 @@
   // Texterkennung im Hintergrund vorladen, wenn die App schon laeuft
   setTimeout(() => {
     if (window.ensureTf) window.ensureTf().catch(() => {});
+    // PDF-Werkzeug vorladen: dann klappt PDF-Einfuegen auch spaeter ohne Netz
+    if (window.ensurePdf) window.ensurePdf().then(() => window.sofiaPrefetchPdfWorker && window.sofiaPrefetchPdfWorker()).catch(() => {});
   }, 6000);
 
   resizeCanvas();

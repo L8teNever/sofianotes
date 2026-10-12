@@ -1257,14 +1257,29 @@
       }
       return cache[src];
     }
+    // pdf.js liegt in der App selbst (offline nutzbar), das CDN nur als Notnagel
+    var PDFJS_LOCAL = "/vendor/pdfjs/";
+    var PDFJS_V = "?v=3.11.174";
+    var PDFJS_CDN_BASE = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
     window.ensurePdf = function () {
-      return load("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js").then(function () {
-        if (window.pdfjsLib) {
-          window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-            "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-        }
-        return window.pdfjsLib;
-      });
+      var local = true;
+      return load(PDFJS_LOCAL + "pdf.min.js" + PDFJS_V)
+        .catch(function () {
+          local = false;
+          return load(PDFJS_CDN_BASE + "pdf.min.js");
+        })
+        .then(function () {
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = local
+              ? PDFJS_LOCAL + "pdf.worker.min.js" + PDFJS_V
+              : PDFJS_CDN_BASE + "pdf.worker.min.js";
+          }
+          return window.pdfjsLib;
+        });
+    };
+    // Arbeits-Thread einmal abrufen, damit der Service Worker ihn fuer offline ablegt
+    window.sofiaPrefetchPdfWorker = function () {
+      return fetch(PDFJS_LOCAL + "pdf.worker.min.js" + PDFJS_V).catch(function () {});
     };
     window.ensureTf = function () {
       return load("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js").then(function () { return window.tf; });
