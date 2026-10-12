@@ -3788,6 +3788,71 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .page-menu-head { font: 700 11px/1 'Google Sans', 'Inter', sans-serif; letter-spacing: 0.05em; text-transform: uppercase; color: #6750a4; padding: 12px 14px 6px; }
 .page-menu .lib-add-opt { padding: 10px 14px; }
 .page-menu .lib-add-opt.danger, .page-menu .lib-add-opt.danger .material-symbols-rounded { color: #b3261e; }
+/* Seiten-Menue wie GoodNotes: grosse Zeilen mit Symbol, feine Trennlinien, Gruppen mit Abstand */
+.page-menu.page-menu-side {
+  min-width: 290px;
+  max-height: calc(100vh - 16px);
+  padding: 8px;
+  border-radius: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+  animation: page-menu-in 0.18s cubic-bezier(0.2, 0, 0, 1);
+  transform-origin: left top;
+}
+@keyframes page-menu-in { from { opacity: 0; transform: scale(0.94) translateX(-6px); } to { opacity: 1; transform: none; } }
+.page-menu .page-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font: 500 16px/1.25 'Google Sans', 'Inter', sans-serif;
+  text-align: left;
+}
+.page-menu .page-menu-item > .material-symbols-rounded:first-child { font-size: 24px; color: #49454f; flex: 0 0 auto; }
+.page-menu .page-menu-item .pmi-label { flex: 1; min-width: 0; }
+.page-menu .page-menu-item .pmi-more { font-size: 20px; color: #79747e; }
+.page-menu .page-menu-item.shared { background: transparent; font-weight: 600; }
+.page-menu .page-menu-item.shared .pmi-more { color: #6750a4; }
+/* Trennlinie zwischen zwei Eintraegen derselben Gruppe (eingerueckt wie in GoodNotes) */
+.page-menu .page-menu-item:not(.first)::before {
+  content: "";
+  position: absolute;
+  left: 54px;
+  right: 10px;
+  top: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.page-menu .page-menu-item:hover::before,
+.page-menu .page-menu-item:hover + .page-menu-item::before { border-top-color: transparent; }
+.page-menu .page-menu-item.danger,
+.page-menu .page-menu-item.danger > .material-symbols-rounded:first-child { color: #b3261e; }
+.page-menu-gap { height: 1px; margin: 6px 6px; background: rgba(0, 0, 0, 0.1); }
+.page-menu-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 10px 12px 6px;
+  border: none;
+  background: transparent;
+  color: #6750a4;
+  font: 700 15px/1 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.page-menu-back .material-symbols-rounded { font-size: 24px; color: inherit; }
+html[data-theme="dark"] .page-menu .page-menu-item > .material-symbols-rounded:first-child { color: #cac4d0; }
+html[data-theme="dark"] .page-menu .page-menu-item .pmi-more { color: #938f99; }
+html[data-theme="dark"] .page-menu .page-menu-item.shared .pmi-more { color: #d0bcff; }
+html[data-theme="dark"] .page-menu .page-menu-item:not(.first)::before { border-top-color: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .page-menu-gap { background: rgba(255, 255, 255, 0.1); }
+html[data-theme="dark"] #page-menu .page-menu-back,
+html[data-theme="dark"] #page-menu .page-menu-back span { color: #d0bcff; }
+html[data-theme="dark"] #page-menu .page-menu-item.danger,
+html[data-theme="dark"] #page-menu .page-menu-item.danger span { color: #f2b8b5; }
 /* ---- Notizbuch: Seiten-Leiste links (wie GoodNotes) ---- */
 .pages-panel {
   position: fixed;

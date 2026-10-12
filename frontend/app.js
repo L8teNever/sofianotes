@@ -18612,24 +18612,53 @@
     function closeMenu() {
       menu.classList.add("hidden");
     }
-    function openMenu(items, anchor) {
+    // Menue an einem Anker. opts.side: rechts neben dem Anker aufklappen (Seiten-Leiste,
+    // wie GoodNotes). Eintraege mit "sub" oeffnen ein Untermenue an derselben Stelle.
+    function openMenu(items, anchor, opts) {
+      opts = opts || {};
       menu.innerHTML = "";
+      menu.classList.toggle("page-menu-side", !!opts.side);
+      let first = true;
       for (const it of items) {
+        if (it.back) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "page-menu-back";
+          b.innerHTML = '<span class="material-symbols-rounded">chevron_left</span><span></span>';
+          b.children[1].textContent = it.label;
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            it.run();
+          });
+          menu.appendChild(b);
+          first = true;
+          continue;
+        }
         if (it.head) {
           const h = document.createElement("div");
           h.className = "page-menu-head";
           h.textContent = it.head;
           menu.appendChild(h);
+          first = true;
+          continue;
+        }
+        if (it.sep) {
+          const d = document.createElement("div");
+          d.className = "page-menu-gap";
+          menu.appendChild(d);
+          first = true;
           continue;
         }
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "lib-add-opt" + (it.active ? " shared" : "") + (it.danger ? " danger" : "");
-        b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+        b.className = "lib-add-opt page-menu-item" + (it.active ? " shared" : "") + (it.danger ? " danger" : "") + (first ? " first" : "");
+        first = false;
+        b.innerHTML = '<span class="material-symbols-rounded"></span><span class="pmi-label"></span>' + (it.sub ? '<span class="material-symbols-rounded pmi-more">chevron_right</span>' : it.active ? '<span class="material-symbols-rounded pmi-more">check</span>' : "");
         b.children[0].textContent = it.icon;
         b.children[1].textContent = it.label;
         b.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (it.sub) return openMenu([{ back: true, label: it.label, run: () => openMenu(items, anchor, opts) }, ...it.sub()], anchor, opts);
           closeMenu();
           it.run();
         });
@@ -18639,47 +18668,131 @@
       const r = anchor.getBoundingClientRect();
       const mh = menu.offsetHeight;
       const mw = menu.offsetWidth;
+      if (opts.side && r.right + 12 + mw <= window.innerWidth - 8) {
+        // rechts neben der Seite, oben buendig (nach unten nicht aus dem Bild)
+        menu.style.left = r.right + 12 + "px";
+        menu.style.top = Math.max(8, Math.min(window.innerHeight - mh - 8, r.top - 8)) + "px";
+        return;
+      }
       let top = r.bottom + 6;
       if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
       menu.style.left = Math.max(8, Math.min(window.innerWidth - mw - 8, r.left)) + "px";
       menu.style.top = top + "px";
     }
-    // Menue einer Seite (▾ unter dem Vorschaubild)
+    // Seite kopieren: gleiche Vorlage/Hintergrund und alles darauf, direkt dahinter
+    function duplicatePage(i) {
+      const src = notebook.pages[i];
+      if (!src || src.boardOf) return showToast("Diese Seite gehört zu einem Board – dupliziere die erste Board-Seite");
+      withPageUndo(() => {
+        const nb = clone();
+        const copy = JSON.parse(JSON.stringify(nb.pages[i]));
+        copy.id = newId();
+        nb.pages.splice(i + 1, 0, copy);
+        pageAppear = { ids: new Set([copy.id]), t0: performance.now(), ms: 240 };
+        saveNotebook(nb, { moveStrokes: true });
+        const rects = pageRects(notebook);
+        const o = rects[i];
+        const n = rects[i + 1];
+        const dx = n.x - o.x;
+        const dy = n.y - o.y;
+        for (const st of Array.from(boardStrokes.values())) {
+          const bp = st.extra && st.extra.boardPage;
+          let c = null;
+          if (src.board) {
+            if (bp !== src.id) continue;
+            c = cloneStroke(st);
+            c.extra = Object.assign({}, c.extra, { boardPage: copy.id });
+          } else {
+            if (bp) continue;
+            const b = st.bbox || strokeWorldBBox(st);
+            if (!b) continue;
+            const cx = (b.minX + b.maxX) / 2;
+            const cy = (b.minY + b.maxY) / 2;
+            if (cx < o.x || cx > o.x + o.w || cy < o.y || cy > o.y + o.h) continue;
+            c = cloneStroke(st);
+            c.points = c.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
+          }
+          c.id = uuid();
+          c.bbox = makeBBox(c.points);
+          putStroke(c);
+          if (nbUndoRec) nbUndoRec.strokes.set(c.id, null); // neu: Rueckgaengig entfernt sie wieder
+        }
+      });
+      fitPage(i + 1);
+      showToast("Seite dupliziert");
+    }
+    // alles auf der Seite entfernen (Hintergrund bleibt)
+    async function clearPage(i) {
+      const pg = notebook.pages[i];
+      if (!pg) return;
+      const r = pageRects(notebook)[i];
+      const ids = [];
+      for (const st of boardStrokes.values()) {
+        const bp = st.extra && st.extra.boardPage;
+        if (pg.board || pg.boardOf) {
+          if (bp === (pg.boardOf || pg.id)) ids.push(st.id);
+          continue;
+        }
+        if (bp) continue;
+        const b = st.bbox || strokeWorldBBox(st);
+        if (!b) continue;
+        const cx = (b.minX + b.maxX) / 2;
+        const cy = (b.minY + b.maxY) / 2;
+        if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) ids.push(st.id);
+      }
+      if (!ids.length) return showToast("Auf dieser Seite steht nichts");
+      const ok = await askConfirm({ title: "Seite " + (i + 1) + " leeren?", text: "Alles Geschriebene und Eingefügte auf dieser Seite wird entfernt. Mit Rückgängig holst du es zurück.", ok: "Leeren" });
+      if (!ok) return;
+      withPageUndo(() => {
+        for (const id of ids) {
+          const st = boardStrokes.get(id);
+          if (st) noteStrokeBefore(st);
+        }
+        removeStrokes(ids);
+      });
+      requestRedraw();
+    }
+    // Hintergrund einer Seite (Untermenue)
+    function pageBgItems(i) {
+      const pg = notebook.pages[i];
+      const out = [];
+      for (const k of Object.keys(PAPER_LABELS)) out.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
+      for (const u of userTemplates()) out.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBgSafe(i, { paper: "blank", mediaId: u.mediaId }) });
+      out.push({ sep: true });
+      out.push({ icon: "upload_file", label: "Bild oder PDF …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
+      return out;
+    }
+    // Menue einer Seite (▾ unter dem Vorschaubild) - aufgebaut wie in GoodNotes
     function pageMenu(i, anchor) {
       const pg = notebook.pages[i];
+      const pid = pg.boardOf || pg.id;
+      const side = anchor.closest(".page-thumb") || anchor;
+      const exportItems = [
+        { icon: "ios_share", label: "Exportieren", run: () => window.sofiaExportPagesPdf([pid]) },
+        { icon: "check_circle", label: "Seiten auswählen", run: () => window.sofiaPageSelect(pid) },
+      ];
       // eingeschraenkte Freigabe: Seiten nur hinten anhaengen, sonst nichts veraendern
       if (!fullRights()) {
-        const exp = [
-          { head: "Exportieren" },
-          { icon: "picture_as_pdf", label: "Diese Seite als PDF", run: () => window.sofiaExportPagesPdf([pg.boardOf || pg.id]) },
-          { icon: "check_circle", label: "Seiten auswählen …", run: () => window.sofiaPageSelect(pg.boardOf || pg.id) },
-        ];
-        if (myRole === "view") return openMenu([{ head: "Seite " + (i + 1) }, ...exp], anchor);
-        return openMenu([{ head: "Seite " + (i + 1) }, { icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }, ...exp], anchor);
+        const items = [];
+        if (myRole !== "view") items.push({ icon: "note_add", label: "Neue Seite am Ende", run: () => addPages(notebook.pages.length - 1, [templatePage()]) }, { sep: true });
+        items.push(...exportItems);
+        return openMenu(items, side, { side: true });
       }
-      // Drehen ganz oben, damit es schnell zu finden ist
       const items = [
-        { head: "Seite " + (i + 1) },
+        { icon: "add_row_above", label: "Seite oberhalb einfügen", run: () => addPages(i - 1, [templatePage()]) },
+        { icon: "add_row_below", label: "Seite unterhalb einfügen", run: () => addPages(i, [templatePage()]) },
+        { icon: "content_copy", label: "Duplizieren", run: () => duplicatePage(i) },
+        { icon: "rotate_right", label: "Drehen", run: () => rotatePage(i) },
+        { icon: "wallpaper", label: "Hintergrund", sub: () => pageBgItems(i) },
+        { sep: true },
+        { icon: "bookmark_add", label: "Lesezeichen setzen …", run: () => addBookmark(i) },
+        { icon: "auto_stories", label: pg.read ? "Als Notizseite" : "Als Leseseite", active: !!pg.read, run: () => setPageRead(i, !pg.read) },
       ];
-      if (pg.board || pg.boardOf) items.push({ icon: "open_in_full", label: "Board öffnen", run: () => enterBoardPage(pg.boardOf || pg.id) });
-      items.push(
-        { icon: "rotate_right", label: "Seite drehen", run: () => rotatePage(i) },
-        { icon: "auto_stories", label: pg.read ? "Als Notizseite" : "Als Leseseite (nur Dokument)", active: !!pg.read, run: () => setPageRead(i, !pg.read) },
-        { icon: "bookmark", label: "Lesezeichen …", run: () => addBookmark(i) },
-        { head: "Hintergrund" },
-      );
-      for (const k of Object.keys(PAPER_LABELS)) items.push({ icon: k === "graph" ? "grid_4x4" : k === "lines" ? "reorder" : k === "dots" ? "grain" : "crop_square", label: PAPER_LABELS[k], active: !pg.mediaId && pg.paper === k, run: () => setPageBgSafe(i, { paper: k }) });
-      for (const u of userTemplates()) items.push({ icon: "description", label: u.name, active: pg.mediaId === u.mediaId, run: () => setPageBgSafe(i, { paper: "blank", mediaId: u.mediaId }) });
-      items.push({ icon: "upload_file", label: "Andere Datei (Bild/PDF) …", active: !!pg.mediaId && !userTemplates().some((u) => u.mediaId === pg.mediaId), run: () => ((bgTarget = { kind: "page", index: i }), bgInput.click()) });
-      items.push({ head: "Seite" });
-      items.push({ icon: "note_add", label: "Neue Seite danach", run: () => addPages(i, [templatePage()]) });
-      items.push({ icon: "content_copy", label: "Neue Seite davor", run: () => addPages(i - 1, [templatePage()]) });
-      items.push({ head: "Exportieren" });
-      items.push({ icon: "picture_as_pdf", label: "Diese Seite als PDF", run: () => window.sofiaExportPagesPdf([pg.boardOf || pg.id]) });
-      items.push({ icon: "check_circle", label: "Seiten auswählen …", run: () => window.sofiaPageSelect(pg.boardOf || pg.id) });
-      items.push({ head: "Löschen" });
+      if (pg.board || pg.boardOf) items.push({ icon: "open_in_full", label: "Board öffnen", run: () => enterBoardPage(pid) });
+      items.push({ sep: true }, ...exportItems, { sep: true });
+      items.push({ icon: "ink_eraser", label: "Seite leeren", danger: true, run: () => clearPage(i) });
       items.push({ icon: "delete", label: "Seite löschen", danger: true, run: () => deletePage(i) });
-      openMenu(items, anchor);
+      openMenu(items, side, { side: true });
     }
     // Menue des ganzen Notizbuchs (⋯ oben in der Seiten-Leiste)
     function notebookMenu(anchor) {
