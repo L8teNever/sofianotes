@@ -2512,6 +2512,11 @@
   let currentTool = "pen"; // pen | marker | eraser | select | laser
   // Diese Werte liest der Start (setTool, Kopfleiste), bevor die spaeteren Bloecke drankommen.
   let textEdit = null; // laufende Eingabe: {kind:"text"|"cell", ...}
+  // Text-Werkzeug "nur bearbeiten": Antippen oeffnet vorhandene Felder, legt aber keine neuen an
+  let textEditOnly = false;
+  try {
+    textEditOnly = localStorage.getItem("sofianotes-text-edit-only") === "1";
+  } catch (err) {}
   let textDrag = null;
   let textTapSuppressed = null;
   let zoomWin = null; // {x, y, w, left, right} in Weltkoordinaten
@@ -7494,7 +7499,7 @@
   // Ziehen: neues Feld mit dieser Breite (Text bricht dann automatisch um).
   function finishTextDrag(drag) {
     const a = drag.startWorld;
-    const b = drag.cur || a;
+    let b = drag.cur || a;
     const dragged = Math.hypot(b.x - a.x, b.y - a.y) * scale > 24;
     if (!dragged) {
       const text = topTextAt(a);
@@ -7503,6 +7508,14 @@
       if (table) return openCellEditor(table, cellAt(table, a));
     }
     clearSelection();
+    // "Nur bearbeiten" (Finger-Knopf in der Text-Leiste): vorhandene Felder ja, neue nein
+    if (textEditOnly) return requestRedraw();
+    // Notizbuch: Textfelder nur auf einer Seite, nie daneben; gezogene Breite endet am Seitenrand
+    if (notebook && !boardEditId) {
+      const r = pageRects(notebook).find((p) => a.x >= p.x && a.x <= p.x + p.w && a.y >= p.y && a.y <= p.y + p.h);
+      if (!r) return requestRedraw();
+      if (dragged) b = { x: Math.max(r.x, Math.min(r.x + r.w, b.x)), y: Math.max(r.y, Math.min(r.y + r.h, b.y)) };
+    }
     const spot = !dragged && textOnLines ? lineTypingSpot(a) : null;
     if (spot) {
       textEdit = { kind: "text", strokeId: null, x: spot.x, y: spot.y, size: spot.size, color: currentColor, width: spot.width, before: null, onLines: true };
@@ -8514,7 +8527,7 @@
   }
 
   function drawTextDragPreview() {
-    if (!textDrag || !textDrag.cur) return;
+    if (!textDrag || !textDrag.cur || textEditOnly) return;
     const a = textDrag.startWorld;
     const b = textDrag.cur;
     if (Math.hypot(b.x - a.x, b.y - a.y) * scale <= 24) return;
@@ -18238,6 +18251,26 @@
     }
     findBoardHome();
   });
+  // ---- Text-Leiste: Finger-Knopf "nur bearbeiten" ----
+  (() => {
+    const btn = document.getElementById("btn-text-edit-only");
+    if (!btn) return;
+    const sync = () => {
+      btn.classList.toggle("active", textEditOnly);
+      btn.setAttribute("aria-pressed", textEditOnly ? "true" : "false");
+    };
+    sync();
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      textEditOnly = !textEditOnly;
+      try {
+        localStorage.setItem("sofianotes-text-edit-only", textEditOnly ? "1" : "0");
+      } catch (err) {}
+      sync();
+      showToast(textEditOnly ? "Nur bearbeiten: Antippen legt kein neues Textfeld an" : "Antippen legt wieder neue Textfelder an");
+    });
+  })();
+
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
   // Aufbau wie der Stundenplan in Sofia: Tag/Woche, Doppelstunden als ein Block,
   // Antippen einer Stunde oeffnet alle Infos.
