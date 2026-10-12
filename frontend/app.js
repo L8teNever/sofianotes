@@ -19203,7 +19203,8 @@
       if (!d.active) return cancelThumbDrag();
       const { from, to } = d;
       // lange gedrueckt, aber nicht bewegt: Seite auswaehlen statt verschieben
-      const pick = e.type === "pointerup" && d.moved < 12;
+      // (iPad meldet nach langem Druck oft "pointercancel" statt "pointerup" - zaehlt genauso)
+      const pick = d.moved < 12;
       d.done = true;
       cancelThumbDrag();
       thumbDrag = { done: true };
@@ -19212,9 +19213,19 @@
       }, 50);
       if (pick) {
         const id = pickIdOf(from);
+        const first = !pageSel;
         if (pageSel) {
           if (!pageSel.has(id)) togglePick(id);
         } else startPageSelect(id);
+        // sichtbar machen: Haken springt auf, kurzer Hinweis beim ersten Mal
+        const cell = grid.querySelector('.page-thumb[data-index="' + from + '"]');
+        if (cell) {
+          cell.classList.remove("pick-pop");
+          void cell.offsetWidth;
+          cell.classList.add("pick-pop");
+        }
+        if (navigator.vibrate) navigator.vibrate(20);
+        if (first) showToast("Seite ausgewählt – weitere Seiten antippen");
         return;
       }
       if (e.type === "pointerup" && to !== from) movePage(from, to);

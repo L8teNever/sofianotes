@@ -3856,6 +3856,11 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .page-thumb-check .material-symbols-rounded { font-size: 24px; }
 .page-thumb.picked .page-thumb-check { background: #6750a4; color: #fff; }
 .page-thumb.picked .page-thumb-img { outline-color: #6750a4; opacity: 0.85; }
+/* gerade per langem Druck ausgewaehlt: Haken springt sichtbar auf */
+.page-thumb.pick-pop .page-thumb-check { animation: pick-pop 0.42s cubic-bezier(0.2, 0, 0, 1.4); }
+@keyframes pick-pop { 0% { transform: scale(0.3); } 60% { transform: scale(1.35); } 100% { transform: none; } }
+/* lange druecken: kein iOS-Kontextmenue / keine Textauswahl auf den Vorschaubildern */
+.page-thumb-img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 /* beim Auswaehlen zaehlt nur der Haken, nicht der Rahmen der aktuellen Seite */
 #pages-grid .page-thumb-pick:not(.picked) .page-thumb-img { outline-color: transparent; }
 html[data-theme="dark"] .pages-select { background: #4a4458; color: #e8def8; }
@@ -4219,7 +4224,8 @@ body.pages-open #btn-split { display: none; }
 body.pages-open .top-back-bar { left: var(--safe-left); }
 body.pages-open .top-side-bar.tsb-corner { left: calc(var(--safe-left) + var(--back-shift, 0px)); }
 .top-close-bar { display: none; }
-body.pages-open .top-close-bar { display: flex; left: calc(var(--safe-left) + var(--back-shift, 0px) + var(--tsb-w, 0px) + 8px); }
+/* ✕ der Seiten-Leiste sitzt ganz rechts an ihrem Rand */
+body.pages-open .top-close-bar { display: flex; left: auto; right: calc(100% - var(--pages-inset, 300px) + 12px); }
 /* blauer Ordner-Knopf neben dem Dateinamen entfaellt (der Zurueck-Pfeil macht dasselbe) */
 #btn-open-library { display: none !important; }
 .layer-menu { position: fixed; z-index: 1250; min-width: 230px; width: max-content; max-width: 300px; right: auto; bottom: auto; transform: none; }
