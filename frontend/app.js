@@ -465,13 +465,13 @@
       const nextGap = vNext ? t.oyBottom - vNext.offsetY : 180;
       const prevGap = vPrev ? vPrev.offsetY - t.oyTop : 160;
       nbHold = { i, ox: t.ox, oy, lo: t.oyBottom - oy - nextGap, hi: t.oyTop - oy + prevGap };
-      gestureStart = { i, o: oy, startOy: oy, tall: true, nextGap: vNext ? nextGap : null, prevGap: vPrev ? prevGap : null, used: false };
+      gestureStart = { i, o: oy, startOy: oy, tall: true, nextGap: vNext ? nextGap : null, prevGap: vPrev ? prevGap : null, used: false, sc: scale };
       return;
     }
     const lo = vNext ? vNext[key] - v[key] : -180;
     const hi = vPrev ? vPrev[key] - v[key] : 160;
     nbHold = { i, ox: v.offsetX, oy: v.offsetY, lo, hi };
-    gestureStart = { i, o: v[key], next: vNext ? lo : null, prev: vPrev ? hi : null, used: false };
+    gestureStart = { i, o: v[key], next: vNext ? lo : null, prev: vPrev ? hi : null, used: false, sc: scale };
   }
   // wo die aktuelle Blaetter-Geste begann (Seite, Ausgangslage, Abstand zu den Nachbarn)
   let gestureStart = null;
@@ -18207,8 +18207,11 @@
       if (!notebook || !nbPaging()) return false;
       // Geste, die gerade zu Ende ging: von ihrer Seite aus entscheiden (die Mitte kann
       // beim Rueberziehen schon auf der Nachbarseite liegen)
+      // Nur fuer das Loslassen nach Wischen/Scrollen (ps.t), nicht nach dem Zoomen: dort
+      // gilt die Seite, auf der gezoomt wurde - eine alte Ausgangslage wuerde sonst
+      // nach dem Rauszoomen auf die Nachbarseite springen lassen.
       const gs = window.sofiaGestureStart && window.sofiaGestureStart();
-      const g = gs && !gs.used && gs.i < notebook.pages.length ? gs : null;
+      const g = gs && !gs.used && ps.t && gs.i < notebook.pages.length && Math.abs(scale / gs.sc - 1) < 0.02 ? gs : null;
       if (gs) gs.used = true;
       const cur = g ? g.i : currentPage();
       const fit = viewFor(cur);
