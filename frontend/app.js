@@ -17212,6 +17212,8 @@
           opts.appendChild(o);
         }
         row.appendChild(opts);
+        // aufgeklappte Person ganz sichtbar machen (Liste scrollt)
+        requestAnimationFrame(() => row.scrollIntoView({ block: "nearest", behavior: "smooth" }));
       }
       box.appendChild(row);
     }

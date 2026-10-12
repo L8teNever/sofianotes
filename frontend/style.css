@@ -5649,3 +5649,32 @@ html[data-theme="dark"] .tt-close-btn { background: #d0bcff; color: #381e72; }
 html[data-theme="dark"] .lib-page, html[data-theme="dark"] .library-sheet { background: transparent; }
 html[data-theme="dark"] .lib-card.library-item { border-color: transparent; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); }
 #lib-add-menu .lib-add-opt { white-space: nowrap; }
+
+/* ==== Teilen im Stil der Seiten-Leiste ==== */
+/* Eintraege der scrollenden Liste duerfen nicht schrumpfen - sonst wird die aufgeklappte
+   Person zusammengedrueckt und die naechste schiebt sich darueber */
+.share-list > * { flex-shrink: 0; }
+.share-list { gap: 8px; padding: 2px 2px 6px; margin: 0 -2px; }
+.settings-modal.dlg.share-dlg { background: #f7f2fa; }
+.share-dlg .settings-modal-head .icon-btn { width: 44px; height: 44px; border-radius: 50%; background: var(--dock-bg); border: 1px solid var(--dock-border); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); }
+.share-dlg .share-here-chip { background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+.share-dlg .share-row { background: #fff; border-radius: 20px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); }
+.share-dlg .share-row.open { background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1); }
+.share-dlg .share-row-head { padding: 10px 12px; }
+.share-dlg .share-role-chip { width: 36px; height: 36px; border-radius: 50%; background: #f3edf7; }
+.share-dlg .share-opts { gap: 8px; padding: 0 12px 12px; }
+.share-dlg .share-opt { border-radius: 16px; background: #f7f2fa; border: 1.5px solid transparent; padding: 12px; }
+.share-dlg .share-opt:hover { background: #f3edf7; }
+.share-dlg .share-opt.active { background: #eaddff; border-color: #6750a4; }
+.share-dlg .share-opt.danger.active { background: #fce8e6; border-color: #b3261e; }
+html[data-theme="dark"] .settings-modal.dlg.share-dlg { background: #1c1b22; }
+html[data-theme="dark"] .share-dlg .share-here-chip, html[data-theme="dark"] .share-dlg .share-row, html[data-theme="dark"] .share-dlg .share-row.open { background: #2b2930; color: #e6e1e5; }
+html[data-theme="dark"] .share-dlg .share-row-head { color: #e6e1e5; }
+html[data-theme="dark"] .share-dlg .share-row-text small, html[data-theme="dark"] .share-dlg .share-opt-text small { color: #cac4d0; }
+html[data-theme="dark"] .share-dlg .share-role-chip { background: #3a3741; }
+html[data-theme="dark"] .share-dlg .share-opt { background: #1c1b22; color: #e6e1e5; }
+html[data-theme="dark"] .share-dlg .share-opt:hover { background: #24222a; }
+html[data-theme="dark"] .share-dlg .share-opt.active { background: #4a4458; border-color: #d0bcff; }
+html[data-theme="dark"] .share-dlg .share-opt.danger.active { background: #3b1f1d; border-color: #f2b8b5; }
+html[data-theme="dark"] .share-dlg .share-opt > .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] .share-dlg .share-opt.danger > .material-symbols-rounded { color: #f2b8b5; }
