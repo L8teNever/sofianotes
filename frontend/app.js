@@ -18786,6 +18786,16 @@
     const marksBtn = document.getElementById("btn-bookmarks");
     const tabPages = document.getElementById("pages-tab-pages");
     const tabMarks = document.getElementById("pages-tab-marks");
+    const tabSelect = document.getElementById("pages-tab-select");
+    // Umschalter oben: Seiten | Lesezeichen | Auswaehlen
+    function syncPanelTabs() {
+      const mode = marksOpen ? "marks" : pageSel ? "select" : "pages";
+      for (const [el, m] of [[tabPages, "pages"], [tabMarks, "marks"], [tabSelect, "select"]]) {
+        if (!el) continue;
+        el.classList.toggle("active", m === mode);
+        el.setAttribute("aria-selected", m === mode ? "true" : "false");
+      }
+    }
     let marksOpen = false;
     function notebookMarks() {
       return (notebook && notebook.bookmarks) || [];
@@ -18847,11 +18857,7 @@
     }
     function renderMarks() {
       marksBtn?.classList.toggle("active", marksOpen);
-      for (const [el, on] of [[tabPages, !marksOpen], [tabMarks, !!marksOpen]]) {
-        if (!el) continue;
-        el.classList.toggle("active", on);
-        el.setAttribute("aria-selected", on ? "true" : "false");
-      }
+      syncPanelTabs();
       panel?.classList.toggle("marks-only", !!marksOpen);
       if (!marksEl) return;
       marksEl.classList.toggle("hidden", !marksOpen);
@@ -18936,15 +18942,23 @@
     // Umschalter unter der Kopfzeile: Seiten | Lesezeichen
     tabPages?.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (!marksOpen) return;
-      marksOpen = false;
-      renderMarks();
+      if (marksOpen) {
+        marksOpen = false;
+        renderMarks();
+      }
+      if (pageSel) endPageSelect();
     });
     tabMarks?.addEventListener("click", (e) => {
       e.stopPropagation();
       if (marksOpen) return;
+      if (pageSel) endPageSelect();
       marksOpen = true;
       renderMarks();
+    });
+    tabSelect?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (pageSel && !marksOpen) return;
+      startPageSelect();
     });
     panel.addEventListener("pointerdown", (e) => e.stopPropagation());
     addPop.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -19140,18 +19154,14 @@
     };
     // Lange druecken: Seite wird ausgewaehlt und haengt am Finger; loslassen = neue Stelle
     let thumbDrag = null; // {from, cell, ghost, to, timer, x0, y0, active, done}
-    // Lange druecken: Seite anheben (ziehen = verschieben). Loslassen ohne zu bewegen =
-    // Auswahl starten (z.B. fuer den PDF-Export). Ohne Bearbeiten-Recht nur die Auswahl.
+    // Lange druecken: Seite anheben und ziehen = verschieben (Auswaehlen hat einen eigenen Tab)
     function startThumbHold(e, i, cell) {
+      if (!fullRights()) return;
       if (e.button > 0) return;
       cancelThumbDrag();
-      const d = { from: i, cell, to: i, x0: e.clientX, y0: e.clientY, active: false, done: false, pointerId: e.pointerId, moved: 0, selectOnly: !fullRights() };
+      const d = { from: i, cell, to: i, x0: e.clientX, y0: e.clientY, active: false, done: false, pointerId: e.pointerId, moved: 0 };
       d.timer = setTimeout(() => {
         d.active = true;
-        if (d.selectOnly) {
-          if (navigator.vibrate) navigator.vibrate(15);
-          return;
-        }
         cell.classList.add("lifted");
         const r = cell.getBoundingClientRect();
         const g = cell.cloneNode(true);
@@ -19222,32 +19232,12 @@
       if (!d || e.pointerId !== d.pointerId) return;
       if (!d.active) return cancelThumbDrag();
       const { from, to } = d;
-      // lange gedrueckt, aber nicht bewegt: Seite auswaehlen statt verschieben
-      // (iPad meldet nach langem Druck oft "pointercancel" statt "pointerup" - zaehlt genauso)
-      const pick = d.moved < 12;
       d.done = true;
       cancelThumbDrag();
       thumbDrag = { done: true };
       setTimeout(() => {
         if (thumbDrag && thumbDrag.done && !thumbDrag.cell) thumbDrag = null;
       }, 50);
-      if (pick) {
-        const id = pickIdOf(from);
-        const first = !pageSel;
-        if (pageSel) {
-          if (!pageSel.has(id)) togglePick(id);
-        } else startPageSelect(id);
-        // sichtbar machen: Haken springt auf, kurzer Hinweis beim ersten Mal
-        const cell = grid.querySelector('.page-thumb[data-index="' + from + '"]');
-        if (cell) {
-          cell.classList.remove("pick-pop");
-          void cell.offsetWidth;
-          cell.classList.add("pick-pop");
-        }
-        if (navigator.vibrate) navigator.vibrate(20);
-        if (first) showToast("Seite ausgewählt – weitere Seiten antippen");
-        return;
-      }
       if (e.type === "pointerup" && to !== from) movePage(from, to);
     };
     window.addEventListener("pointerup", endThumb, true);
@@ -19286,13 +19276,19 @@
       if (!notebook) return;
       if (!panelOpen) setPanel(true);
       pageSel = new Set(preId ? [preId] : []);
+      if (marksOpen) {
+        marksOpen = false;
+        renderMarks();
+      }
       renderPanel();
+      syncPanelTabs();
     }
     function endPageSelect() {
       if (!pageSel) return;
       pageSel = null;
       renderPanel();
       syncSelectBar();
+      syncPanelTabs();
     }
     function togglePick(id) {
       if (!pageSel || !id) return;

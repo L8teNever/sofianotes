@@ -3885,9 +3885,9 @@ html[data-theme="dark"] #pages-panel .pages-tab.active .material-symbols-rounded
 .page-thumb-check .material-symbols-rounded { font-size: 24px; }
 .page-thumb.picked .page-thumb-check { background: #6750a4; color: #fff; }
 .page-thumb.picked .page-thumb-img { outline-color: #6750a4; opacity: 0.85; }
-/* gerade per langem Druck ausgewaehlt: Haken springt sichtbar auf */
-.page-thumb.pick-pop .page-thumb-check { animation: pick-pop 0.42s cubic-bezier(0.2, 0, 0, 1.4); }
-@keyframes pick-pop { 0% { transform: scale(0.3); } 60% { transform: scale(1.35); } 100% { transform: none; } }
+/* angetippt: Haken springt kurz auf */
+.page-thumb.picked .page-thumb-check { animation: pick-pop 0.32s cubic-bezier(0.2, 0, 0, 1.4); }
+@keyframes pick-pop { 0% { transform: scale(0.4); } 60% { transform: scale(1.25); } 100% { transform: none; } }
 /* lange druecken: kein iOS-Kontextmenue / keine Textauswahl auf den Vorschaubildern */
 .page-thumb-img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 /* beim Auswaehlen zaehlt nur der Haken, nicht der Rahmen der aktuellen Seite */
