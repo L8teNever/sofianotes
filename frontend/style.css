@@ -5766,3 +5766,26 @@ html[data-theme="dark"] .tt-side { background: #1c1b22; color: #e6e1e5; border-c
 .tt-side-title-pill { flex: 0 1 auto; overflow: hidden; }
 .tt-side-title-pill .chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-side-head .chat-round { width: 38px; height: 38px; }
+
+/* ==== Text-Leiste im Stil der Seiten-Leiste: Spuren wie die Tabs ==== */
+.text-bar { gap: 8px; }
+.tbar-seg { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 22px; background: rgba(0, 0, 0, 0.07); }
+.tbar-seg .tool-btn { width: 38px; height: 38px; border-radius: 19px; background: transparent; color: #49454f; box-shadow: none; }
+.tbar-seg .tool-btn.active { background: #fff; color: #1c1b1f; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14); }
+.tbar-seg .tool-btn.active .material-symbols-rounded { color: #1c1b1f; }
+.tbar-round { width: 44px; height: 44px; border-radius: 50%; background: #fff; border: 1px solid var(--dock-border); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
+.tbar-round.active-pop { background: #eaddff; }
+#toolbar.dock-left .tbar-seg, #toolbar.dock-right .tbar-seg, #toolbar.free-drag.orient-vertical .tbar-seg, #toolbar.zoom-inner.orient-vertical .tbar-seg { flex-direction: column; }
+html[data-theme="dark"] .tbar-seg { background: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .tbar-seg .tool-btn { color: #cac4d0; }
+html[data-theme="dark"] .tbar-seg .tool-btn.active { background: #4a4458; color: #f4f1f8; }
+html[data-theme="dark"] .tbar-seg .tool-btn.active .material-symbols-rounded { color: #f4f1f8; }
+html[data-theme="dark"] .tbar-round { background: #2b2930; border-color: rgba(255, 255, 255, 0.1); }
+html[data-theme="dark"] .tbar-round.active-pop { background: #4a4458; }
+/* Verwandeln: Knopf weg, solange das grosse Feld / der Tagesplan offen ist */
+.school-btn.morph-away { visibility: hidden; }
+.school-pop { animation: none; }
+.tt-side.no-slide { animation: none; }
+.tt-side.closing { animation: tt-side-out 0.22s cubic-bezier(0.3, 0, 0.8, 0.15) forwards; }
+@keyframes tt-side-out { to { transform: translateX(calc(100% + 24px)); opacity: 0.4; } }
+html[data-theme="dark"] .tbar-round.text-color-btn { background: #4a4458; }

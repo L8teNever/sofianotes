@@ -398,24 +398,22 @@
         <span class="material-symbols-rounded">text_fields</span>
       </button>
     </div>
-    <div class="mode-group" data-modes="text">
-      <button type="button" class="tool-btn size-btn" data-text-size="18" title="Kleine Schrift"><span class="size-a" style="font-size:12px">A</span></button>
-      <button type="button" class="tool-btn size-btn" data-text-size="28" title="Mittlere Schrift"><span class="size-a" style="font-size:16px">A</span></button>
-      <button type="button" class="tool-btn size-btn" data-text-size="44" title="Große Schrift"><span class="size-a" style="font-size:21px">A</span></button>
-      <span class="mode-sep"></span>
-      <button type="button" class="tool-btn fmt-btn" data-cmd="bold" title="Fett"><span class="material-symbols-rounded">format_bold</span></button>
-      <button type="button" class="tool-btn fmt-btn" data-cmd="italic" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
-      <button type="button" class="tool-btn fmt-btn" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
-      <button type="button" class="tool-btn fmt-btn" data-cmd="underline" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
-      <span class="mode-sep"></span>
-      <button type="button" id="btn-text-color" class="tool-btn text-color-btn" title="Textfarbe" aria-haspopup="true" aria-expanded="false">
+    <div class="mode-group text-bar" data-modes="text">
+      <div class="tbar-seg" role="group" aria-label="Schriftgröße">
+        <button type="button" class="tool-btn size-btn" data-text-size="18" title="Kleine Schrift"><span class="size-a" style="font-size:12px">A</span></button>
+        <button type="button" class="tool-btn size-btn" data-text-size="28" title="Mittlere Schrift"><span class="size-a" style="font-size:16px">A</span></button>
+        <button type="button" class="tool-btn size-btn" data-text-size="44" title="Große Schrift"><span class="size-a" style="font-size:21px">A</span></button>
+      </div>
+      <div class="tbar-seg" role="group" aria-label="Format">
+        <button type="button" class="tool-btn fmt-btn" data-cmd="bold" title="Fett"><span class="material-symbols-rounded">format_bold</span></button>
+        <button type="button" class="tool-btn fmt-btn" data-cmd="italic" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
+        <button type="button" class="tool-btn fmt-btn" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
+        <button type="button" class="tool-btn fmt-btn" data-cmd="underline" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
+      </div>
+      <button type="button" id="btn-text-color" class="tool-btn text-color-btn tbar-round" title="Textfarbe" aria-haspopup="true" aria-expanded="false">
         <span class="text-color-flag" aria-hidden="true"></span>
       </button>
-    </div>
-    <div class="mode-group" data-modes="text">
-      <span class="mode-sep"></span>
-      <button id="btn-insert-table" class="tool-btn" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">table</span></button>
-      <button type="button" id="btn-bar-tbl-edit" class="tool-btn" title="Tabelle bearbeiten: Spalten, Zeilen, Breiten"><span class="material-symbols-rounded">tune</span></button>
+      <button id="btn-insert-table" class="tool-btn tbar-round" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">table</span></button>
     </div>
     <div class="mode-group" data-modes="shapes" id="shape-tools">
       <button type="button" class="tool-btn kind-btn" data-obj="rect" title="Rechteck"><span class="material-symbols-rounded">rectangle</span></button>

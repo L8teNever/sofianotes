@@ -10254,8 +10254,6 @@
         else on = !!textDefaults[f];
         b.classList.toggle("active", on);
       });
-      const table = activeTable();
-      if (barTblEditBtn) barTblEditBtn.disabled = !table;
     } else if (mode === "eraser") {
       let best = null;
       toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) => {
@@ -10298,14 +10296,6 @@
     })
   );
 
-  const barTblEditBtn = document.getElementById("btn-bar-tbl-edit");
-  if (barTblEditBtn) {
-    barTblEditBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
-    barTblEditBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openTableDialog(activeTable());
-    });
-  }
 
   toolbarEl.querySelectorAll(".eraser-size-btn").forEach((b) =>
     b.addEventListener("click", (e) => {
@@ -19070,6 +19060,31 @@
     badgeTimer = setInterval(pollBadge, 60000);
   })();
 
+  // ---- Verwandeln: ein Element waechst aus einem Rechteck (z. B. Knopf) bzw. schrumpft hinein ----
+  window.sofiaMorph = {
+    from(el, r0, done) {
+      const r1 = el.getBoundingClientRect();
+      if (!r0 || !r1.width || !r1.height || !el.animate) return done && done();
+      const t = "translate(" + (r0.left - r1.left) + "px," + (r0.top - r1.top) + "px) scale(" + r0.width / r1.width + "," + r0.height / r1.height + ")";
+      const a = el.animate([{ transformOrigin: "0 0", transform: t, opacity: 0.4 }, { transformOrigin: "0 0", transform: "none", opacity: 1 }], { duration: 300, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+      for (const c of el.children) c.animate && c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }], { duration: 300 });
+      a.onfinish = () => done && done();
+    },
+    to(el, r0, done) {
+      const r1 = el.getBoundingClientRect();
+      if (!r0 || !r1.width || !r1.height || !el.animate) return done && done();
+      const t = "translate(" + (r0.left - r1.left) + "px," + (r0.top - r1.top) + "px) scale(" + r0.width / r1.width + "," + r0.height / r1.height + ")";
+      for (const c of el.children) c.animate && c.animate([{ opacity: 1 }, { opacity: 0, offset: 0.5 }, { opacity: 0 }], { duration: 240, fill: "forwards" });
+      const a = el.animate([{ transformOrigin: "0 0", transform: "none", opacity: 1 }, { transformOrigin: "0 0", transform: t, opacity: 0.3 }], { duration: 240, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)", fill: "forwards" });
+      a.onfinish = () => {
+        done && done();
+        el.getAnimations({ subtree: true }).forEach((x) => x.cancel());
+      };
+    },
+  };
+  // Countdown-Knopf voruebergehend weg (Feld oder Tagesplan ist aus ihm "herausgewachsen")
+  window.sofiaSchoolBtnAway = (away) => document.getElementById("btn-school")?.classList.toggle("morph-away", !!away);
+
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
   // Aufbau wie der Stundenplan in Sofia: Tag/Woche, Doppelstunden als ein Block,
   // Antippen einer Stunde oeffnet alle Infos.
@@ -19441,16 +19456,36 @@
         renderSide();
       }
     }
-    function openSide() {
+    function openSide(fromRect) {
+      const wasOpen = sideWanted && !side.classList.contains("hidden");
       sideWanted = true;
       const dow = today().getDay();
       sideOffset = dow === 0 ? 1 : dow === 6 ? 2 : 0;
       placeSide();
       load().then(renderSide);
+      if (!wasOpen && fromRect) {
+        window.sofiaSchoolBtnAway(true);
+        side.classList.add("no-slide");
+        window.sofiaMorph.from(side, fromRect, () => side.classList.remove("no-slide"));
+      }
     }
     function closeSide() {
-      sideWanted = false;
-      placeSide();
+      const btnS = document.getElementById("btn-school");
+      const target = btnS && !btnS.classList.contains("hidden") ? btnS.getBoundingClientRect() : null;
+      const finish = () => {
+        sideWanted = false;
+        placeSide();
+        window.sofiaSchoolBtnAway(false);
+      };
+      // schrumpft zurueck in den Countdown-Knopf (gibt es den nicht, gleitet sie raus)
+      if (target && target.width) window.sofiaMorph.to(side, target, finish);
+      else {
+        side.classList.add("closing");
+        setTimeout(() => {
+          side.classList.remove("closing");
+          finish();
+        }, 220);
+      }
     }
     window.sofiaOpenDaySide = openSide;
     if (side) {
@@ -22087,7 +22122,7 @@
       if (show === btnShown) return;
       btnShown = show;
       btn.classList.toggle("hidden", !show);
-      if (!show) closePop();
+      if (!show) closePop(true);
       try {
         layoutTopBar();
       } catch (err) {}
@@ -22126,31 +22161,57 @@
       pop.style.right = Math.round(window.innerWidth - r.right) + "px";
     }
     function openPop() {
+      const r0 = btn.getBoundingClientRect();
       pop.classList.remove("hidden");
       btn.classList.add("active");
       btn.setAttribute("aria-expanded", "true");
       placePop();
       tick();
+      // waechst aus dem Knopf heraus, der Knopf ist solange weg
+      window.sofiaSchoolBtnAway(true);
+      window.sofiaMorph.from(pop, r0);
     }
-    function closePop() {
-      pop.classList.add("hidden");
-      btn.classList.remove("active");
+    let popClosing = false;
+    function closePop(instant, keepAway) {
+      if (pop.classList.contains("hidden") || popClosing) return;
       btn.setAttribute("aria-expanded", "false");
+      const finish = () => {
+        popClosing = false;
+        pop.classList.add("hidden");
+        btn.classList.remove("active");
+        if (!keepAway) window.sofiaSchoolBtnAway(false);
+      };
+      if (instant) return finish();
+      popClosing = true;
+      // zurueck in den Knopf (Platz des Knopfs, auch wenn er gerade unsichtbar ist)
+      window.sofiaMorph.to(pop, btn.getBoundingClientRect(), finish);
     }
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (pop.classList.contains("hidden")) openPop();
       else closePop();
     });
-    document.addEventListener("pointerdown", (e) => {
-      if (!pop.classList.contains("hidden") && !pop.contains(e.target) && !btn.contains(e.target)) closePop();
-    });
+    // Tipp daneben schliesst nur (malt nichts aufs Blatt)
+    window.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (pop.classList.contains("hidden") || pop.contains(e.target) || btn.contains(e.target)) return;
+        closePop();
+        if (e.target === canvas || (e.target.closest && e.target.closest("canvas"))) {
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      },
+      true
+    );
     document.getElementById("sp-day").addEventListener("click", () => {
-      closePop();
-      if (window.sofiaOpenDaySide) window.sofiaOpenDaySide();
+      // der Tagesplan waechst aus dem Feld heraus; der Knopf bleibt weg, bis er zu ist
+      const r0 = pop.getBoundingClientRect();
+      closePop(true, true);
+      if (window.sofiaOpenDaySide) window.sofiaOpenDaySide(r0);
     });
     document.getElementById("sp-week").addEventListener("click", () => {
-      closePop();
+      closePop(true);
       if (window.sofiaOpenTimetable) window.sofiaOpenTimetable();
     });
     window.addEventListener("resize", () => !pop.classList.contains("hidden") && placePop());
