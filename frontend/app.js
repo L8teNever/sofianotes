@@ -18299,10 +18299,15 @@
       const monday = w.start ? parseYmd(w.start) : null;
       const days = [];
       for (let i = 0; i < 5; i++) days.push(monday ? ymd(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)) : "");
-      for (const l of w.lessons) if (l.date && !days.includes(l.date)) days.push(l.date);
+      // nur Montag bis Freitag - Samstag/Sonntag nie, auch wenn dort etwas eingetragen ist
+      const weekday = (d) => {
+        const wd = parseYmd(d).getDay();
+        return wd !== 0 && wd !== 6;
+      };
+      for (const l of w.lessons) if (l.date && !days.includes(l.date) && weekday(l.date)) days.push(l.date);
       days.sort();
       const slots = [];
-      for (const l of w.lessons) if (!slots.some((x) => x.start === l.start && x.end === l.end)) slots.push({ start: l.start, end: l.end });
+      for (const l of w.lessons) if (days.includes(l.date) && !slots.some((x) => x.start === l.start && x.end === l.end)) slots.push({ start: l.start, end: l.end });
       slots.sort((a, b) => (a.start + a.end).localeCompare(b.start + b.end));
       const holidayOf = (d) => (data.holidays || []).find((h) => h.start <= d && d <= h.end);
       const today = data.today || ymd(new Date());
