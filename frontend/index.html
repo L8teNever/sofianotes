@@ -963,6 +963,28 @@
   </div>
 </div>
 
+<!-- Farbwaehler (wie GoodNotes): ersetzt die Standard-Farbauswahl -->
+<div id="color-picker" class="cp hidden" role="dialog" aria-label="Farbe wählen">
+  <div class="cp-head">
+    <span class="cp-title">Farbe</span>
+    <button type="button" class="cp-x" title="Abbrechen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div class="cp-tabs" role="tablist">
+    <button type="button" class="cp-tab active" data-tab="grid">Raster</button>
+    <button type="button" class="cp-tab" data-tab="spectrum">Spektrum</button>
+  </div>
+  <div class="cp-grid"></div>
+  <div class="cp-spectrum hidden">
+    <div class="cp-sv"><div class="cp-sv-knob"></div></div>
+    <input type="range" class="cp-hue" min="0" max="360" step="1" value="0" aria-label="Farbton" />
+  </div>
+  <div class="cp-foot">
+    <div class="cp-compare" title="Vorher / Nachher (vorher antippen = zurück)"><button type="button" class="cp-old"></button><span class="cp-new"></span></div>
+    <input type="text" class="cp-hex" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Hex-Code" />
+    <button type="button" class="cp-ok">Fertig</button>
+  </div>
+</div>
+
 <!-- Countdown aufgeklappt: Stunde, naechste Stunde, Schulschluss -->
 <div id="school-pop" class="school-pop hidden" role="dialog" aria-label="Schulstunde">
   <div class="sp-head">

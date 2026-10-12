@@ -3184,7 +3184,7 @@
     });
     document.addEventListener("pointerdown", (e) => {
       if (textColorPop.classList.contains("hidden")) return;
-      if (e.target.closest("#text-color-pop") || e.target.closest("#btn-text-color")) return;
+      if (e.target.closest("#text-color-pop") || e.target.closest("#btn-text-color") || e.target.closest("#color-picker")) return;
       closeTextColorPop();
     }, true);
   }
@@ -3369,7 +3369,7 @@
       renderSwatches();
     });
     document.addEventListener("pointerdown", (e) => {
-      if (!swatchMenu.classList.contains("hidden") && !e.target.closest("#swatch-menu")) closeSwatchMenu();
+      if (!swatchMenu.classList.contains("hidden") && !e.target.closest("#swatch-menu") && !e.target.closest("#color-picker")) closeSwatchMenu();
     }, true);
   }
 
@@ -19068,6 +19068,214 @@
     badgeTimer = setInterval(pollBadge, 60000);
   })();
 
+  // ---- Farbwaehler wie in GoodNotes: Raster | Spektrum, Hex, Vorher/Nachher ----
+  // Ersetzt die Standard-Farbauswahl des Browsers an allen Stellen (input[type=color]):
+  // live wird "input" ausgeloest, bestaetigt "change" - die vorhandenen Handler bleiben gleich.
+  (() => {
+    const cp = document.getElementById("color-picker");
+    if (!cp) return;
+    const gridEl = cp.querySelector(".cp-grid");
+    const specEl = cp.querySelector(".cp-spectrum");
+    const sv = cp.querySelector(".cp-sv");
+    const knob = cp.querySelector(".cp-sv-knob");
+    const hueIn = cp.querySelector(".cp-hue");
+    const hexIn = cp.querySelector(".cp-hex");
+    const oldEl = cp.querySelector(".cp-old");
+    const newEl = cp.querySelector(".cp-new");
+    const okBtn = cp.querySelector(".cp-ok");
+    let session = null; // {input, initial, color, h, s, v}
+    const hex2 = (n) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, "0");
+    function hsvToHex(h, s, v) {
+      const f = (n) => {
+        const k = (n + h / 60) % 6;
+        return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+      };
+      return "#" + hex2(f(5) * 255) + hex2(f(3) * 255) + hex2(f(1) * 255);
+    }
+    function hexToHsv(hex) {
+      const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+      if (!m) return { h: 0, s: 0, v: 0 };
+      const n = parseInt(m[1], 16);
+      const r = ((n >> 16) & 255) / 255;
+      const g = ((n >> 8) & 255) / 255;
+      const b = (n & 255) / 255;
+      const max = Math.max(r, g, b);
+      const d = max - Math.min(r, g, b);
+      let h = 0;
+      if (d) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return { h: (h * 60 + 360) % 360, s: max ? d / max : 0, v: max };
+    }
+    const hslToHex = (h, s, l) => {
+      s /= 100;
+      l /= 100;
+      const a = s * Math.min(l, 1 - l);
+      const f = (n) => {
+        const k = (n + h / 30) % 12;
+        return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+      };
+      return "#" + hex2(f(0) * 255) + hex2(f(8) * 255) + hex2(f(4) * 255);
+    };
+    // Raster: oben Grautoene, darunter 12 Farbtoene in 8 Helligkeiten
+    const HUES = [205, 222, 250, 275, 300, 335, 355, 15, 30, 45, 60, 140];
+    const LIGHT = [22, 32, 42, 52, 62, 72, 82, 90];
+    const gridColors = [];
+    for (let i = 0; i < 12; i++) gridColors.push(hslToHex(0, 0, 100 - (i * 100) / 11));
+    for (const l of LIGHT) for (const h of HUES) gridColors.push(hslToHex(h, h === 60 ? 90 : 78, l));
+    for (const c of gridColors) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "cp-cell";
+      b.style.background = c;
+      b.dataset.color = c;
+      b.title = c;
+      b.addEventListener("click", () => setColor(c, true));
+      gridEl.appendChild(b);
+    }
+    function paint() {
+      const c = session.color;
+      newEl.style.background = c;
+      if (document.activeElement !== hexIn) hexIn.value = c.toUpperCase();
+      sv.style.setProperty("--hue", session.h);
+      hueIn.value = String(Math.round(session.h));
+      knob.style.left = session.s * 100 + "%";
+      knob.style.top = (1 - session.v) * 100 + "%";
+      knob.style.background = c;
+      gridEl.querySelectorAll(".cp-cell").forEach((x) => x.classList.toggle("active", x.dataset.color === c));
+    }
+    function emit(type) {
+      const inp = session.input;
+      inp.value = session.color;
+      inp.dispatchEvent(new Event(type, { bubbles: true }));
+    }
+    function setColor(c, fromGrid) {
+      c = c.toLowerCase();
+      const hsv = hexToHsv(c);
+      session.color = c;
+      session.s = hsv.s;
+      session.v = hsv.v;
+      // Grau hat keinen Farbton - den bisherigen behalten
+      if (hsv.s > 0.01) session.h = hsv.h;
+      paint();
+      if (session.live) emit("input");
+    }
+    function fromHsv() {
+      session.color = hsvToHex(session.h, session.s, session.v);
+      paint();
+      if (session.live) emit("input");
+    }
+    function tab(name) {
+      cp.querySelectorAll(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+      gridEl.classList.toggle("hidden", name !== "grid");
+      specEl.classList.toggle("hidden", name !== "spectrum");
+      try {
+        localStorage.setItem("sofianotes-cp-tab", name);
+      } catch (err) {}
+    }
+    cp.querySelectorAll(".cp-tab").forEach((t) => t.addEventListener("click", () => tab(t.dataset.tab)));
+    // Farbfeld ziehen
+    let svDrag = null;
+    const svMove = (e) => {
+      const r = sv.getBoundingClientRect();
+      session.s = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      session.v = 1 - Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+      fromHsv();
+    };
+    sv.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      svDrag = e.pointerId;
+      try {
+        sv.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      svMove(e);
+    });
+    sv.addEventListener("pointermove", (e) => svDrag === e.pointerId && svMove(e));
+    const svEnd = (e) => svDrag === e.pointerId && (svDrag = null);
+    sv.addEventListener("pointerup", svEnd);
+    sv.addEventListener("pointercancel", svEnd);
+    hueIn.addEventListener("input", () => {
+      session.h = +hueIn.value;
+      if (session.s < 0.05) session.s = 0.8;
+      if (session.v < 0.1) session.v = 0.85;
+      fromHsv();
+    });
+    hexIn.addEventListener("input", () => {
+      const v = hexIn.value.trim();
+      if (/^#?[0-9a-f]{6}$/i.test(v)) setColor(v[0] === "#" ? v : "#" + v);
+    });
+    hexIn.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") done(true);
+    });
+    oldEl.addEventListener("click", () => setColor(session.initial));
+    function place(anchor) {
+      cp.classList.remove("hidden");
+      const r = anchor ? anchor.getBoundingClientRect() : { left: window.innerWidth / 2, right: window.innerWidth / 2, top: window.innerHeight / 2, bottom: window.innerHeight / 2 };
+      const w = cp.offsetWidth;
+      const h = cp.offsetHeight;
+      let top = r.top - h - 12;
+      if (top < 8) top = Math.min(window.innerHeight - h - 8, r.bottom + 12);
+      const left = Math.max(8, Math.min(window.innerWidth - w - 8, (r.left + r.right) / 2 - w / 2));
+      cp.style.left = Math.round(left) + "px";
+      cp.style.top = Math.round(Math.max(8, top)) + "px";
+    }
+    function open(input, anchor) {
+      const initial = (/^#[0-9a-f]{6}$/i.test(input.value) ? input.value : "#000000").toLowerCase();
+      const hsv = hexToHsv(initial);
+      // "+": erst beim Hinzufuegen uebernehmen; Bearbeiten: live mitsehen
+      const adding = input.id === "custom-color-input" || input.id === "text-color-pop-input";
+      session = { input, initial, color: initial, h: hsv.h, s: hsv.s, v: hsv.v, live: !adding };
+      cp.querySelector(".cp-title").textContent = adding ? "Neue Farbe" : "Farbe ändern";
+      okBtn.textContent = adding ? "Hinzufügen" : "Fertig";
+      oldEl.style.background = initial;
+      let t = "grid";
+      try {
+        t = localStorage.getItem("sofianotes-cp-tab") || "grid";
+      } catch (err) {}
+      tab(t === "spectrum" ? "spectrum" : "grid");
+      paint();
+      place(anchor);
+    }
+    function done(ok) {
+      if (!session) return;
+      const sess = session;
+      cp.classList.add("hidden");
+      if (ok) {
+        sess.input.value = sess.color;
+        sess.input.dispatchEvent(new Event("input", { bubbles: true }));
+        sess.input.dispatchEvent(new Event("change", { bubbles: true }));
+      } else if (sess.live && sess.color !== sess.initial) {
+        // abgebrochen: alte Farbe zurueck
+        sess.input.value = sess.initial;
+        sess.input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      session = null;
+    }
+    window.sofiaColorPickerOpen = () => !!session;
+    okBtn.addEventListener("click", () => done(true));
+    cp.querySelector(".cp-x").addEventListener("click", () => done(false));
+    for (const ev of ["pointerdown", "wheel"]) cp.addEventListener(ev, (e) => e.stopPropagation());
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (session && !cp.contains(e.target)) done(false);
+      },
+      true
+    );
+    // jede Farbauswahl der App (label mit input[type=color]) oeffnet stattdessen diesen Waehler
+    document.addEventListener(
+      "click",
+      (e) => {
+        const t = e.target;
+        const input = t.matches && t.matches('input[type="color"]') ? t : t.closest && t.closest("label") ? t.closest("label").querySelector('input[type="color"]') : null;
+        if (!input) return;
+        e.preventDefault();
+        e.stopPropagation();
+        open(input, input.closest("label") || input);
+      },
+      true
+    );
+  })();
+
   // ---- Verwandeln: ein Element waechst aus einem Rechteck (z. B. Knopf) bzw. schrumpft hinein ----
   window.sofiaMorph = {
     from(el, r0, done) {
@@ -22506,9 +22714,52 @@
     const divider = document.getElementById("split-divider");
     const activeBar = document.getElementById("split-active");
     const menu = document.getElementById("split-menu");
+    menu.classList.add("page-menu", "page-menu-side");
     const btn = document.getElementById("btn-split");
     const pickScrim = document.getElementById("split-pick-scrim");
     const GAP = 3;
+    // pro Haelfte eine Namens-Pille (oben mittig): Blattname + ✕ fuer genau diese Haelfte
+    const tags = [0, 1].map((i) => {
+      const t = document.createElement("div");
+      t.className = "split-tag hidden";
+      t.innerHTML = '<button type="button" class="split-tag-name"><span class="material-symbols-rounded"></span><span class="split-tag-text"></span></button><button type="button" class="split-tag-x" title="Diese Hälfte schließen"><span class="material-symbols-rounded">close</span></button>';
+      t.querySelector(".split-tag-name").addEventListener("click", (e) => {
+        e.stopPropagation();
+        activate(i);
+      });
+      t.querySelector(".split-tag-x").addEventListener("click", (e) => {
+        e.stopPropagation();
+        // die andere Haelfte bleibt
+        close(1 - i);
+      });
+      for (const ev of ["pointerdown", "wheel"]) t.addEventListener(ev, (e) => e.stopPropagation());
+      document.body.appendChild(t);
+      return t;
+    });
+    function paneTitle(i) {
+      const st = splitState;
+      const p = st.panes[i];
+      if (!p) return "";
+      const meta = i === st.active ? currentBoardMeta : p.ctx.currentBoardMeta;
+      const same = st.panes[0] && st.panes[1] && st.panes[0].ctx === st.panes[1].ctx;
+      return ((meta && meta.title) || "Blatt") + (same ? (i === 0 ? " · links" : " · rechts") : "");
+    }
+    function syncTags() {
+      const st = splitState;
+      const g = st ? geometry() : null;
+      tags.forEach((t, i) => {
+        const on = !!(st && st.panes[i]);
+        t.classList.toggle("hidden", !on);
+        if (!on) return;
+        const pane = g.panes[i];
+        t.classList.toggle("active", i === st.active);
+        t.querySelector(".material-symbols-rounded").textContent = i === st.active ? "edit" : "visibility";
+        t.querySelector(".split-tag-text").textContent = paneTitle(i);
+        t.querySelector(".split-tag-name").title = i === st.active ? "Hier schreibst du gerade" : "Antippen: in dieser Hälfte schreiben";
+        t.style.maxWidth = Math.max(120, pane.x1 - pane.x0 - 24) + "px";
+        t.style.left = Math.round((pane.x0 + pane.x1) / 2) + "px";
+      });
+    }
     function captureCtx() {
       return { boardStrokes, remoteInProgress, currentBoardId, currentBoardMeta, notebook, notebookBoardId, ws, wantWs, myClientId, undoStack, redoStack, gridStyle };
     }
@@ -22551,9 +22802,10 @@
       document.documentElement.style.setProperty("--view-right", g.R + "px");
       resizeCanvas();
       layoutTopBar();
-      divider.style.left = g.x - 7 + "px";
+      divider.style.left = g.x - 8 + "px";
       const ap = g.panes[splitState.active];
-      Object.assign(activeBar.style, { left: ap.x0 + "px", width: ap.x1 - ap.x0 + "px" });
+      Object.assign(activeBar.style, { left: ap.x0 + 6 + "px", width: ap.x1 - ap.x0 - 12 + "px" });
+      syncTags();
       requestRedraw();
     }
     window.sofiaSplitLayout = layout;
@@ -22729,6 +22981,7 @@
       document.body.classList.remove("split-on");
       divider.classList.add("hidden");
       activeBar.classList.add("hidden");
+      tags.forEach((t) => t.classList.add("hidden"));
       btn.classList.remove("active");
       viewLeft = -1; // erzwingt Neuberechnung
       setViewInsets(requestedInsets[0], requestedInsets[1]);
@@ -22766,13 +23019,20 @@
     }
     function openMenu() {
       menu.innerHTML = "";
-      const add = (icon, label, run) => {
+      const head = document.createElement("div");
+      head.className = "split-menu-head";
+      head.textContent = splitState ? "Geteilte Ansicht" : "Zwei Blätter nebeneinander";
+      menu.appendChild(head);
+      let first = true;
+      const add = (icon, label, hint, run, danger) => {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "lib-add-opt";
-        b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+        b.className = "lib-add-opt page-menu-item split-menu-item" + (first ? " first" : "") + (danger ? " danger" : "");
+        first = false;
+        b.innerHTML = '<span class="material-symbols-rounded"></span><span class="pmi-label"><span class="smi-title"></span><small></small></span>';
         b.children[0].textContent = icon;
-        b.children[1].textContent = label;
+        b.querySelector(".smi-title").textContent = label;
+        b.querySelector("small").textContent = hint;
         b.addEventListener("click", (e) => {
           e.stopPropagation();
           closeMenu();
@@ -22780,10 +23040,17 @@
         });
         menu.appendChild(b);
       };
-      add("splitscreen", "Gleiches Blatt daneben", () => start("same"));
-      add("description", "Anderes Blatt daneben …", openPicker);
+      const gap = () => {
+        const d = document.createElement("div");
+        d.className = "page-menu-gap";
+        menu.appendChild(d);
+        first = true;
+      };
+      add("splitscreen", "Gleiches Blatt daneben", "Zwei Stellen desselben Blatts gleichzeitig", () => start("same"));
+      add("description", "Anderes Blatt daneben …", "Ein zweites Blatt oder Notizbuch wählen", openPicker);
       if (splitState) {
-        add("swap_horiz", "Hälften tauschen", () => {
+        gap();
+        add("swap_horiz", "Hälften tauschen", "Links und rechts wechseln die Seite", () => {
           saveActive();
           const W = window.innerWidth;
           const mid = (i) => {
@@ -22802,7 +23069,7 @@
           offsetY = p.view.offsetY;
           layout();
         });
-        add("close_fullscreen", "Geteilte Ansicht beenden", () => close());
+        add("close_fullscreen", "Geteilte Ansicht beenden", "Die Hälfte, in der du schreibst, bleibt", () => close(), true);
       }
       menu.classList.remove("hidden");
       const r = btn.getBoundingClientRect();
