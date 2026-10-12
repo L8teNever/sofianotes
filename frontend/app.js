@@ -2094,6 +2094,8 @@
     if (!boardEditId) return false;
     const id = boardEditId;
     saveBoardView(id);
+    // Zoom-Fenster stand in Board-Koordinaten: schliessen, sonst zeigt es Unsinn
+    if (typeof closeZoomWindow === "function") closeZoomWindow();
     boardEditId = null;
     pendingBoardTap = null;
     endZoomLock();
@@ -8231,8 +8233,16 @@
   // mittleren wird geschrieben. Standard aus den Einstellungen, +/- gilt bis zum Schliessen.
   // Zeilenwechsel: um wie viele Kaestchen es runtergeht (0 = so hoch wie die Schreibhoehe)
   // Raster unter dem Zoom-Fenster: im Notizbuch die echten Kaestchen/Zeilen der Seite
+  // Zoom-Fenster auf Notizbuch-Seiten? In einer geoeffneten Board-Seite ist es ein
+  // unendliches Board wie auf dem Hauptbild: Raster statt A4-Seiten.
+  function zoomOnPages() {
+    return !!notebook && !boardEditId;
+  }
+  function zoomBgColor() {
+    return zoomOnPages() ? pagePaperColor() : deskColor();
+  }
   function zoomGrid() {
-    if (!notebook || !zoomWin) return { unit: GRID_SIZE, base: 0 };
+    if (!zoomOnPages() || !zoomWin) return { unit: GRID_SIZE, base: 0 };
     const yc = zoomWin.y;
     const rects = pageRects(notebook);
     const r = rects.find((q) => yc >= q.y - PAGE_GAP && yc <= q.y + q.h) || rects[0];
@@ -8396,7 +8406,7 @@
     zoomFitRows();
     zoomWin.y = snapZoomY(a.y + (b.y - a.y) * 0.18);
     // Notizbuch: Rahmen und Raender an der aktuellen A4-Seite ausrichten
-    if (notebook && window.sofiaCurrentPage) zoomToPage(window.sofiaCurrentPage(), false);
+    if (zoomOnPages() && window.sofiaCurrentPage) zoomToPage(window.sofiaCurrentPage(), false);
     if (zoomWinBtn) zoomWinBtn.classList.add("active");
     attachZoomInnerBar();
     layoutZoomPane();
@@ -8405,7 +8415,7 @@
   // Zoom-Fenster auf eine Notizbuch-Seite setzen: Raender = Seitenraender (bzw. Randlinie),
   // Rahmen oben links in der ersten Zeile
   function zoomToPage(i, keepRow) {
-    if (!zoomWin || !notebook) return;
+    if (!zoomWin || !zoomOnPages()) return;
     const r = pageRects(notebook)[i];
     if (!r) return;
     const lines = r.page.paper === "lines" && !r.page.mediaId;
@@ -8452,7 +8462,7 @@
     else if (zoomWin.x < a.x) dx = a.x - zoomWin.x + zoomWin.w * 0.2;
     offsetX += dx * scale;
     offsetY += dy * scale;
-    if (notebook && notebookZoomedIn()) clampZoomLock();
+    if (zoomOnPages() && notebookZoomedIn()) clampZoomLock();
   }
 
   // Kurzes Gleiten (~0,1 s) statt Sprung: fuehlt sich sofort an, man sieht aber wohin.
@@ -8629,7 +8639,7 @@
   // Zeichnet den Welt-Ausschnitt ab (ox, oy) im Massstab k in die Schreibflaeche
   function renderZoomRegion(ox, oy, wWorld, hWorld, k, d) {
     zctx.setTransform(k * d, 0, 0, k * d, -ox * k * d, -oy * k * d);
-    if (notebook) {
+    if (zoomOnPages()) {
       // Notizbuch: die echte Seite (Hintergrund und Raster), daneben grau
       zctx.fillStyle = darkMode ? "#121018" : "#e8e6ed";
       zctx.fillRect(ox, oy, wWorld, hWorld);
@@ -8644,10 +8654,14 @@
         const img = r.page.mediaId && !zoomHideMedia ? ensureMedia(r.page.mediaId) : null;
         if (img && img.complete && img.naturalWidth) drawPageMedia(zctx, img, r);
         else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, zctx, k);
-        if (!boardEditId && (r.page.board || r.page.boardOf)) paintBoardPage(zctx, r);
+        if (r.page.board || r.page.boardOf) paintBoardPage(zctx, r);
         zctx.restore();
       }
-    } else drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
+    } else {
+      zctx.fillStyle = deskColor();
+      zctx.fillRect(ox, oy, wWorld, hWorld);
+      drawGrid(zctx, { minX: ox, minY: oy, maxX: ox + wWorld, maxY: oy + hWorld }, k);
+    }
     const inView = (st) => {
       const b = st.bbox || strokeWorldBBox(st);
       return !b || (b.maxX >= ox && b.minX <= ox + wWorld && b.maxY >= oy && b.minY <= oy + hWorld);
@@ -8690,7 +8704,7 @@
     const h = zoomBoxH();
     const r = zoomPaneRect();
     zctx.setTransform(1, 0, 0, 1, 0, 0);
-    zctx.fillStyle = pagePaperColor();
+    zctx.fillStyle = zoomBgColor();
     zctx.fillRect(0, 0, zoomCanvas.width, zoomCanvas.height);
     renderZoomRegion(zoomWin.x, zoomWin.y, zoomWin.w, h, k, d);
 
@@ -8726,7 +8740,7 @@
       if (zctx.roundRect) zctx.roundRect(0, 0, bw, r.height, 12);
       else zctx.rect(0, 0, bw, r.height);
       zctx.clip();
-      zctx.fillStyle = pagePaperColor();
+      zctx.fillStyle = zoomBgColor();
       zctx.fillRect(0, 0, bw, r.height);
       renderZoomRegion(zoomNext.x, zoomNext.y, bw / k, h, k, d);
       zctx.setTransform(d, 0, 0, d, 0, 0);
