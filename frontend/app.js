@@ -18623,6 +18623,30 @@
       menu.classList.toggle("page-menu-side", !!opts.side);
       let first = true;
       for (const it of items) {
+        if (it.seg) {
+          // Umschalter mit zwei (oder mehr) Knoepfen nebeneinander, wie die Tabs der Leiste
+          const row = document.createElement("div");
+          row.className = "page-menu-seg";
+          for (const o of it.seg) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "page-menu-seg-btn" + (o.active ? " active" : "");
+            b.innerHTML = '<span class="material-symbols-rounded"></span><span></span>';
+            b.children[0].textContent = o.icon;
+            b.children[1].textContent = o.label;
+            b.addEventListener("click", (e) => {
+              e.stopPropagation();
+              if (o.active) return;
+              o.run();
+              row.querySelectorAll(".page-menu-seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+              it.seg.forEach((x) => (x.active = x === o));
+            });
+            row.appendChild(b);
+          }
+          menu.appendChild(row);
+          first = true;
+          continue;
+        }
         if (it.back) {
           const b = document.createElement("button");
           b.type = "button";
@@ -18782,6 +18806,12 @@
         return openMenu(items, side, { side: true });
       }
       const items = [
+        {
+          seg: [
+            { icon: "edit_note", label: "Notizseite", active: !pg.read, run: () => setPageRead(i, false) },
+            { icon: "auto_stories", label: "Leseseite", active: !!pg.read, run: () => setPageRead(i, true) },
+          ],
+        },
         { icon: "add_row_above", label: "Seite oberhalb einfügen", run: () => addPages(i - 1, [templatePage()]) },
         { icon: "add_row_below", label: "Seite unterhalb einfügen", run: () => addPages(i, [templatePage()]) },
         { icon: "content_copy", label: "Duplizieren", run: () => duplicatePage(i) },
@@ -18789,7 +18819,6 @@
         { icon: "wallpaper", label: "Hintergrund", sub: () => pageBgItems(i) },
         { sep: true },
         { icon: "bookmark_add", label: "Lesezeichen setzen …", run: () => addBookmark(i) },
-        { icon: "auto_stories", label: pg.read ? "Als Notizseite" : "Als Leseseite", active: !!pg.read, run: () => setPageRead(i, !pg.read) },
       ];
       if (pg.board || pg.boardOf) items.push({ icon: "open_in_full", label: "Board öffnen", run: () => enterBoardPage(pid) });
       items.push({ sep: true }, ...exportItems, { sep: true });
@@ -19952,6 +19981,7 @@
 
     // bei jedem Zeichnen: Knopf oben, aktive Seite in der Leiste
     let lastCur = -1;
+    let thumbScrollPending = false;
     let lastNb = null;
     window.sofiaRepaintPages = () => {
       if (panelOpen) renderPanel();
@@ -19978,9 +20008,22 @@
         if (cur !== lastCur) {
           lastCur = cur;
           grid.querySelectorAll(".page-thumb[data-index]").forEach((el) => el.classList.toggle("active", Number(el.dataset.index) === cur));
-          const gesturing = !!(panState || pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy()));
+          thumbScrollPending = true;
+        }
+        // Leiste laeuft mit: die aktuelle Seite in die Mitte holen, sobald Wischen/Einrasten
+        // vorbei ist (vorher wurde es waehrend der Geste uebersprungen und dann vergessen)
+        const gesturing = !!(panState || pinchState || (fling && !fling.stop) || (window.sofiaViewBusy && window.sofiaViewBusy()) || thumbDrag);
+        if (thumbScrollPending && !gesturing && !marksOpen) {
+          thumbScrollPending = false;
           const act = grid.querySelector(".page-thumb.active");
-          if (!gesturing && act && act.scrollIntoView) act.scrollIntoView({ block: "nearest", inline: "nearest" });
+          if (act) {
+            const gr = grid.getBoundingClientRect();
+            const ar = act.getBoundingClientRect();
+            if (ar.top < gr.top + 8 || ar.bottom > gr.bottom - 8) {
+              const target = grid.scrollTop + (ar.top - gr.top) - (gr.height - ar.height) / 2;
+              grid.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+            }
+          }
         }
         if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
       }

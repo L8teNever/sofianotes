@@ -3830,6 +3830,30 @@ body.history-preview #undo-redo-dock { opacity: 0.35; pointer-events: none; }
 .page-menu .page-menu-item.danger,
 .page-menu .page-menu-item.danger > .material-symbols-rounded:first-child { color: #b3261e; }
 .page-menu-gap { height: 1px; margin: 6px 6px; background: rgba(0, 0, 0, 0.1); }
+/* Notizseite | Leseseite: Umschalter oben im Seiten-Menue (wie die Tabs der Leiste) */
+.page-menu-seg { display: flex; gap: 4px; margin: 2px 2px 8px; padding: 4px; border-radius: 18px; background: rgba(0, 0, 0, 0.07); }
+.page-menu-seg-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  border: none;
+  border-radius: 14px;
+  background: transparent;
+  color: #49454f;
+  font: 600 14px/1 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+  transition: background 0.18s, box-shadow 0.18s, color 0.18s;
+}
+.page-menu-seg-btn .material-symbols-rounded { font-size: 20px; color: inherit; }
+.page-menu-seg-btn.active { background: #fff; color: #1c1b1f; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14); }
+html[data-theme="dark"] .page-menu-seg { background: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] #page-menu .page-menu-seg-btn,
+html[data-theme="dark"] #page-menu .page-menu-seg-btn span { color: #cac4d0; }
+html[data-theme="dark"] #page-menu .page-menu-seg-btn.active { background: #4a4458; }
+html[data-theme="dark"] #page-menu .page-menu-seg-btn.active span { color: #f4f1f8; }
 .page-menu-back {
   display: flex;
   align-items: center;
