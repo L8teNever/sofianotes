@@ -1169,7 +1169,14 @@
   let currentStroke = null; // own in-progress stroke
   let dirty = true;
   let cropState = null;
+  // contentGen zaehlt jede moegliche Inhaltsaenderung; reine Ansicht-Bewegungen (Wischen,
+  // Zoomen, Seitenwechsel) nutzen requestViewRedraw und lassen die Seiten-Zwischenbilder gueltig
+  let contentGen = 0;
   function requestRedraw() {
+    dirty = true;
+    contentGen++;
+  }
+  function requestViewRedraw() {
     dirty = true;
   }
 
@@ -2303,7 +2310,188 @@
     }
   }
 
+  // ---- Seiten-Zwischenbilder: fluessiges Blaettern/Verschieben auch mit vollen Seiten ----
+  // Solange sich nur die Ansicht bewegt (Wischen, Schwung, Seitenwechsel, Zoomen), wird jede
+  // Seite einmal als Bild gezeichnet und danach nur noch verschoben/skaliert. Nach der
+  // Bewegung zeichnet das naechste Bild wieder alles frisch und gestochen scharf.
+  const pageBmp = new Map(); // pageId -> {cv, k}
+  const PAGE_BMP_M = 24; // Rand fuer den Seitenschatten (Welteinheiten)
+  const PAGE_BMP_MAX_PX = 3e6; // pro Seite hoechstens so viele Pixel (Speicher auf dem iPad)
+  const PAGE_BMP_KEEP = 6;
+  let pageBmpMarker = null;
+  let pageBmpSettle = 0;
+  let motionNow = () => false; // wird weiter unten belegt (Wischen, Schwung, Ansicht-Animation)
+  function dropPageBmp(e) {
+    e.cv.width = e.cv.height = 0; // Safari gibt den Speicher sonst erst spaet frei
+  }
+  function clearPageBmp() {
+    if (!pageBmp.size) return;
+    for (const e of pageBmp.values()) dropPageBmp(e);
+    pageBmp.clear();
+  }
+  function pageBmpUsable() {
+    return (
+      motionNow() &&
+      !!notebook &&
+      !boardEditId &&
+      !historyView &&
+      !currentStroke &&
+      !(authorMarks && authorMarks.size) &&
+      !remoteInProgress.size &&
+      !pageAppear &&
+      !splitOn() &&
+      !textEdit &&
+      !dragState &&
+      !lassoPoints &&
+      !pagePull &&
+      !laser &&
+      !cropState &&
+      !staticLayer.off
+    );
+  }
+  function buildPageBmp(r, k) {
+    const m = PAGE_BMP_M;
+    const W = Math.max(1, Math.ceil((r.w + 2 * m) * k));
+    const H = Math.max(1, Math.ceil((r.h + 2 * m) * k));
+    const cv = document.createElement("canvas");
+    cv.width = W;
+    cv.height = H;
+    const g = cv.getContext("2d");
+    const tf = [k, 0, 0, k, -(r.x - m) * k, -(r.y - m) * k];
+    const sv = { ctx, scale, offsetX, offsetY, main: window.__sofiaMainCtx };
+    try {
+      // Zeichnen wie auf dem Bildschirm, nur in das Seitenbild
+      ctx = g;
+      window.__sofiaMainCtx = g;
+      scale = k / dpr;
+      offsetX = canvasLeft - (r.x - m) * scale;
+      offsetY = -(r.y - m) * scale;
+      g.setTransform(...tf);
+      g.save();
+      g.shadowColor = "rgba(0,0,0,0.16)";
+      g.shadowBlur = 14 * k;
+      g.shadowOffsetY = 3 * k;
+      g.fillStyle = pagePaperColor();
+      g.fillRect(r.x, r.y, r.w, r.h);
+      g.restore();
+      g.save();
+      g.beginPath();
+      g.rect(r.x, r.y, r.w, r.h);
+      g.clip();
+      const img = r.page.mediaId ? ensureMedia(r.page.mediaId) : null;
+      if (img && img.complete && img.naturalWidth) drawPageMedia(g, img, r);
+      else if (!r.page.mediaId && !r.page.board && !r.page.boardOf) drawPagePattern(r.page.paper || "graph", r, g, scale);
+      // Ebenen wie in drawSceneContent
+      const back = [], imgs = [], tables = [], markers = [], main = [];
+      let ordered = false;
+      let idx = 0;
+      for (const st of boardStrokes.values()) {
+        if (st.extra && st.extra.boardPage) continue;
+        const i = idx++;
+        const b = st.bbox || (st.tool === "pen" || st.tool === "marker" ? null : strokeWorldBBox(st));
+        if (b && Number.isFinite(b.minX)) {
+          const pad = (st.size || 0) / 2 + 2;
+          if (b.maxX + pad < r.x || b.minX - pad > r.x + r.w || b.maxY + pad < r.y || b.minY - pad > r.y + r.h) continue;
+        }
+        const ex = st.extra;
+        const layer = ex && ex.layer;
+        if (ex && (layer || Number.isFinite(ex.z))) ordered = true;
+        st._ord = ex && Number.isFinite(ex.z) ? ex.z : i;
+        if (layer === "back") back.push(st);
+        else if (layer === "front") main.push(st);
+        else if (st.tool === "image") imgs.push(st);
+        else if (st.tool === "table") tables.push(st);
+        else if (st.tool === "marker") markers.push(st);
+        else main.push(st);
+      }
+      if (ordered) {
+        const byZ = (a, b) => a._ord - b._ord;
+        for (const l of [back, imgs, tables, markers, main]) l.sort(byZ);
+      }
+      const loose = (st) => drawStroke(st, g, st.tool === "marker" ? { alpha: 0.38 } : undefined);
+      for (const st of back) loose(st);
+      for (const st of imgs) drawStroke(st, g);
+      for (const st of tables) drawStroke(st, g);
+      if (markers.length) {
+        // Marker erst voll deckend, dann einmal mit Alpha (keine dunklen Ueberlappungen)
+        if (!pageBmpMarker) pageBmpMarker = document.createElement("canvas");
+        const mk = pageBmpMarker;
+        if (mk.width !== W || mk.height !== H) {
+          mk.width = W;
+          mk.height = H;
+        }
+        const mc = mk.getContext("2d");
+        mc.setTransform(1, 0, 0, 1, 0, 0);
+        mc.clearRect(0, 0, W, H);
+        mc.setTransform(...tf);
+        for (const st of markers) drawStroke(st, mc, { alpha: 1 });
+        g.save();
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.globalAlpha = 0.38;
+        g.drawImage(mk, 0, 0);
+        g.restore();
+      }
+      for (const st of main) loose(st);
+      if (r.page.board || r.page.boardOf) paintBoardPage(g, r);
+      g.restore();
+    } finally {
+      ctx = sv.ctx;
+      window.__sofiaMainCtx = sv.main;
+      scale = sv.scale;
+      offsetX = sv.offsetX;
+      offsetY = sv.offsetY;
+    }
+    return { cv, k, key: pageBmpKey(r) };
+  }
+  function pageBmpKey(r) {
+    const pg = r.page;
+    const img = pg.mediaId ? ensureMedia(pg.mediaId) : null;
+    return [contentGen, currentBoardId, darkMode ? 1 : 0, gridStyle, r.x, r.y, r.w, r.h, pg.paper || "", pg.mediaId || "", img && img.complete && img.naturalWidth ? 1 : 0, pg.rot || 0].join("|");
+  }
+  function drawFromPageBmp() {
+    clampNotebookView();
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = deskColor();
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const m = PAGE_BMP_M;
+    const a = screenToWorld(canvasLeft, 0);
+    const b = screenToWorld(canvasLeft + canvas.width / dpr, canvas.height / dpr);
+    for (const r of pageRects(notebook)) {
+      if (r.x - m > b.x || r.x + r.w + m < a.x || r.y - m > b.y || r.y + r.h + m < a.y) continue;
+      const kMax = Math.sqrt(PAGE_BMP_MAX_PX / ((r.w + 2 * m) * (r.h + 2 * m)));
+      const want = Math.min(scale * dpr, kMax);
+      let e = pageBmp.get(r.id);
+      if (!e || e.k < want * 0.8 || e.k > want * 2.5 || e.key !== pageBmpKey(r)) {
+        if (e) dropPageBmp(e);
+        e = buildPageBmp(r, want);
+      }
+      pageBmp.delete(r.id);
+      pageBmp.set(r.id, e); // zuletzt benutzt nach hinten
+      ctx.drawImage(e.cv, ((r.x - m) * scale + offsetX - canvasLeft) * dpr, ((r.y - m) * scale + offsetY) * dpr, (r.w + 2 * m) * scale * dpr, (r.h + 2 * m) * scale * dpr);
+    }
+    while (pageBmp.size > PAGE_BMP_KEEP) {
+      const [id, e] = pageBmp.entries().next().value;
+      dropPageBmp(e);
+      pageBmp.delete(id);
+    }
+    ctx.restore();
+    ctx.save();
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, (offsetX - canvasLeft) * dpr, offsetY * dpr);
+    if (window.sofiaPagesUi) window.sofiaPagesUi();
+    drawSceneOverlays();
+    // sobald die Bewegung vorbei ist: einmal frisch und scharf zeichnen
+    clearTimeout(pageBmpSettle);
+    pageBmpSettle = setTimeout(() => {
+      if (!motionNow()) requestViewRedraw();
+    }, 90);
+  }
+
   function drawScene(full, clip, live = true) {
+    if (live && full && !clip) {
+      if (pageBmpUsable()) return drawFromPageBmp();
+      if (!notebook) clearPageBmp();
+    }
     const cacheable = live && full && !clip && canCacheStatic();
     if (cacheable && notebook && !boardEditId) clampNotebookView();
     const key = cacheable ? staticKey() : "";
@@ -10393,7 +10581,7 @@
       const decay = Math.exp(-dt / 330);
       vx *= decay;
       vy *= decay;
-      requestRedraw();
+      requestViewRedraw();
       if (Math.hypot(vx, vy) > 0.02) requestAnimationFrame(step);
       else fling = null;
     };
@@ -10403,6 +10591,7 @@
     if (fling) fling.stop = true;
     fling = null;
   }
+  motionNow = () => !!(panState || pinchState || fling || (window.sofiaViewAnimating && window.sofiaViewAnimating()) || performance.now() - wheelPan.t < 140);
   let tapState = null; // {pointerId, x, y, t} - moeglicher Finger-Tap (kurz, kaum bewegt)
   const TAP_MAX_MOVE_PX = 10; // ein Finger-Tap darf sich hoechstens so weit bewegen (Bildschirm-px) ...
   const TAP_MAX_MS = 350; // ... und hoechstens so lange dauern, sonst ist es ein Pan
@@ -13300,7 +13489,7 @@
           // wird, bliebe sonst die alte Fingermitte als Schwenk-Start liegen.
           if (pinchState.mode === "pan") panState = { lastX: mid.x, lastY: mid.y, vx: pinchState.vx, vy: pinchState.vy, t: now };
           if (notebookZoomedIn()) beginZoomLock();
-          requestRedraw();
+          requestViewRedraw();
           return;
         }
         const newScale = clampZoom(pinchState.initialScale * (dist / Math.max(1, pinchState.initialDist)));
@@ -13312,7 +13501,7 @@
         if (notebookZoomedIn() || zoomGesture) beginZoomLock();
         offsetX = mid.x - pinchState.anchorWorld.x * scale;
         offsetY = mid.y - pinchState.anchorWorld.y * scale;
-        requestRedraw();
+        requestViewRedraw();
         return;
       }
       const isActiveDrawTouch =
@@ -13338,7 +13527,7 @@
           panState.lastX = e.clientX;
           panState.lastY = e.clientY;
           if (notebookZoomedIn()) beginZoomLock();
-          requestRedraw();
+          requestViewRedraw();
         }
         return;
       }
@@ -13364,7 +13553,7 @@
       panState.lastX = e.clientX;
       panState.lastY = e.clientY;
       if (notebookZoomedIn()) beginZoomLock();
-      requestRedraw();
+      requestViewRedraw();
       return;
     }
 
@@ -13732,7 +13921,7 @@
           releaseZoomHold();
           offsetX += mx;
           offsetY += my;
-          requestRedraw();
+          requestViewRedraw();
           return;
         }
         releaseZoomHold();
@@ -13744,7 +13933,7 @@
         wheelPan.vx = 0.55 * (mx / dt) + 0.45 * (wheelPan.vx || 0);
         wheelPan.vy = 0.55 * (my / dt) + 0.45 * (wheelPan.vy || 0);
         wheelPan.t = now;
-        requestRedraw();
+        requestViewRedraw();
         clearTimeout(wheelSnapTimer);
         wheelSnapTimer = setTimeout(() => {
           if (pagePull) return;
@@ -20059,7 +20248,10 @@
       const rects = pageRects(notebook);
       if (!rects.length) return 0;
       pageAnchor = Math.max(0, Math.min(rects.length - 1, pageAnchor | 0));
-      const held = !boardEditId && (zoomGesture || (window.sofiaViewBusy && window.sofiaViewBusy()) || zoomedOnAnchor());
+      // Waehrend Wischen/Schwung gilt die Seite, von der aus gewischt wurde: sonst zaehlt eine
+      // groesser angezeigte Seite (z. B. kurze Board-Seite) beim Rueberziehen als "reingezoomt"
+      // auf der Nachbarseite - dann rastet nichts mehr ein und die Ansicht bleibt gezoomt.
+      const held = !boardEditId && (zoomGesture || !!panState || !!fling || (window.sofiaViewBusy && window.sofiaViewBusy()) || zoomedOnAnchor());
       if (held) return pageAnchor;
       const nearest = nearestPageToCenter();
       if (centerInsidePage(nearest)) pageAnchor = nearest;
@@ -20159,13 +20351,14 @@
         scale = from.scale + (v.scale - from.scale) * e;
         offsetX = from.offsetX + (v.offsetX - from.offsetX) * e;
         offsetY = from.offsetY + (v.offsetY - from.offsetY) * e;
-        requestRedraw();
+        requestViewRedraw();
         if (t < 1) requestAnimationFrame(step);
         else viewAnim = null;
       };
       requestAnimationFrame(step);
     }
     window.sofiaAnimateView = animateView;
+    window.sofiaViewAnimating = () => !!viewAnim;
     window.sofiaCancelViewAnim = () => {
       viewAnim = null;
     };
@@ -20186,11 +20379,7 @@
     function activateNotebookPage(i) {
       const pg = notebook && notebook.pages[i];
       if (!pg) return;
-      const target = pg.boardOf || (pg.board ? pg.id : null);
-      if (target) {
-        if (boardEditId !== target) enterBoardPage(target);
-        return;
-      }
+      // Board-Seiten wie jede Seite anspringen; geoeffnet wird das Board per Knopf/Doppeltipp
       if (boardEditId) exitBoardPage({ fit: false });
       if (zoomWin && window.sofiaZoomToPage) window.sofiaZoomToPage(i);
       fitPage(i);
@@ -22034,6 +22223,7 @@
     window.sofiaRepaintPages = () => {
       if (panelOpen) renderPanel();
     };
+    let uiNbSeen = null;
     window.sofiaPagesUi = () => {
       const show = !!notebook && !!currentBoardId && libraryBackdrop.classList.contains("hidden");
       setCls(pagesBtn, "hidden", !show);
@@ -22073,7 +22263,11 @@
             }
           }
         }
-        if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
+        // nur nach einer Notizbuch-Aenderung zaehlen (nicht in jedem Bild durch alle Kacheln)
+        if (notebook !== uiNbSeen) {
+          uiNbSeen = notebook;
+          if (grid.querySelectorAll(".page-thumb[data-index]").length !== notebook.pages.length) renderPanel();
+        }
       }
     };
   })();

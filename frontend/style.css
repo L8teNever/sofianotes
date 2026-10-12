@@ -5953,3 +5953,11 @@ html[data-theme="dark"] #btn-text-edit-only.tbar-round.active { background: #4a4
 #history-panel, #hw-panel, #chat-win, #calc-win { animation: none !important; }
 /* Menues: Aufgehen/Zugehen macht app.js (wachsen aus dem Knopf) - keine zweite CSS-Animation */
 #canvas-menu, #split-menu, #insert-menu, #tb-more-menu, #lib-add-menu, #text-color-pop, #tool-popover, #page-menu, #lib-item-menu, #swatch-menu, #chat-menu, #color-picker, #zoom-popover, #canvas-share-submenu, #page-add-pop, #erase-all-menu { animation: none !important; }
+/* Leistung (iPad): kein Weichzeichnen hinter Leisten ueber der Schreibflaeche - die Flaeche
+   wird bei jedem Wischen neu gemalt und der Blur muesste jedes Bild mitgerechnet werden.
+   Die Leisten sind ohnehin zu 92 % deckend; optisch aendert sich nichts. */
+#top-filename-bar, #undo-redo-dock, .popover, #toolbar, .tool-popover, .erase-all-menu, .ruler-bar, .page-bar,
+.top-side-bar, .top-back-bar, .school-timer, body.pages-open #top-side-bar #btn-bookmarks {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
