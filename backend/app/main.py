@@ -245,6 +245,12 @@ async def sofia_now(person: dict = Depends(get_current_person)) -> dict:
     return await sofia_sync.current_lesson(person["id"])
 
 
+@app.get("/api/sofia/timetable")
+async def sofia_timetable(person: dict = Depends(get_current_person)) -> dict:
+    """Stundenplan der Klasse dieser Person (diese und naechste Woche, mit Ausfaellen)."""
+    return await sofia_sync.timetable(person["id"])
+
+
 @app.get("/api/sofia/status")
 async def sofia_status(_: dict = Depends(get_current_person)) -> dict:
     return {"enabled": sofia_sync.enabled(), **sofia_sync.state}

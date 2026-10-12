@@ -18238,6 +18238,187 @@
     }
     findBoardHome();
   });
+  // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
+  (() => {
+    const backdrop = document.getElementById("timetable-backdrop");
+    const body = document.getElementById("tt-body");
+    if (!backdrop || !body) return;
+    const TT_KEY = "sofianotes-timetable";
+    let data = null;
+    let week = 0;
+    let offline = false;
+    const DAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+    const ymd = (d) => d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
+    const parseYmd = (v) => new Date(Number(v.slice(0, 4)), Number(v.slice(4, 6)) - 1, Number(v.slice(6, 8)));
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      return e;
+    };
+    function message(icon, text) {
+      body.innerHTML = "";
+      const m = el("div", "tt-msg");
+      m.appendChild(el("span", "material-symbols-rounded", icon));
+      m.appendChild(el("p", "", text));
+      body.appendChild(m);
+    }
+    function lessonCard(l, now) {
+      const c = el("div", "tt-lesson" + (l.cancelled ? " cancelled" : l.substituted || l.originalRoom || l.originalTeacher ? " changed" : "") + (now ? " now" : ""));
+      c.appendChild(el("div", "tt-subj", l.subject || l.short || "?"));
+      const meta = el("div", "tt-meta");
+      const part = (cur, orig) => {
+        const span = el("span", "");
+        if (orig && orig !== cur) {
+          span.appendChild(el("s", "", orig));
+          span.appendChild(document.createTextNode(" → "));
+        }
+        span.appendChild(document.createTextNode(cur || "–"));
+        return span;
+      };
+      meta.appendChild(part(l.room, l.originalRoom));
+      meta.appendChild(document.createTextNode(" · "));
+      meta.appendChild(part(l.teacher, l.originalTeacher));
+      c.appendChild(meta);
+      if (l.cancelled) c.appendChild(el("div", "tt-tag", "Entfällt"));
+      else if (l.substituted) c.appendChild(el("div", "tt-tag", "Vertretung"));
+      if (l.info) c.appendChild(el("div", "tt-info", l.info));
+      c.title = [l.subject, l.start + "–" + l.end, l.room, l.teacher, l.cancelled ? "Entfällt" : "", l.info].filter(Boolean).join(" · ");
+      return c;
+    }
+    function render() {
+      backdrop.querySelectorAll(".tt-weeks .page-menu-seg-btn").forEach((b) => b.classList.toggle("active", Number(b.dataset.week) === week));
+      if (!data) return message("progress_activity", "Stundenplan wird geladen …");
+      if (data.enabled === false) return message("block", "Die Verbindung zu Sofia ist auf diesem Server nicht eingerichtet.");
+      if (data.linked === false) return message("person", "Dein Konto ist noch nicht mit Sofia verbunden.");
+      if (data.configured === false) return message("block", "In Sofia ist für deine Klasse noch kein Stundenplan eingerichtet.");
+      if (data.error && !data.weeks) return message("sync_problem", "Stundenplan gerade nicht erreichbar.");
+      const w = (data.weeks || [])[week];
+      if (!w) return message("block", "Kein Stundenplan für diese Woche.");
+      const monday = w.start ? parseYmd(w.start) : null;
+      const days = [];
+      for (let i = 0; i < 5; i++) days.push(monday ? ymd(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)) : "");
+      for (const l of w.lessons) if (l.date && !days.includes(l.date)) days.push(l.date);
+      days.sort();
+      const slots = [];
+      for (const l of w.lessons) if (!slots.some((x) => x.start === l.start && x.end === l.end)) slots.push({ start: l.start, end: l.end });
+      slots.sort((a, b) => (a.start + a.end).localeCompare(b.start + b.end));
+      const holidayOf = (d) => (data.holidays || []).find((h) => h.start <= d && d <= h.end);
+      const today = data.today || ymd(new Date());
+      const n = new Date();
+      const hm = String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0");
+      body.innerHTML = "";
+      const cancelled = w.lessons.filter((l) => l.cancelled).length;
+      const changed = w.lessons.filter((l) => !l.cancelled && (l.substituted || l.originalRoom || l.originalTeacher)).length;
+      const sum = el("div", "tt-summary");
+      sum.textContent =
+        (cancelled ? cancelled + (cancelled === 1 ? " Stunde fällt aus" : " Stunden fallen aus") : "Kein Ausfall") +
+        (changed ? " · " + changed + (changed === 1 ? " Änderung" : " Änderungen") : "") +
+        (offline ? " · offline, letzter Stand" : "");
+      if (cancelled) sum.classList.add("has-cancel");
+      body.appendChild(sum);
+      if (!w.lessons.length && !days.some(holidayOf)) return body.appendChild(el("div", "tt-msg", "Keine Stunden in dieser Woche."));
+      const scroller = el("div", "tt-scroll");
+      const grid = el("div", "tt-grid");
+      grid.style.gridTemplateColumns = "auto repeat(" + days.length + ", minmax(116px, 1fr))";
+      grid.appendChild(el("div", "tt-corner"));
+      for (const d of days) {
+        const dt = parseYmd(d);
+        const h = el("div", "tt-day" + (d === today ? " today" : ""));
+        h.appendChild(el("b", "", DAYS[dt.getDay()]));
+        h.appendChild(document.createTextNode(" " + dt.getDate() + "." + (dt.getMonth() + 1) + "."));
+        grid.appendChild(h);
+      }
+      slots.forEach((slot, si) => {
+        const t = el("div", "tt-time");
+        t.appendChild(el("b", "", slot.start));
+        t.appendChild(el("span", "", slot.end));
+        grid.appendChild(t);
+        days.forEach((d) => {
+          const hol = holidayOf(d);
+          if (hol) {
+            if (si === 0) {
+              const c = el("div", "tt-holiday", hol.name);
+              c.style.gridRow = "span " + slots.length;
+              grid.appendChild(c);
+            }
+            return;
+          }
+          const cell = el("div", "tt-cell" + (d === today ? " today" : ""));
+          for (const l of w.lessons) {
+            if (l.date !== d || l.start !== slot.start || l.end !== slot.end) continue;
+            cell.appendChild(lessonCard(l, d === today && l.start <= hm && hm < l.end));
+          }
+          grid.appendChild(cell);
+        });
+      });
+      scroller.appendChild(grid);
+      body.appendChild(scroller);
+      // heute sichtbar (schmale Bildschirme scrollen seitwaerts)
+      const todayHead = grid.querySelector(".tt-day.today");
+      const timeCol = grid.querySelector(".tt-corner");
+      if (todayHead) {
+        const gx = grid.getBoundingClientRect().left;
+        scroller.scrollLeft = Math.max(0, todayHead.getBoundingClientRect().left - gx - (timeCol ? timeCol.offsetWidth + 6 : 0));
+      }
+    }
+    async function load() {
+      try {
+        const got = await api("/api/sofia/timetable");
+        data = got;
+        offline = false;
+        if (got && got.weeks) {
+          try {
+            localStorage.setItem(TT_KEY, JSON.stringify(got));
+          } catch (err) {}
+        }
+      } catch (err) {
+        let saved = null;
+        try {
+          saved = JSON.parse(localStorage.getItem(TT_KEY) || "null");
+        } catch (e) {}
+        if (saved) {
+          data = saved;
+          offline = true;
+        } else data = { error: "offline" };
+      }
+      if (!backdrop.classList.contains("hidden")) render();
+    }
+    function open() {
+      week = 0;
+      // Wochenende: gleich die naechste Woche zeigen
+      const wd = new Date().getDay();
+      if ((wd === 6 || wd === 0) && data && data.weeks && data.weeks[1]) week = 1;
+      backdrop.classList.remove("hidden");
+      render();
+      load().then(() => {
+        if ((wd === 6 || wd === 0) && week === 0 && data && data.weeks && data.weeks[1]) {
+          week = 1;
+          render();
+        }
+      });
+    }
+    window.sofiaOpenTimetable = open;
+    document.getElementById("canvas-menu-timetable")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeCanvasMenus();
+      open();
+    });
+    backdrop.querySelectorAll(".tt-weeks .page-menu-seg-btn").forEach((b) =>
+      b.addEventListener("click", () => {
+        week = Number(b.dataset.week) || 0;
+        render();
+      })
+    );
+    const close = () => backdrop.classList.add("hidden");
+    document.getElementById("btn-tt-close")?.addEventListener("click", close);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !backdrop.classList.contains("hidden")) close();
+    });
+  })();
   document.getElementById("canvas-menu-download")?.addEventListener("click", () => {
     closeCanvasMenus();
     downloadCurrentBoard();

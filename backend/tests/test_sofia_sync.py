@@ -388,3 +388,55 @@ class NotebookTests(unittest.TestCase):
                 asyncio.run(run())
             finally:
                 media.MEDIA_DIR = old
+
+
+class TimetableTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+        run(db.add_person_email("simon", "l8tenever@gmail.com"))
+        run(db.apply_sofia_sync(snapshot()))
+        sofia_sync._subjects[:] = snapshot()["subjects"]
+        sofia_sync._tt_cache.clear()
+        self._orig = (sofia_sync.enabled, sofia_sync._get)
+        sofia_sync.enabled = lambda: True
+        lessons = [
+            {"date": "20261015", "startTime": 1140, "endTime": 1225, "subject": "Deutsch", "subject_short": "D", "teacher": "Roe", "room": "1119",
+             "cancelled": True, "substituted": False, "original_room": None, "original_teacher": None, "subst_text": "Roe erteilt AA"},
+            {"date": "20261012", "startTime": 955, "endTime": 1040, "subject": "Mathe", "subject_short": "M", "teacher": "Ro", "room": "2.24",
+             "cancelled": False, "substituted": True, "original_room": "1.10", "original_teacher": "Xy", "subst_text": None},
+        ]
+        self.calls = []
+
+        def fake_get(path, act_as=None):
+            self.calls.append((path, act_as))
+            return {"configured": True, "this_week": {"start": "20261012", "lessons": lessons}, "next_week": {"start": "20261019", "lessons": []},
+                    "holidays": [{"start": "20261026", "end": "20261030", "name": "Herbstferien"}]}
+
+        sofia_sync._get = fake_get
+
+    def tearDown(self):
+        sofia_sync.enabled, sofia_sync._get = self._orig
+        self.tmp.cleanup()
+
+    def test_timetable_packs_lessons(self):
+        tt = run(sofia_sync.timetable("simon"))
+        self.assertTrue(tt["linked"])
+        self.assertEqual(self.calls[0][0], "/timetable/")
+        week = tt["weeks"][0]["lessons"]
+        # nach Tag und Uhrzeit sortiert, Fachname aus Sofia, Vertretung und Ausfall erhalten
+        self.assertEqual([l["date"] for l in week], ["20261012", "20261015"])
+        self.assertEqual(week[0]["subject"], "Mathematik")
+        self.assertEqual((week[0]["start"], week[0]["end"]), ("09:55", "10:40"))
+        self.assertTrue(week[0]["substituted"])
+        self.assertEqual((week[0]["originalTeacher"], week[0]["originalRoom"]), ("Xy", "1.10"))
+        self.assertTrue(week[1]["cancelled"])
+        self.assertEqual(week[1]["info"], "Roe erteilt AA")
+        self.assertEqual(tt["holidays"][0]["name"], "Herbstferien")
+        # zweiter Aufruf kommt aus dem Zwischenspeicher
+        run(sofia_sync.timetable("simon"))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_unlinked_person(self):
+        run(db.add_person_email("franz", "franz@example.com"))
+        self.assertFalse(run(sofia_sync.timetable("franz"))["linked"])

@@ -151,15 +151,10 @@ async def current_lesson(person_id: str) -> dict[str, Any]:
     if not info or not info.get("email"):
         return {"enabled": True, "linked": False}
     email = info["email"]
-    cached = _tt_cache.get(email)
-    if cached and time.time() - cached[0] < 120:
-        tt = cached[1]
-    else:
-        try:
-            tt = await asyncio.get_event_loop().run_in_executor(None, _get, "/timetable/", email)
-        except Exception as exc:  # noqa: BLE001
-            return {"enabled": True, "linked": True, "error": f"{type(exc).__name__}"}
-        _tt_cache[email] = (time.time(), tt)
+    try:
+        tt = await _timetable_raw(email)
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "linked": True, "error": f"{type(exc).__name__}"}
     if not _subjects:
         await sync_once()
     now = datetime.now(ZoneInfo(TZ_NAME))
@@ -190,6 +185,66 @@ async def current_lesson(person_id: str) -> dict[str, Any]:
     upcoming = next((l for l in lessons if int(l.get("startTime") or 0) > hm), None)
     # ganzer Tag (fuer den Schul-Timer im Blatt: rechnet lokal weiter)
     return {"enabled": True, "linked": True, "current": pack(current), "next": pack(upcoming), "lessons": [pack(l) for l in lessons]}
+
+
+async def _timetable_raw(email: str) -> Any:
+    cached = _tt_cache.get(email)
+    if cached and time.time() - cached[0] < 120:
+        return cached[1]
+    tt = await asyncio.get_event_loop().run_in_executor(None, _get, "/timetable/", email)
+    _tt_cache[email] = (time.time(), tt)
+    return tt
+
+
+def _pack_lesson(l: dict[str, Any]) -> dict[str, Any]:
+    subj = _subject_for_lesson(l)
+    return {
+        "date": str(l.get("date") or ""),
+        "start": _hhmm(l.get("startTime")),
+        "end": _hhmm(l.get("endTime")),
+        "subject": (subj or {}).get("name") or l.get("subject") or l.get("subject_short") or "",
+        "short": l.get("subject_short") or "",
+        "teacher": l.get("teacher") or "",
+        "room": l.get("room") or "",
+        "cancelled": bool(l.get("cancelled")),
+        "substituted": bool(l.get("substituted")),
+        "originalTeacher": l.get("original_teacher") or "",
+        "originalRoom": l.get("original_room") or "",
+        "info": l.get("subst_text") or "",
+    }
+
+
+async def timetable(person_id: str) -> dict[str, Any]:
+    """Stundenplan dieser und naechster Woche (Klasse der Person) samt Ausfall/Vertretung und Ferien."""
+    if not enabled():
+        return {"enabled": False}
+    info = await db.sofia_person(person_id)
+    if not info or not info.get("email"):
+        return {"enabled": True, "linked": False}
+    try:
+        tt = await _timetable_raw(info["email"])
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "linked": True, "error": f"{type(exc).__name__}"}
+    if not _subjects:
+        await sync_once()
+    tt = tt or {}
+    if tt.get("configured") is False:
+        return {"enabled": True, "linked": True, "configured": False}
+    weeks = []
+    for key in ("this_week", "next_week"):
+        w = tt.get(key) or {}
+        lessons = sorted(
+            (_pack_lesson(l) for l in w.get("lessons") or [] if isinstance(l, dict)),
+            key=lambda l: (l["date"], l["start"]),
+        )
+        weeks.append({"start": str(w.get("start") or ""), "lessons": lessons})
+    holidays = [
+        {"start": str(h.get("start") or ""), "end": str(h.get("end") or ""), "name": h.get("name") or h.get("short_name") or "Ferien"}
+        for h in tt.get("holidays") or []
+        if isinstance(h, dict)
+    ]
+    today = datetime.now(ZoneInfo(TZ_NAME)).strftime("%Y%m%d")
+    return {"enabled": True, "linked": True, "configured": True, "today": today, "weeks": weeks, "holidays": holidays}
 
 
 # ---- Hausaufgaben -------------------------------------------------------------
