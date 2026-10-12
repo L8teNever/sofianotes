@@ -448,8 +448,20 @@
     const i = window.sofiaCurrentPage ? window.sofiaCurrentPage() : 0;
     const v = window.sofiaViewFor && window.sofiaViewFor(i);
     if (!v) return;
+    // lange Seite (z.B. Board-Seite): innerhalb der Seite frei scrollen, erst an ihrem
+    // oberen/unteren Ende geht es (mit dem naechsten Wischen) zur Nachbarseite
+    const t = window.sofiaTallPage && window.sofiaTallPage(i);
+    if (t) {
+      const oy = Math.max(t.oyBottom, Math.min(t.oyTop, offsetY));
+      nbHold = { i, ox: t.ox, oy, lo: t.oyBottom - oy - 48, hi: t.oyTop - oy + 48 };
+      tallGestureStart = { i, oy };
+      return;
+    }
+    tallGestureStart = null;
     nbHold = { i, ox: v.offsetX, oy: v.offsetY };
   }
+  let tallGestureStart = null; // {i, oy}: wo eine Wisch-Geste auf einer langen Seite begann
+  window.sofiaTallGestureStart = () => tallGestureStart;
   function endNbHold() {
     nbHold = null;
   }
@@ -470,10 +482,10 @@
     if (notebookPagingOn() && !notebookZoomedIn() && nbHold) {
       const n = notebook.pages.length;
       const along = horiz ? offsetX - nbHold.ox : offsetY - nbHold.oy;
-      let lo = -48;
-      let hi = 48;
-      if (nbHold.i >= n - 1) lo = -180;
-      if (nbHold.i <= 0) hi = 160;
+      let lo = nbHold.lo != null ? nbHold.lo : -48;
+      let hi = nbHold.hi != null ? nbHold.hi : 48;
+      if (nbHold.i >= n - 1) lo -= 132;
+      if (nbHold.i <= 0) hi += 112;
       const c = Math.max(lo, Math.min(hi, along));
       if (horiz) {
         offsetX = nbHold.ox + c;
@@ -13402,7 +13414,7 @@
             window.sofiaPagePullArm("wheel");
             return;
           }
-          const ps = { vx: wheelPan.vx, vy: wheelPan.vy, t: performance.now() };
+          const ps = { vx: wheelPan.vx, vy: wheelPan.vy, t: performance.now(), wheel: true };
           wheelPan = { vx: 0, vy: 0, t: 0 };
           endNbHold();
           if (window.sofiaPageSnap) window.sofiaPageSnap(ps);
@@ -17948,9 +17960,33 @@
       const a = i - (i % 2);
       return [a, Math.min(n - 1, a + 1)];
     }
-    function viewFor(i) {
+    // Lange Seite (hoeher als eine A4-Seite gleicher Breite, z.B. eine lange Board-Seite):
+    // so breit zeigen wie eine normale Seite, oben anfangen, innerhalb scrollen.
+    // Nur Seite fuer Seite, untereinander, ohne Doppelseite.
+    function tallPage(i) {
+      if (!notebook || !nbPaging() || nbSpread() || notebook.layout === "horizontal") return null;
+      const rects = pageRects(notebook);
+      const r = rects[i];
+      if (!r) return null;
+      const availW = window.innerWidth - viewLeft - viewRight;
+      const top = 76;
+      const availH = window.innerHeight - top - 16;
+      const sc = clampZoom(Math.min((availW - 32) / r.w, (availH - 8) / ((r.w * A4_H) / A4_W)));
+      if (r.h * sc <= availH - 8 + 2) return null;
+      return {
+        i,
+        scale: sc,
+        ox: viewLeft + (availW - r.w * sc) / 2 - r.x * sc,
+        oyTop: top + 4 - r.y * sc,
+        oyBottom: top + availH - 4 - (r.y + r.h) * sc,
+      };
+    }
+    window.sofiaTallPage = tallPage;
+    function viewFor(i, end) {
       const rects = pageRects(notebook);
       if (!rects.length) return null;
+      const tall = tallPage(Math.max(0, Math.min(rects.length - 1, i)));
+      if (tall) return { scale: tall.scale, offsetX: tall.ox, offsetY: end === "bottom" ? tall.oyBottom : tall.oyTop };
       const [a, b] = groupOf(i);
       const x0 = rects[a].x;
       const y0 = Math.min(rects[a].y, rects[b].y);
@@ -18091,15 +18127,41 @@
       const fresh = performance.now() - (ps.t || 0) < 120;
       const step = nbSpread() ? 2 : 1;
       const [a] = groupOf(cur);
+      // lange Seite: erst innerhalb scrollen; nur wer schon am Ende stand, blaettert weiter
+      const tall = tallPage(cur);
+      if (tall && !horiz) {
+        const availH = window.innerHeight - 76 - 16;
+        const cy = Math.max(tall.oyBottom, Math.min(tall.oyTop, offsetY));
+        const g = window.sofiaTallGestureStart && window.sofiaTallGestureStart();
+        const startOy = g && g.i === cur ? g.oy : cy;
+        const atBottom = Math.abs(startOy - tall.oyBottom) < 6 && cy - tall.oyBottom < 60;
+        const atTop = Math.abs(startOy - tall.oyTop) < 6 && tall.oyTop - cy < 60;
+        let ny = cy;
+        if (fresh && v < -0.25) {
+          if (atBottom && cur < notebook.pages.length - 1) return goToPage(cur + 1, "top");
+          // Mausrad/Trackpad: bleibt, wo es hingescrollt wurde; Finger: etwas Schwung
+          if (!ps.wheel) ny = Math.max(tall.oyBottom, cy - availH * Math.min(0.9, 0.45 + Math.abs(v) * 0.25));
+        } else if (fresh && v > 0.25) {
+          if (atTop && cur > 0) return goToPage(cur - 1, "bottom");
+          if (!ps.wheel) ny = Math.min(tall.oyTop, cy + availH * Math.min(0.9, 0.45 + Math.abs(v) * 0.25));
+        }
+        pageAnchor = cur;
+        animateView({ scale: tall.scale, offsetX: tall.ox, offsetY: ny });
+        return true;
+      }
       let target = a;
       if (fresh && v < -0.25) target = a + step;
       else if (fresh && v > 0.25) target = a - step;
       target = Math.max(0, Math.min(notebook.pages.length - 1, target));
-      pageAnchor = target;
-      if (target !== a && window.sofiaZoomToPage) window.sofiaZoomToPage(target);
-      animateView(viewFor(target));
-      return true;
+      return goToPage(target, target < a ? "bottom" : "top");
     };
+    function goToPage(target, end) {
+      const from = pageAnchor;
+      pageAnchor = target;
+      if (target !== from && window.sofiaZoomToPage) window.sofiaZoomToPage(target);
+      animateView(viewFor(target, end));
+      return true;
+    }
 
     // Rueckgaengig fuer Seiten-Aktionen: Notizbuch vorher/nachher plus alle Striche,
     // die dabei verschoben, gedreht oder geloescht wurden.
