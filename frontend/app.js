@@ -19278,20 +19278,40 @@
 
   // ---- Verwandeln: ein Element waechst aus einem Rechteck (z. B. Knopf) bzw. schrumpft hinein ----
   window.sofiaMorph = {
-    from(el, r0, done) {
+    // per translate/scale (nicht transform): gilt auch, wo CSS transform sperrt (.bar-menu)
+    // und verträgt sich mit transform-Positionierungen (z. B. translateX(-50%))
+    frames(el, r0) {
       const r1 = el.getBoundingClientRect();
-      if (!r0 || !r1.width || !r1.height || !el.animate) return done && done();
-      const t = "translate(" + (r0.left - r1.left) + "px," + (r0.top - r1.top) + "px) scale(" + r0.width / r1.width + "," + r0.height / r1.height + ")";
-      const a = el.animate([{ transformOrigin: "0 0", transform: t, opacity: 0.4 }, { transformOrigin: "0 0", transform: "none", opacity: 1 }], { duration: 300, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+      if (!r0 || !r1.width || !r1.height || !el.animate) return null;
+      return {
+        translate: r0.left - r1.left + "px " + (r0.top - r1.top) + "px",
+        scale: r0.width / r1.width + " " + r0.height / r1.height,
+      };
+    },
+    from(el, r0, done) {
+      const f = this.frames(el, r0);
+      if (!f) return done && done();
+      const a = el.animate(
+        [
+          { transformOrigin: "0 0", translate: f.translate, scale: f.scale, opacity: 0.4 },
+          { transformOrigin: "0 0", translate: "0px 0px", scale: "1 1", opacity: 1 },
+        ],
+        { duration: 300, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+      );
       for (const c of el.children) c.animate && c.animate([{ opacity: 0 }, { opacity: 0, offset: 0.35 }, { opacity: 1 }], { duration: 300 });
       a.onfinish = () => done && done();
     },
     to(el, r0, done) {
-      const r1 = el.getBoundingClientRect();
-      if (!r0 || !r1.width || !r1.height || !el.animate) return done && done();
-      const t = "translate(" + (r0.left - r1.left) + "px," + (r0.top - r1.top) + "px) scale(" + r0.width / r1.width + "," + r0.height / r1.height + ")";
+      const f = this.frames(el, r0);
+      if (!f) return done && done();
       for (const c of el.children) c.animate && c.animate([{ opacity: 1 }, { opacity: 0, offset: 0.5 }, { opacity: 0 }], { duration: 240, fill: "forwards" });
-      const a = el.animate([{ transformOrigin: "0 0", transform: "none", opacity: 1 }, { transformOrigin: "0 0", transform: t, opacity: 0.3 }], { duration: 240, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)", fill: "forwards" });
+      const a = el.animate(
+        [
+          { transformOrigin: "0 0", translate: "0px 0px", scale: "1 1", opacity: 1 },
+          { transformOrigin: "0 0", translate: f.translate, scale: f.scale, opacity: 0.3 },
+        ],
+        { duration: 240, easing: "cubic-bezier(0.3, 0, 0.8, 0.15)", fill: "forwards" }
+      );
       a.onfinish = () => {
         done && done();
         el.getAnimations({ subtree: true }).forEach((x) => x.cancel());
@@ -19317,6 +19337,80 @@
     const r = b.getBoundingClientRect();
     return r.width ? r : null;
   };
+
+  // ---- Alle Menues wie in GoodNotes: wachsen aus ihrem Knopf heraus und schrumpfen wieder hinein ----
+  // Zentral fuer alle Menues: beim Aufgehen (Klasse "hidden" weg) waechst das Menue aus dem
+  // Knopf, der es geoeffnet hat; beim Zugehen schrumpft eine kurze Kopie zurueck hinein.
+  (() => {
+    // feste Knoepfe; sonst der zuletzt gedrueckte Knopf (Werkzeug, Seiten-▾, ⋯, Farbe ...)
+    const MENUS = {
+      "canvas-menu": "btn-canvas-menu",
+      "split-menu": "btn-split",
+      "insert-menu": "btn-insert",
+      "tb-more-menu": "btn-tb-more",
+      "lib-add-menu": "btn-library-add",
+      "text-color-pop": "btn-text-color",
+      "tool-popover": null,
+      "page-menu": null,
+      "lib-item-menu": null,
+      "swatch-menu": null,
+      "chat-menu": null,
+      "color-picker": null,
+      "zoom-popover": null,
+      "canvas-share-submenu": null,
+      "page-add-pop": null,
+      "erase-all-menu": null,
+    };
+    let lastAnchor = null;
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        const t = e.target;
+        const b = t && t.closest && t.closest("button, label, .swatch, [role=button], .page-thumb-menu, .chat-bubble");
+        if (b) lastAnchor = b;
+      },
+      true
+    );
+    const visibleRect = (el) => {
+      if (!el || !el.isConnected) return null;
+      const r = el.getBoundingClientRect();
+      return r.width > 2 && r.height > 2 ? r : null;
+    };
+    for (const [id, btnId] of Object.entries(MENUS)) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      let wasHidden = el.classList.contains("hidden");
+      let anchor = null;
+      new MutationObserver(() => {
+        const hidden = el.classList.contains("hidden");
+        if (hidden === wasHidden) return;
+        wasHidden = hidden;
+        if (!hidden) {
+          const fixed = btnId && document.getElementById(btnId);
+          anchor = fixed || (lastAnchor && !el.contains(lastAnchor) ? lastAnchor : null);
+          // Position setzt der Menue-Code direkt nach dem Einblenden - erst danach messen
+          requestAnimationFrame(() => {
+            const r0 = visibleRect(anchor);
+            if (r0 && !el.classList.contains("hidden") && window.sofiaMorph) window.sofiaMorph.from(el, r0);
+          });
+          return;
+        }
+        // zugehen: Kopie an derselben Stelle schrumpft zurueck in den Knopf
+        const r0 = visibleRect(anchor);
+        if (!r0 || !window.sofiaMorph || !el.parentNode) return;
+        // gleiche IDs behalten (Aussehen haengt daran); die Kopie steht hinter dem Original im
+        // DOM, getElementById findet weiter das Original - und sie lebt nur ~0,25 s
+        const ghost = el.cloneNode(true);
+        ghost.classList.remove("hidden");
+        ghost.classList.add("menu-ghost");
+        ghost.style.cssText = el.style.cssText;
+        ghost.style.pointerEvents = "none";
+        el.parentNode.insertBefore(ghost, el.nextSibling);
+        if (!visibleRect(ghost)) return ghost.remove();
+        window.sofiaMorph.to(ghost, r0, () => ghost.remove());
+      }).observe(el, { attributes: true, attributeFilter: ["class"] });
+    }
+  })();
 
   // ---- Stundenplan (aus Sofia, Klasse der angemeldeten Person) ----
   // Aufbau wie der Stundenplan in Sofia: Tag/Woche, Doppelstunden als ein Block,
@@ -22718,48 +22812,6 @@
     const btn = document.getElementById("btn-split");
     const pickScrim = document.getElementById("split-pick-scrim");
     const GAP = 3;
-    // pro Haelfte eine Namens-Pille (oben mittig): Blattname + ✕ fuer genau diese Haelfte
-    const tags = [0, 1].map((i) => {
-      const t = document.createElement("div");
-      t.className = "split-tag hidden";
-      t.innerHTML = '<button type="button" class="split-tag-name"><span class="material-symbols-rounded"></span><span class="split-tag-text"></span></button><button type="button" class="split-tag-x" title="Diese Hälfte schließen"><span class="material-symbols-rounded">close</span></button>';
-      t.querySelector(".split-tag-name").addEventListener("click", (e) => {
-        e.stopPropagation();
-        activate(i);
-      });
-      t.querySelector(".split-tag-x").addEventListener("click", (e) => {
-        e.stopPropagation();
-        // die andere Haelfte bleibt
-        close(1 - i);
-      });
-      for (const ev of ["pointerdown", "wheel"]) t.addEventListener(ev, (e) => e.stopPropagation());
-      document.body.appendChild(t);
-      return t;
-    });
-    function paneTitle(i) {
-      const st = splitState;
-      const p = st.panes[i];
-      if (!p) return "";
-      const meta = i === st.active ? currentBoardMeta : p.ctx.currentBoardMeta;
-      const same = st.panes[0] && st.panes[1] && st.panes[0].ctx === st.panes[1].ctx;
-      return ((meta && meta.title) || "Blatt") + (same ? (i === 0 ? " · links" : " · rechts") : "");
-    }
-    function syncTags() {
-      const st = splitState;
-      const g = st ? geometry() : null;
-      tags.forEach((t, i) => {
-        const on = !!(st && st.panes[i]);
-        t.classList.toggle("hidden", !on);
-        if (!on) return;
-        const pane = g.panes[i];
-        t.classList.toggle("active", i === st.active);
-        t.querySelector(".material-symbols-rounded").textContent = i === st.active ? "edit" : "visibility";
-        t.querySelector(".split-tag-text").textContent = paneTitle(i);
-        t.querySelector(".split-tag-name").title = i === st.active ? "Hier schreibst du gerade" : "Antippen: in dieser Hälfte schreiben";
-        t.style.maxWidth = Math.max(120, pane.x1 - pane.x0 - 24) + "px";
-        t.style.left = Math.round((pane.x0 + pane.x1) / 2) + "px";
-      });
-    }
     function captureCtx() {
       return { boardStrokes, remoteInProgress, currentBoardId, currentBoardMeta, notebook, notebookBoardId, ws, wantWs, myClientId, undoStack, redoStack, gridStyle };
     }
@@ -22804,8 +22856,7 @@
       layoutTopBar();
       divider.style.left = g.x - 8 + "px";
       const ap = g.panes[splitState.active];
-      Object.assign(activeBar.style, { left: ap.x0 + 6 + "px", width: ap.x1 - ap.x0 - 12 + "px" });
-      syncTags();
+      Object.assign(activeBar.style, { left: ap.x0 + "px", width: ap.x1 - ap.x0 + "px" });
       requestRedraw();
     }
     window.sofiaSplitLayout = layout;
@@ -22981,7 +23032,6 @@
       document.body.classList.remove("split-on");
       divider.classList.add("hidden");
       activeBar.classList.add("hidden");
-      tags.forEach((t) => t.classList.add("hidden"));
       btn.classList.remove("active");
       viewLeft = -1; // erzwingt Neuberechnung
       setViewInsets(requestedInsets[0], requestedInsets[1]);
