@@ -22043,20 +22043,22 @@
     const btnTime = document.getElementById("school-btn-time");
     const pop = document.getElementById("school-pop");
     const notes = document.getElementById("school-notes");
-    const DEF = { mode: "widget", before: 5, befores: [5], end: 10, start: 0, v2: 1 };
+    const DEF = { mode: "both", before: 5, befores: [5], end: 10, start: 0 };
     let cfg = Object.assign({}, DEF);
+    let saved = {};
     try {
-      cfg = Object.assign(cfg, JSON.parse(lsGetRaw("sofianotes-school") || "{}"));
+      saved = JSON.parse(lsGetRaw("sofianotes-school") || "{}") || {};
+      cfg = Object.assign(cfg, saved);
     } catch (err) {}
-    // frueher war "Fenster" ein frei schwebendes Fensterchen und standardmaessig aus -
-    // der Countdown-Knopf ist jetzt einmalig fuer alle an
     // mehrere Hinweise vor Stundenende (z. B. 30, 15, 10, 5 min)
     if (!Array.isArray(cfg.befores)) cfg.befores = cfg.before ? [+cfg.before] : [];
     const befores = () => (Array.isArray(cfg.befores) ? cfg.befores : []).map(Number).filter((m) => m > 0).sort((a, b) => b - a);
     const soonMin = () => (befores().length ? Math.min(...befores()) : 5);
-    if (!cfg.v2) {
-      cfg.mode = cfg.mode === "notes" || cfg.mode === "both" ? "both" : "widget";
+    // ab 2026-10-12: Countdown und Hinweise fuer alle an (einmalig)
+    if (!saved.v3) {
+      cfg.mode = "both";
       cfg.v2 = 1;
+      cfg.v3 = 1;
       try {
         localStorage.setItem("sofianotes-school", JSON.stringify(cfg));
       } catch (err) {}
@@ -22124,6 +22126,8 @@
       }
     }
     function note(text, icon) {
+      // ist das grosse Feld oder der Tagesplan offen, steht die Info dort - kein Hinweis dahinter
+      if (!pop.classList.contains("hidden") || btn.classList.contains("morph-away")) return;
       placeNotes();
       const el = document.createElement("div");
       el.className = "school-note";
@@ -22207,6 +22211,11 @@
       btn.setAttribute("aria-expanded", "true");
       placePop();
       tick();
+      // offene Hinweise verschwinden (sonst schimmern sie hinter dem Feld durch)
+      for (const n of notes.querySelectorAll(".school-note")) {
+        n.classList.remove("in");
+        setTimeout(() => n.remove(), 300);
+      }
       // waechst aus dem Knopf heraus, der Knopf ist solange weg
       window.sofiaSchoolBtnAway(true);
       window.sofiaMorph.from(pop, r0);
