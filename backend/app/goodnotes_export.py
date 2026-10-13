@@ -232,8 +232,6 @@ def _render_strokes(c, strokes: list[dict[str, Any]], tx, ty, scale: float) -> N
         extra = stroke.get("extra") or {}
         media_id = extra.get("mediaId")
         blob = media.load_bytes(str(media_id or ""))
-        if not blob:
-            return
         pts = stroke.get("points") or []
         if len(pts) < 2:
             return
@@ -241,6 +239,9 @@ def _render_strokes(c, strokes: list[dict[str, Any]], tx, ty, scale: float) -> N
         y0 = min(float(pts[0]["y"]), float(pts[1]["y"]))
         x1 = max(float(pts[0]["x"]), float(pts[1]["x"]))
         y1 = max(float(pts[0]["y"]), float(pts[1]["y"]))
+        if not blob:
+            _missing_image(x0, y0, x1, y1)
+            return
         crop = extra.get("crop") or {}
         left = max(0.0, min(1.0, float(crop.get("l") or 0)))
         top = max(0.0, min(1.0, float(crop.get("t") or 0)))
@@ -259,7 +260,21 @@ def _render_strokes(c, strokes: list[dict[str, Any]], tx, ty, scale: float) -> N
             c.drawImage(reader, ox, oy, width=full_w, height=full_h, mask="auto")
             c.restoreState()
         except Exception:  # noqa: BLE001
+            _missing_image(x0, y0, x1, y1)
             return
+
+    def _missing_image(x0: float, y0: float, x1: float, y1: float) -> None:
+        # Bilddatei (noch) nicht auf dem Server: Platzhalter statt einer leeren Stelle
+        c.saveState()
+        c.setFillColor(HexColor("#e8eaed"))
+        c.setStrokeColor(HexColor("#9aa0a6"))
+        c.setLineWidth(0.8)
+        c.rect(tx(x0), ty(y1), tx(x1) - tx(x0), ty(y0) - ty(y1), stroke=1, fill=1)
+        fs = max(5.0, min(14.0, (tx(x1) - tx(x0)) / 12))
+        c.setFillColor(HexColor("#5f6368"))
+        c.setFont("Helvetica", fs)
+        c.drawCentredString((tx(x0) + tx(x1)) / 2, (ty(y0) + ty(y1)) / 2 - fs / 3, "Bild fehlt")
+        c.restoreState()
 
     def _draw_table(stroke: dict[str, Any]) -> None:
         pts = stroke.get("points") or []

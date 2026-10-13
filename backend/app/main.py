@@ -791,6 +791,14 @@ async def upload_media_raw(media_id: str, request: Request) -> dict:
     return {"ok": True, "id": saved["id"], "bytes": saved["bytes"]}
 
 
+@app.post("/api/media-missing")
+async def media_missing(request: Request, me: dict = Depends(get_current_person)) -> dict:
+    """Welche dieser Bild-IDs hat der Server (noch) nicht? Die Geraete laden sie dann nach."""
+    body = await _json_body(request)
+    ids = [str(i) for i in (body.get("ids") or [])][:500]
+    return {"missing": [i for i in ids if media.valid_id(i) and not media.path_for(i).is_file()]}
+
+
 @app.get("/api/media-library")
 async def get_media_library(me: dict = Depends(get_current_person)) -> dict:
     """Zuletzt eingefuegte Bilder aller Personen, neueste zuerst (nur solche, deren Datei noch da ist)."""

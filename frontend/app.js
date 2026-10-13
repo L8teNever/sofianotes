@@ -1508,6 +1508,9 @@
       SofiaOffline.getMedia(mediaId).then((blob) => {
         if (!blob) return retry();
         img.src = URL.createObjectURL(blob);
+        // der Server hat das Bild nicht (Upload damals abgebrochen), ich aber schon:
+        // nachliefern - sonst fehlt es bei den anderen und im PDF
+        reuploadMedia(mediaId, blob);
       }, retry);
     };
     mediaImages.set(mediaId, img);
@@ -17433,9 +17436,51 @@
     });
     document.body.appendChild(box);
   }
+  // Bild, das dem Server fehlt, aus meiner lokalen Kopie hochladen (je Bild nur einmal gleichzeitig)
+  const mediaReuploads = new Map();
+  function reuploadMedia(id, blob) {
+    if (!id || !blob || mediaUploads.has(id)) return mediaUploads.get(id) || Promise.resolve();
+    if (mediaReuploads.has(id)) return mediaReuploads.get(id);
+    const p = fetch("/api/media/" + encodeURIComponent(id), { method: "PUT", headers: { "content-type": blob.type || "image/jpeg" }, body: blob })
+      .catch(() => null)
+      .finally(() => setTimeout(() => mediaReuploads.delete(id), 30000));
+    mediaReuploads.set(id, p);
+    return p;
+  }
+  // Vor dem Export: alles, was erst auf diesem Geraet ist, zum Server bringen - das PDF baut
+  // der Server aus seinem Stand (offenes Textfeld, laufende/abgebrochene Bild-Uploads)
+  async function prepareExport(url) {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    let sent = false;
+    if (textEdit) {
+      commitTextEditor();
+      sent = true;
+    }
+    if (mediaUploads.size) await Promise.race([Promise.all(Array.from(mediaUploads.values())), wait(30000)]);
+    await pendingMedia.flush().catch(() => {});
+    if (currentBoardId && url.includes("board=" + encodeURIComponent(currentBoardId))) {
+      const ids = Array.from(new Set(Array.from(boardStrokes.values()).filter((st) => st.tool === "image" && st.extra && st.extra.mediaId).map((st) => st.extra.mediaId)));
+      if (ids.length && window.SofiaOffline) {
+        try {
+          const r = await fetch("/api/media-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }) });
+          const missing = r.ok ? (await r.json()).missing || [] : [];
+          for (const id of missing) {
+            const blob = await SofiaOffline.getMedia(id).catch(() => null);
+            if (blob) await reuploadMedia(id, blob);
+          }
+        } catch (err) {}
+      }
+    }
+    // gerade gespeicherte Striche erst beim Server ankommen lassen
+    if (sent) {
+      for (let i = 0; i < 20 && ws && ws.bufferedAmount > 0; i++) await wait(100);
+      await wait(600);
+    }
+  }
   async function saveFileFromUrl(url, fallbackName, waitText) {
     if (navigator.onLine === false) return showToast("Export braucht Internet");
     showToast(waitText || "Datei wird erstellt …");
+    if (/\/api\/export\.pdf/.test(url)) await prepareExport(url);
     let r;
     try {
       r = await fetch(url, { credentials: "same-origin" });
