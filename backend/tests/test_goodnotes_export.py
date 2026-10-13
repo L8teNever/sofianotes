@@ -129,3 +129,11 @@ class GoodnotesExportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_layout_keeps_line_break_after_space():
+    """iPad setzt nach Wortvorschlaegen ein Leerzeichen vor dem Enter - der Umbruch muss bleiben."""
+    from app import goodnotes_export
+
+    lines = goodnotes_export.layout_runs([{"t": "Erste Zeile \nZweite Zeile  \n\n• Punkt"}], 12, None)
+    assert len(lines) == 4

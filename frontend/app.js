@@ -7080,7 +7080,9 @@
     const widths = [0];
     for (const run of runs) {
       measureCtx.font = runFont(run, size);
-      const parts = String(run.t).split(/(\n|\s+)/);
+      // Leerraum ohne Zeilenumbruch: sonst schluckt "Wort \n" (iPad setzt nach Wortvorschlaegen
+      // ein Leerzeichen) den Umbruch und zwei Zeilen werden zu einer
+      const parts = String(run.t).split(/(\n|[^\S\n]+)/);
       for (const part of parts) {
         if (!part) continue;
         if (part === "\n") {

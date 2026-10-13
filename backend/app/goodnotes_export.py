@@ -101,7 +101,7 @@ def layout_runs(runs: list[dict[str, Any]], size: float, width: float | None) ->
         if not isinstance(run, dict):
             continue
         font = _run_font(run)
-        for part in re.split(r"(\n|\s+)", str(run.get("t") or "")):
+        for part in re.split(r"(\n|[^\S\n]+)", str(run.get("t") or "")):
             if not part:
                 continue
             if part == "\n":
