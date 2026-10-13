@@ -15,6 +15,7 @@ const APP_SHELL = [
   "/ink-recognize.js?v=" + BUILD,
   "/local-ocr.js?v=" + BUILD,
   "/offline.js?v=" + BUILD,
+  "/koord.js?v=" + BUILD,
   "/updates.js?v=" + BUILD,
   "/app.js?v=" + BUILD,
   "/manifest.json",

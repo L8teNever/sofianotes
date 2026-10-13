@@ -4742,6 +4742,7 @@
     if (want("insert")) {
       head("Einfügen");
       item(box, "tbm-row", "table", "Tabelle", "#insert-table", false);
+      item(box, "tbm-row", "show_chart", "Koordinatensystem", "#insert-koord", false);
       item(box, "tbm-row", "add_photo_alternate", "Bild", "#insert-image", false);
       item(box, "tbm-row", "description", "PDF / Datei", "#insert-pdf", false);
     }
@@ -11594,7 +11595,8 @@
     const delBtn = document.getElementById("btn-sel-delete");
     if (delBtn) delBtn.classList.toggle("hidden", cropping || !selection.ids.size);
     if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
-    if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img);
+    if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img || !!(img && img.extra && img.extra.koord));
+    document.getElementById("btn-koord-edit")?.classList.toggle("hidden", cropping || !(img && img.extra && img.extra.koord));
     const table = cropping ? null : selectedTable();
     // im Tabellen-/Text-Modus stehen diese Knoepfe schon unten in der Leiste
     const inTableMode = toolbarEl.dataset.mode === "text";
@@ -11779,12 +11781,13 @@
     }
   }
 
-  function placeImageStroke(mediaId, w, h, name, origin) {
+  function placeImageStroke(mediaId, w, h, name, origin, more) {
     const maxW = Math.min(720, window.innerWidth * 0.62) / scale;
     const maxH = Math.min(860, window.innerHeight * 0.7) / scale;
     const fit = Math.min(maxW / w, maxH / h, 1);
-    const dw = w * fit;
-    const dh = h * fit;
+    // more.exact: feste Groesse in Welt-Einheiten (z.B. Koordinatensystem in echten mm)
+    const dw = more && more.exact ? more.exact.w : w * fit;
+    const dh = more && more.exact ? more.exact.h : h * fit;
     if (origin.center) origin = { x: origin.x - dw / 2, y: origin.y - dh / 2 };
     const id = uuid();
     const stroke = {
@@ -11804,6 +11807,7 @@
         name: name || "Bild",
       },
     };
+    if (more && more.koord) stroke.extra.koord = more.koord;
     stampBoardPage(stroke);
     stroke.bbox = stroke.tool === "image" ? strokeWorldBBox(stroke) : makeBBox(stroke.points);
     if (stroke.extra && stroke.extra.boardPage) {
@@ -12076,6 +12080,90 @@
     e.stopPropagation();
     insertMenu.classList.add("hidden");
     openImageLibrary(e.currentTarget);
+  });
+
+  // ---- Koordinatensystem (koord.js): einfuegen und spaeter wieder bearbeiten ----
+  // Als Bild in echter Groesse (mm), auf karierten Seiten so gesetzt, dass die Achsen auf
+  // den Kaestchen liegen. Die Einstellungen stehen im Bild (extra.koord), zum Bearbeiten.
+  async function koordImage(spec) {
+    const k = Math.max(6, Math.min(12, 2600 / window.SofiaKoord.geometry(spec).wMM)); // px pro mm
+    const res = window.SofiaKoord.render(spec, k);
+    const blob = await new Promise((r) => res.canvas.toBlob(r, "image/jpeg", 0.95));
+    const mediaId = await uploadJpeg(blob ? { blob, canvas: res.canvas } : { canvas: res.canvas });
+    return { mediaId, wMM: res.wMM, hMM: res.hMM, pw: res.canvas.width, ph: res.canvas.height };
+  }
+  function insertKoord() {
+    if (!window.SofiaKoord) return;
+    if (viewOnly || myRole === "view") return showToast("Du darfst dieses Blatt nur ansehen");
+    window.SofiaKoord.open(null, async (spec) => {
+      let img;
+      try {
+        img = await koordImage(spec);
+      } catch (err) {
+        return showToast("Koordinatensystem einfügen hat nicht geklappt");
+      }
+      const w = img.wMM * MM;
+      const h = img.hMM * MM;
+      const c = screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
+      let x = c.x - w / 2;
+      let y = c.y - h / 2;
+      // auf der Seite: links oben auf eine Kaestchen-Linie (Raender und Einheit sind Vielfache von 5 mm)
+      if (notebook && !boardEditId) {
+        const r = pageRects(notebook).find((q) => c.x >= q.x && c.x <= q.x + q.w && c.y >= q.y && c.y <= q.y + q.h);
+        if (r) {
+          x = Math.max(r.x, Math.min(r.x + r.w - w, x));
+          y = Math.max(r.y, Math.min(r.y + r.h - h, y));
+          x = r.x + Math.round((x - r.x) / NB_GRID) * NB_GRID;
+          y = r.y + Math.round((y - r.y) / NB_GRID) * NB_GRID;
+        }
+      }
+      const st = placeImageStroke(img.mediaId, img.pw, img.ph, "Koordinatensystem", { x, y }, { koord: spec, exact: { w, h } });
+      if (st) {
+        setTool("select");
+        selectStrokeIds([st.id]);
+      }
+      requestRedraw();
+    });
+  }
+  document.getElementById("insert-koord")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    insertMenu.classList.add("hidden");
+    insertKoord();
+  });
+  function selectedKoord() {
+    const s = selectedImageStroke();
+    return s && s.extra && s.extra.koord ? s : null;
+  }
+  document.getElementById("btn-koord-edit")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const st = selectedKoord();
+    if (!st || !window.SofiaKoord) return;
+    window.SofiaKoord.open(st.extra.koord, async (spec) => {
+      let img;
+      try {
+        img = await koordImage(spec);
+      } catch (err) {
+        return showToast("Ändern hat nicht geklappt");
+      }
+      const cur = boardStrokes.get(st.id);
+      if (!cur) return;
+      const before = cloneStroke(cur);
+      // links oben bleibt, Groesse wieder in echten mm
+      const x0 = Math.min(cur.points[0].x, cur.points[1].x);
+      const y0 = Math.min(cur.points[0].y, cur.points[1].y);
+      cur.points = [
+        { x: x0, y: y0, p: 1 },
+        { x: x0 + img.wMM * MM, y: y0 + img.hMM * MM, p: 1 },
+      ];
+      cur.extra = Object.assign({}, cur.extra, { mediaId: img.mediaId, nw: img.pw, nh: img.ph, crop: { l: 0, t: 0, r: 1, b: 1 }, koord: spec });
+      delete cur.extra.rot;
+      cur.bbox = strokeWorldBBox(cur);
+      ensureMedia(img.mediaId);
+      wsSend({ type: "stroke_move", stroke: serializeStroke(cur) });
+      pushUndo({ type: "replace", before, after: cloneStroke(cur) });
+      selectStrokeIds([cur.id]);
+      requestRedraw();
+    });
   });
   // "Bild": zuletzt eingefuegte Bilder aller Personen zum direkten Einfuegen, darueber
   // "Neues Bild hochladen". Gibt es noch keine (oder offline), geht gleich die Dateiauswahl auf.
