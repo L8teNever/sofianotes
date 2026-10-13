@@ -2190,8 +2190,9 @@
     };
   }
   function findBoardHome() {
-    if (!boardEditId) return;
-    const list = strokesForBoard(boardEditId);
+    if (!boardEditId && notebook) return;
+    // Board-Seite im Heft oder normales (unendliches) Board
+    const list = boardEditId ? strokesForBoard(boardEditId) : Array.from(boardStrokes.values()).filter((st) => !(st.extra && st.extra.boardPage));
     const bounds = boardContentBounds(list);
     let target;
     let note = "Zurück zum Ursprung";
@@ -5478,6 +5479,7 @@
         p.y = msg.y;
         p.tool = msg.tool;
         p.size = msg.size;
+        p.bp = msg.bp || null;
         if (msg.person) p.person = msg.person;
         p.lastSeen = performance.now();
         requestRedraw();
@@ -5663,6 +5665,10 @@
         removePresence(id);
         continue;
       }
+      // jemand in einer anderen Board-Seite (oder im Heft, waehrend ich im Board bin): hier nicht zeigen
+      const here = (p.bp || null) === (boardEditId || null);
+      if (p.el.style.display !== (here ? "" : "none")) p.el.style.display = here ? "" : "none";
+      if (!here) continue;
       const s = worldToScreen(p.x, p.y);
       p.el.style.left = s.x + "px";
       p.el.style.top = s.y - 14 + "px";
@@ -5684,6 +5690,99 @@
     requestRedraw();
   }
 
+  // Zu jemandem springen, der gerade im Blatt ist: dorthin, wo er zuletzt geschrieben/gezeigt hat
+  // (auch in eine andere Board-Seite oder auf eine andere Heftseite)
+  function jumpToPerson(p) {
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return showToast("Noch nicht zu sehen, wo die Person ist");
+    const center = (x, y) => {
+      const v = { scale, offsetX: viewLeft + (window.innerWidth - viewLeft - viewRight) / 2 - x * scale, offsetY: window.innerHeight / 2 - y * scale };
+      if (window.sofiaAnimateView) window.sofiaAnimateView(v, 420);
+      else {
+        offsetX = v.offsetX;
+        offsetY = v.offsetY;
+        requestRedraw();
+      }
+    };
+    if (notebook) {
+      if (p.bp) {
+        if (boardEditId !== p.bp) enterBoardPage(p.bp);
+        center(p.x, p.y);
+        return;
+      }
+      if (boardEditId) exitBoardPage({ fit: false });
+      const rects = pageRects(notebook);
+      const i = rects.findIndex((r) => p.x >= r.x - 20 && p.x <= r.x + r.w + 20 && p.y >= r.y - 20 && p.y <= r.y + r.h + 20);
+      if (i >= 0 && !notebookZoomedIn() && window.sofiaFitPage) {
+        window.sofiaFitPage(i, true);
+        return;
+      }
+    }
+    center(p.x, p.y);
+  }
+  window.sofiaJumpToPerson = jumpToPerson;
+  // Leiste unten links: "Zurueckfinden" (nur wenn im Board nichts mehr zu sehen ist) und
+  // die Personen, die gerade im Blatt sind (antippen = hinspringen)
+  const boardNav = document.createElement("div");
+  boardNav.id = "board-nav";
+  boardNav.className = "board-nav hidden";
+  document.body.appendChild(boardNav);
+  boardNav.addEventListener("pointerdown", (e) => e.stopPropagation());
+  let boardNavSig = "";
+  function contentOutOfView() {
+    if (notebook && !boardEditId) return false;
+    const list = boardEditId ? strokesForBoard(boardEditId) : Array.from(boardStrokes.values()).filter((st) => !(st.extra && st.extra.boardPage));
+    if (!list.length) {
+      // leeres Board: nur wenn man weit vom Ursprung weg ist
+      const c = screenToWorld(viewLeft + (window.innerWidth - viewLeft - viewRight) / 2, window.innerHeight / 2);
+      return Math.hypot(c.x, c.y) * scale > Math.max(window.innerWidth, window.innerHeight);
+    }
+    const a = screenToWorld(viewLeft, 0);
+    const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
+    for (const st of list) {
+      const bb = st.bbox || strokeWorldBBox(st);
+      if (bb && bb.maxX >= a.x && bb.minX <= b.x && bb.maxY >= a.y && bb.minY <= b.y) return false;
+    }
+    return true;
+  }
+  function syncBoardNav() {
+    const libClosed = libraryBackdrop.classList.contains("hidden");
+    const lost = libClosed && !!currentBoardId && !historyView && contentOutOfView();
+    const people = libClosed && currentBoardId ? liveOtherPeople() : [];
+    const sig = (lost ? "1" : "0") + "|" + people.map(([id, p]) => id + ":" + (p.person || "") + ":" + p.color).join(",");
+    if (sig === boardNavSig) return;
+    boardNavSig = sig;
+    boardNav.innerHTML = "";
+    if (lost) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "board-nav-find";
+      b.innerHTML = '<span class="material-symbols-rounded">my_location</span><span>Zurückfinden</span>';
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        findBoardHome();
+      });
+      boardNav.appendChild(b);
+    }
+    people.forEach(([id, p], i) => {
+      const name = (p.person && personName(p.person)) || p.label || "Person " + (i + 1);
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "board-nav-person";
+      b.title = "Zu " + name + " springen";
+      b.style.background = p.color || "#888";
+      const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(p.color || "");
+      const lum = m ? (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255 : 0;
+      b.style.color = lum > 0.62 ? "#1c1b1f" : "#fff";
+      b.textContent = String(name).trim().slice(0, 1).toUpperCase() || "?";
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        jumpToPerson(presence.get(id));
+      });
+      boardNav.appendChild(b);
+    });
+    boardNav.classList.toggle("hidden", !boardNav.children.length);
+  }
+  setInterval(syncBoardNav, 500);
   function liveOtherPeople() {
     const now = performance.now();
     return Array.from(presence.entries())
@@ -5748,7 +5847,7 @@
     const now = performance.now();
     if (now - lastCursorSend < CURSOR_SEND_MS) return;
     lastCursorSend = now;
-    wsSend({ type: "cursor", x, y, tool, size });
+    wsSend({ type: "cursor", x, y, tool, size, bp: boardEditId || null });
   }
 
   // ---- Undo/Redo (persoenlicher Verlauf der eigenen Aktionen) -----------
@@ -18572,13 +18671,13 @@
       return;
     }
     canvasShareSubmenu.classList.add("hidden");
-    document.getElementById("canvas-menu-find")?.classList.toggle("hidden", !boardEditId);
+    document.getElementById("canvas-menu-find")?.classList.toggle("hidden", !boardEditId && !!notebook);
     canvasMenu.classList.toggle("hidden");
   });
   document.getElementById("canvas-menu-find")?.addEventListener("click", (e) => {
     e.stopPropagation();
     closeCanvasMenus();
-    if (!boardEditId) {
+    if (!boardEditId && notebook) {
       showToast("Zurückfinden gibt es im Board");
       return;
     }

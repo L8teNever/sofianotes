@@ -1243,6 +1243,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         "y": msg.get("y"),
                         "tool": msg.get("tool"),
                         "size": msg.get("size"),
+                        # offene Board-Seite (Notizbuch) - zum Hinspringen und richtigen Anzeigen
+                        "bp": msg.get("bp") if isinstance(msg.get("bp"), str) else None,
                     },
                     exclude=websocket,
                     board_id=room,

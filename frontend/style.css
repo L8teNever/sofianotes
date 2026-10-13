@@ -6234,3 +6234,54 @@ html[data-theme="dark"] .kd-eq { background: #2b2930; }
 html[data-theme="dark"] .kd-pt-dot { border-color: #26242d; }
 html[data-theme="dark"] .kd-scrim .kd-eq { color: #e8def8 !important; }
 html[data-theme="dark"] .kd-color[style*="rgb(32, 33, 36)"], html[data-theme="dark"] .kd-pt-dot[style*="rgb(32, 33, 36)"] { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5); }
+
+/* ---- Unten links: Zurückfinden im Board und andere Personen im Blatt ---- */
+.board-nav {
+  position: fixed;
+  left: calc(var(--safe-left, 0px) + var(--view-left, 0px) + 16px);
+  bottom: calc(env(safe-area-inset-bottom) + 18px);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 26px;
+  background: var(--dock-bg, rgba(255, 255, 255, 0.92));
+  border: 1px solid var(--dock-border, rgba(0, 0, 0, 0.06));
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  animation: bar-pop 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+body.pages-open .board-nav { left: calc(var(--pages-inset, 0px) + 16px); }
+.board-nav.hidden { display: none; }
+.board-nav-find {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 16px 0 12px;
+  border: none;
+  border-radius: 20px;
+  background: #6750a4;
+  color: #fff;
+  font: 600 14px/1 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+}
+.board-nav-find .material-symbols-rounded { font-size: 20px; color: inherit; }
+.board-nav-person {
+  width: 40px;
+  height: 40px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  font: 700 16px/1 'Google Sans', 'Inter', sans-serif;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+html[data-theme="dark"] .board-nav-find,
+html[data-theme="dark"] .board-nav-find span { background: #d0bcff; color: #381e72; }
+html[data-theme="dark"] .board-nav-find span { background: none; }
+html[data-theme="dark"] .board-nav-person { border-color: #2b2930; }
