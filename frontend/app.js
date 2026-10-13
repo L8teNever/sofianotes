@@ -10085,10 +10085,14 @@
     ctx.setTransform(dpr, 0, 0, dpr, -canvasLeft * dpr, 0);
     ctx.translate(ruler.cx, ruler.cy);
     ctx.rotate(ruler.angle);
-    ctx.fillStyle = "rgba(255,255,255,0.78)";
-    ctx.strokeStyle = "rgba(60,64,67,0.55)";
+    // Farben wie die Leisten: helles Lila-Weiss, Skala dunkelgrau, Winkel in Lila
+    const RC = darkMode
+      ? { body: "rgba(43,41,48,0.86)", edge: "rgba(208,188,255,0.5)", tick: "rgba(230,225,229,0.72)", text: "rgba(230,225,229,0.9)", accent: "#d0bcff" }
+      : { body: "rgba(247,242,250,0.88)", edge: "rgba(103,80,164,0.42)", tick: "rgba(73,69,79,0.7)", text: "rgba(28,27,31,0.82)", accent: "#6750a4" };
+    ctx.fillStyle = RC.body;
+    ctx.strokeStyle = RC.edge;
     ctx.lineWidth = 1;
-    ctx.font = "600 10px Inter, sans-serif";
+    ctx.font = "600 10px 'Google Sans', Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const deg = rulerDegrees();
@@ -10101,8 +10105,8 @@
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-      ctx.strokeStyle = "rgba(60,64,67,0.7)";
-      ctx.fillStyle = "rgba(60,64,67,0.85)";
+      ctx.strokeStyle = RC.tick;
+      ctx.fillStyle = RC.text;
       // cm-Skala auf der langen Kante, 0 in der Mitte (wie beim echten Geodreieck)
       drawRulerScale(ctx, -H + 8, H - 8, 0, 1);
       // Winkelmesser: Halbkreis um die Mitte der langen Kante
@@ -10128,8 +10132,8 @@
       ctx.moveTo(0, 0);
       ctx.lineTo(0, H * 0.25);
       ctx.stroke();
-      ctx.font = "700 13px Inter, sans-serif";
-      ctx.fillStyle = "#1a73e8";
+      ctx.font = "700 13px 'Google Sans', Inter, sans-serif";
+      ctx.fillStyle = RC.accent;
       ctx.fillText(deg + "°", 0, H * 0.78);
     } else {
       const len = Math.hypot(window.innerWidth, window.innerHeight) * 1.2;
@@ -10140,8 +10144,8 @@
       ctx.moveTo(-len, RULER_HALF);
       ctx.lineTo(len, RULER_HALF);
       ctx.stroke();
-      ctx.strokeStyle = "rgba(60,64,67,0.7)";
-      ctx.fillStyle = "rgba(60,64,67,0.85)";
+      ctx.strokeStyle = RC.tick;
+      ctx.fillStyle = RC.text;
       drawRulerScale(ctx, -len, len, -RULER_HALF, 1);
       ctx.beginPath();
       const cm = 37.8 * scale;
@@ -10155,8 +10159,8 @@
         ctx.lineTo(i * step, RULER_HALF - h);
       }
       ctx.stroke();
-      ctx.font = "700 13px Inter, sans-serif";
-      ctx.fillStyle = "#1a73e8";
+      ctx.font = "700 13px 'Google Sans', Inter, sans-serif";
+      ctx.fillStyle = RC.accent;
       ctx.fillText(deg + "°", 0, 8);
     }
     ctx.restore();
@@ -24516,6 +24520,44 @@
       win.style.left = Math.max(6, Math.min(window.innerWidth - w - 6, x)) + "px";
       win.style.top = Math.max(6, Math.min(window.innerHeight - Math.min(h, 120), y)) + "px";
     }
+    // Andocken: rechts als Seitenleiste (wie Tagesplan/Seiten-Leiste), die Schreibflaeche rueckt
+    const DOCK_W = 340;
+    const dockBtn = document.getElementById("calc-dock");
+    function dockRight() {
+      // neben anderen rechts angedockten Leisten (Chat, Tagesplan): links davon
+      const all = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--dock-inset-r")) || 0;
+      return Math.max(0, all - DOCK_W);
+    }
+    function applyDock() {
+      const docked = !!st.docked;
+      win.classList.toggle("docked", docked);
+      dockBtn.title = docked ? "Als schwebendes Fenster" : "Als Seitenleiste andocken";
+      dockBtn.querySelector(".material-symbols-rounded").textContent = docked ? "picture_in_picture" : "dock_to_right";
+      if (window.sofiaSetPanelInsets) window.sofiaSetPanelInsets("calc", 0, docked && st.open ? DOCK_W : 0);
+      if (docked) {
+        win.style.left = "";
+        win.style.top = "";
+        win.style.right = dockRight() + "px";
+      } else {
+        win.style.right = "";
+        if (st.open) place();
+      }
+    }
+    // andere Leisten gehen auf/zu: angedockt daneben bleiben
+    new MutationObserver(() => {
+      if (!st.docked || win.classList.contains("hidden")) return;
+      const r = dockRight() + "px";
+      if (win.style.right !== r) win.style.right = r;
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    function setDocked(on) {
+      st.docked = on;
+      save();
+      applyDock();
+    }
+    dockBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setDocked(!st.docked);
+    });
     function setOpen(open) {
       closeDd();
       st.open = open;
@@ -24526,6 +24568,7 @@
         showTab(st.tab);
         renderCalc();
       }
+      applyDock();
     }
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -24543,33 +24586,72 @@
     window.addEventListener("pointerdown", () => (calcFocused = false), true);
     const head = document.getElementById("calc-head");
     let drag = null;
+    // Ziehen am Kopf - auch auf den Tabs (erst ab ein paar Pixeln, ein Tipp wechselt weiter den Tab);
+    // die runden Knoepfe ziehen nie
+    let swallowClick = false;
     head.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button")) return;
-      e.preventDefault();
+      if (e.target.closest(".calc-round")) return;
+      const onTab = !!e.target.closest("button");
+      if (!onTab) e.preventDefault();
+      drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, live: false };
+      if (!onTab) startDrag(e);
+    });
+    function startDrag(e) {
+      drag.live = true;
+      if (st.docked) {
+        // aus der Seitenleiste herausziehen: wird wieder ein Fenster unter dem Finger
+        st.docked = false;
+        applyDock();
+        const w = win.offsetWidth || 320;
+        st.x = e.clientX - w / 2;
+        st.y = e.clientY - 24;
+        place();
+      }
       const r = win.getBoundingClientRect();
-      drag = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top };
+      drag.dx = e.clientX - r.left;
+      drag.dy = e.clientY - r.top;
       try {
         head.setPointerCapture(e.pointerId);
       } catch (err) {}
-    });
+    }
     head.addEventListener("pointermove", (e) => {
       if (!drag || e.pointerId !== drag.id) return;
+      if (!drag.live) {
+        if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 8) return;
+        swallowClick = true;
+        startDrag(e);
+      }
       st.x = e.clientX - drag.dx;
       st.y = e.clientY - drag.dy;
       place();
     });
+    head.addEventListener(
+      "click",
+      (e) => {
+        if (!swallowClick) return;
+        swallowClick = false;
+        e.stopPropagation();
+        e.preventDefault();
+      },
+      true
+    );
     const endDrag = (e) => {
       if (!drag || e.pointerId !== drag.id) return;
+      const was = drag.live;
       drag = null;
+      if (!was) return;
+      setTimeout(() => (swallowClick = false), 0);
       const r = win.getBoundingClientRect();
       st.x = r.left;
       st.y = r.top;
+      // an den rechten Rand gezogen: andocken
+      if (r.right >= window.innerWidth - 14) return setDocked(true);
       save();
     };
     head.addEventListener("pointerup", endDrag);
     head.addEventListener("pointercancel", endDrag);
     window.addEventListener("resize", () => {
-      if (!win.classList.contains("hidden")) place();
+      if (!win.classList.contains("hidden") && !st.docked) place();
     });
     fillUnits();
     renderConv();

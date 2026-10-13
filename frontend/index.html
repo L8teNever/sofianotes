@@ -69,17 +69,19 @@
 <div id="eraser-cursor"></div>
 <!-- zweite Leiste: erscheint, solange Lineal/Geodreieck an ist -->
 <div id="ruler-bar" class="ruler-bar hidden" role="toolbar" aria-label="Lineal">
-  <button type="button" class="tool-btn kind-btn active" data-kind="ruler" title="Lineal"><span class="material-symbols-rounded">straighten</span></button>
-  <button type="button" class="tool-btn kind-btn" data-kind="triangle" title="Geodreieck"><span class="material-symbols-rounded">square_foot</span></button>
-  <span class="mode-sep"></span>
-  <button type="button" class="tool-btn angle-btn" data-angle="0" title="Waagrecht"><span class="angle-label">0°</span></button>
-  <button type="button" class="tool-btn angle-btn" data-angle="30"><span class="angle-label">30°</span></button>
-  <button type="button" class="tool-btn angle-btn" data-angle="45"><span class="angle-label">45°</span></button>
-  <button type="button" class="tool-btn angle-btn" data-angle="60"><span class="angle-label">60°</span></button>
-  <button type="button" class="tool-btn angle-btn" data-angle="90" title="Senkrecht"><span class="angle-label">90°</span></button>
+  <div class="tbar-seg" role="group" aria-label="Art">
+    <button type="button" class="tool-btn kind-btn active" data-kind="ruler" title="Lineal"><span class="material-symbols-rounded">straighten</span></button>
+    <button type="button" class="tool-btn kind-btn" data-kind="triangle" title="Geodreieck"><span class="material-symbols-rounded">square_foot</span></button>
+  </div>
+  <div class="tbar-seg" role="group" aria-label="Winkel">
+    <button type="button" class="tool-btn angle-btn" data-angle="0" title="Waagrecht"><span class="angle-label">0°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="30"><span class="angle-label">30°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="45"><span class="angle-label">45°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="60"><span class="angle-label">60°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="90" title="Senkrecht"><span class="angle-label">90°</span></button>
+  </div>
   <label class="angle-field" title="Winkel eintippen"><input id="ruler-bar-angle" type="number" inputmode="decimal" min="0" max="359" step="1" value="0" /><span>°</span></label>
-  <span class="mode-sep"></span>
-  <button type="button" id="ruler-bar-close" class="tool-btn" title="Lineal ausblenden"><span class="material-symbols-rounded">close</span></button>
+  <button type="button" id="ruler-bar-close" class="tool-btn tbar-round" title="Lineal ausblenden"><span class="material-symbols-rounded">close</span></button>
 </div>
 <input id="ruler-angle-input" class="ruler-angle-input hidden" type="number" inputmode="decimal" min="0" max="359" step="1" aria-label="Winkel in Grad" />
 <div id="zoom-box" class="hidden">
@@ -1277,8 +1279,9 @@
         <button type="button" class="calc-tab active" data-tab="calc">Rechner</button>
         <button type="button" class="calc-tab" data-tab="conv">Umrechner</button>
       </div>
-      <button type="button" id="calc-hist-btn" class="hw-panel-btn" title="Verlauf"><span class="material-symbols-rounded">history</span></button>
-      <button type="button" id="calc-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      <button type="button" id="calc-hist-btn" class="hw-panel-btn calc-round" title="Verlauf"><span class="material-symbols-rounded">history</span></button>
+      <button type="button" id="calc-dock" class="hw-panel-btn calc-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+      <button type="button" id="calc-close" class="hw-panel-btn calc-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
     </div>
     <div class="calc-body" data-tab="calc">
       <div class="calc-mode" id="calc-mode">
