@@ -24313,17 +24313,16 @@
           });
           keysEl.appendChild(b);
         }
-      document.querySelectorAll("#calc-mode [data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+      syncSwitch();
     }
-    document.querySelectorAll("#calc-mode [data-mode]").forEach((b) =>
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        st.mode = b.dataset.mode;
-        save();
-        if (showHist) setHist(false);
-        renderKeys();
-      })
-    );
+    // ein Umschalter: Rechner | Wissenschaftlich | Umrechner
+    function currentView() {
+      return st.tab === "conv" ? "conv" : st.mode === "sci" ? "sci" : "basic";
+    }
+    function syncSwitch() {
+      const v = currentView();
+      win.querySelectorAll(".calc-tab").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
+    }
     renderKeys();
     // Tastatur (wenn das Fenster offen ist und nichts anderes Eingaben hat)
     window.addEventListener("keydown", (e) => {
@@ -24500,18 +24499,23 @@
     // ---- Fenster: Reiter, Oeffnen, Verschieben ----
     function showTab(tab) {
       st.tab = tab;
-      win.querySelectorAll(".calc-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
       win.querySelectorAll(".calc-body").forEach((b) => b.classList.toggle("hidden", b.dataset.tab !== tab));
       histBtn.classList.toggle("hidden", tab !== "calc");
-      const title = document.getElementById("calc-title");
-      if (title) title.textContent = tab === "conv" ? "Umrechner" : "Rechner";
+      syncSwitch();
       save();
       if (!st.docked) place();
     }
     win.querySelectorAll(".calc-tab").forEach((b) =>
       b.addEventListener("click", (e) => {
         e.stopPropagation();
-        showTab(b.dataset.tab);
+        const v = b.dataset.view;
+        if (v === "conv") return showTab("conv");
+        if (st.mode !== v) {
+          st.mode = v;
+          if (showHist) setHist(false);
+          renderKeys();
+        }
+        showTab("calc");
       })
     );
     function place() {

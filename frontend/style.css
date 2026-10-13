@@ -6081,3 +6081,8 @@ html[data-theme="dark"] .ruler-angle-input { background: #2b2930; border-color: 
 .calc-win > .calc-tabs { flex: 0 0 auto; margin: 0 12px 8px; }
 .calc-win > .calc-tabs .calc-tab { height: 36px; border-radius: 18px; font-size: 14px; }
 html[data-theme="dark"] .calc-head .chat-round.active { background: #4a4458; color: #eaddff; }
+
+/* ein Umschalter mit drei Ansichten: gleich breit, passt in Fenster und Seitenleiste */
+.calc-win > .calc-tabs .calc-tab { flex: 1 1 0; min-width: 0; padding: 0 4px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.calc-win > .calc-tabs .calc-tab[data-view="sci"] { flex-grow: 1.4; }
+.calc-win > .calc-tabs .calc-tab { text-overflow: clip; }

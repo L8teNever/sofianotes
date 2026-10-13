@@ -1281,15 +1281,13 @@
       <button type="button" id="calc-dock" class="chat-pill chat-round calc-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
       <button type="button" id="calc-close" class="chat-pill chat-round calc-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
     </div>
-    <div class="calc-tabs">
-      <button type="button" class="calc-tab active" data-tab="calc">Rechner</button>
-      <button type="button" class="calc-tab" data-tab="conv">Umrechner</button>
+    <!-- ein Umschalter fuer alles: Rechner, wissenschaftlicher Rechner, Umrechner -->
+    <div class="calc-tabs" role="tablist" aria-label="Ansicht">
+      <button type="button" class="calc-tab active" data-view="basic">Rechner</button>
+      <button type="button" class="calc-tab" data-view="sci">Wissenschaftlich</button>
+      <button type="button" class="calc-tab" data-view="conv">Umrechner</button>
     </div>
     <div class="calc-body" data-tab="calc">
-      <div class="calc-mode" id="calc-mode">
-        <button type="button" data-mode="basic">Normal</button>
-        <button type="button" data-mode="sci">Wissenschaftlich</button>
-      </div>
       <div class="calc-display">
         <div id="calc-prev" class="calc-prev"></div>
         <div id="calc-expr" class="calc-expr">0</div>
