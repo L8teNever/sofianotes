@@ -2041,6 +2041,8 @@
     btn.setAttribute("aria-label", title);
     setCls(btn, "back-icon", true);
     setCls(btn, "in-board", inBoard);
+    // in einer Board-Seite immer sichtbar (auch wenn "Verlassen" im Zahnrad-Menue liegt)
+    setCls(document.body, "in-board-page", inBoard);
     if (label) label.hidden = true;
     if (icon && icon.textContent !== ico) icon.textContent = ico;
     if (changed) layoutTopBar();
@@ -23389,10 +23391,18 @@
       requestRedraw();
     }
     window.sofiaSplitLayout = layout;
+    // Jede Haelfte hat ihre eigene offene Board-Seite (be): in der einen das Board, in der
+    // anderen das Heft oder ein anderes Board desselben Hefts - auch beim gleichen Blatt.
     function saveActive() {
       const p = splitState.panes[splitState.active];
       p.view = { scale, offsetX, offsetY };
+      p.be = boardEditId;
       Object.assign(p.ctx, captureCtx());
+    }
+    function syncPaneBoardUi() {
+      boardBarSig = "";
+      syncBoardBar();
+      if (window.sofiaPagesChanged) window.sofiaPagesChanged();
     }
     // fn im Zustand einer anderen Haelfte ausfuehren (Zeichnen / Nachrichten)
     function withPane(i, fn, ctxOnly) {
@@ -23400,9 +23410,10 @@
       const p = st.panes[i];
       const act = st.panes[st.active];
       const other = p.ctx !== act.ctx;
-      const save = { scale, offsetX, offsetY, viewLeft, viewRight };
+      const save = { scale, offsetX, offsetY, viewLeft, viewRight, be: boardEditId };
       Object.assign(act.ctx, captureCtx());
       if (other) applyCtx(p.ctx);
+      if (!ctxOnly) boardEditId = p.be === undefined ? boardEditId : p.be;
       if (!ctxOnly) {
         const ins = paneInsets(i);
         scale = p.view.scale;
@@ -23416,7 +23427,11 @@
         fn(other);
       } finally {
         window.sofiaSplitBg = false;
-        if (!ctxOnly) p.view = { scale, offsetX, offsetY };
+        if (!ctxOnly) {
+          p.view = { scale, offsetX, offsetY };
+          p.be = boardEditId;
+        }
+        boardEditId = save.be;
         if (other) {
           Object.assign(p.ctx, captureCtx());
           applyCtx(act.ctx);
@@ -23461,10 +23476,13 @@
       st.active = i;
       const p = st.panes[i];
       if (differ) applyCtx(p.ctx);
+      const beChanged = p.be !== undefined && p.be !== boardEditId;
+      if (p.be !== undefined) boardEditId = p.be;
       scale = p.view.scale;
       offsetX = p.view.offsetX;
       offsetY = p.view.offsetY;
       layout();
+      if (beChanged && !differ) syncPaneBoardUi();
       if (differ) {
         if (filenameInput) filenameInput.value = (currentBoardMeta && currentBoardMeta.title) || "Unbenannte Skizze";
         fitFilename();
@@ -23473,6 +23491,7 @@
         applyPaper(gridStyle);
         updateUndoRedoButtons();
         if (window.sofiaPagesChanged) window.sofiaPagesChanged();
+        syncPaneBoardUi();
       }
     }
     // Antippen/Ansetzen in einer Haelfte macht sie aktiv (bevor irgendetwas anderes passiert)
@@ -23495,7 +23514,7 @@
       if (splitState) close();
       const c = centerOf();
       const ctx0 = captureCtx();
-      splitState = { pos: 0.5, active: 0, panes: [{ view: { scale, offsetX, offsetY }, ctx: ctx0 }, null] };
+      splitState = { pos: 0.5, active: 0, panes: [{ view: { scale, offsetX, offsetY }, ctx: ctx0, be: boardEditId }, null] };
       document.body.classList.add("split-on");
       divider.classList.remove("hidden");
       activeBar.classList.remove("hidden");
@@ -23505,12 +23524,17 @@
       const ins0 = paneInsets(0);
       offsetX = ins0.left + (window.innerWidth - ins0.left - ins0.right) / 2 - c.x * scale;
       splitState.panes[0].view = { scale, offsetX, offsetY };
-      if (mode === "same") {
+      if (mode === "same" || mode === "notebook") {
         const ins1 = paneInsets(1);
         const v = { scale, offsetX: ins1.left + (window.innerWidth - ins1.left - ins1.right) / 2 - c.x * scale, offsetY };
-        splitState.panes[1] = { view: v, ctx: ctx0 };
+        // "notebook": rechts das Heft selbst (auf der Board-Seite), links bleibt das Board offen
+        const boardPage = boardEditId;
+        splitState.panes[1] = { view: v, ctx: ctx0, be: mode === "notebook" ? null : boardEditId };
         activate(1);
-        if (notebook && window.sofiaFitPage && window.sofiaCurrentPage) window.sofiaFitPage(window.sofiaCurrentPage());
+        if (mode === "notebook" && notebook && window.sofiaFitPage) {
+          const i = notebook.pages.findIndex((p) => p.id === boardPage);
+          window.sofiaFitPage(Math.max(0, i));
+        } else if (notebook && window.sofiaFitPage && window.sofiaCurrentPage) window.sofiaFitPage(window.sofiaCurrentPage());
       } else {
         // anderes Blatt: frischer Zustand mit eigener Verbindung
         saveActive();
@@ -23528,9 +23552,11 @@
           redoStack: [],
           gridStyle: "graph",
         };
-        splitState.panes[1] = { view: { scale: 1, offsetX: 0, offsetY: 0 }, ctx: fresh };
+        splitState.panes[1] = { view: { scale: 1, offsetX: 0, offsetY: 0 }, ctx: fresh, be: null };
         splitState.active = 1;
         applyCtx(fresh);
+        boardEditId = null; // anderes Blatt: dort ist (noch) keine Board-Seite offen
+        syncPaneBoardUi();
         layout();
         const ins1 = paneInsets(1);
         scale = 1;
@@ -23625,6 +23651,7 @@
         menu.appendChild(d);
         first = true;
       };
+      if (boardEditId && notebook && !splitState) add("menu_book", "Heft daneben", "Das Board bleibt offen, daneben das Heft – dort eine Seite oder ein anderes Board öffnen", () => start("notebook"));
       add("splitscreen", "Gleiches Blatt daneben", "Zwei Stellen desselben Blatts gleichzeitig", () => start("same"));
       add("description", "Anderes Blatt daneben …", "Ein zweites Blatt oder Notizbuch wählen", openPicker);
       if (splitState) {
