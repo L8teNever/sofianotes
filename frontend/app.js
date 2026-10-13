@@ -22418,11 +22418,16 @@
       });
       box.appendChild(own);
       addPop.classList.remove("hidden");
-      const r = anchor.getBoundingClientRect();
-      const pw = addPop.offsetWidth;
-      const ph = addPop.offsetHeight;
-      addPop.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.right + 14)) + "px";
-      addPop.style.top = Math.max(8, Math.min(window.innerHeight - ph - 8, r.top + r.height / 2 - ph / 2)) + "px";
+      const place = () => {
+        const r = anchor.getBoundingClientRect();
+        const pw = addPop.offsetWidth;
+        const ph = addPop.offsetHeight;
+        addPop.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.right + 14)) + "px";
+        // unter den oberen Leisten bleiben (nicht ueber "Seiten" und die Werkzeugleiste)
+        addPop.style.top = Math.max(72, Math.min(window.innerHeight - ph - 12, r.top + r.height / 2 - ph / 2)) + "px";
+      };
+      place();
+      requestAnimationFrame(place); // Vorschauen sind dann gezeichnet - Hoehe steht fest
     }
     addPop.querySelectorAll(".pap-list [data-act]").forEach((b) =>
       b.addEventListener("click", (e) => {

@@ -6086,3 +6086,41 @@ html[data-theme="dark"] .calc-head .chat-round.active { background: #4a4458; col
 .calc-win > .calc-tabs .calc-tab { flex: 1 1 0; min-width: 0; padding: 0 4px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .calc-win > .calc-tabs .calc-tab[data-view="sci"] { flex-grow: 1.4; }
 .calc-win > .calc-tabs .calc-tab { text-overflow: clip; }
+
+/* ==== Seite hinzufuegen im Stil der Seiten-Leiste ==== */
+.page-thumb-add { border: 2px dashed rgba(103, 80, 164, 0.45); border-radius: 14px; background: rgba(103, 80, 164, 0.06); color: #6750a4; transition: background 0.15s, border-color 0.15s; }
+.page-thumb-add:hover { background: rgba(103, 80, 164, 0.12); border-color: #6750a4; }
+.page-add-pop { width: min(420px, calc(100vw - 16px)); max-height: calc(100vh - 84px); overflow-y: auto; background: #f7f2fa; border: 1px solid rgba(0, 0, 0, 0.06); border-radius: 28px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08); padding: 18px 14px 14px; gap: 10px; box-sizing: border-box; }
+.pap-title { text-align: left; padding: 0 6px; font: 700 20px/1.2 'Google Sans', 'Inter', sans-serif; color: #1c1b1f; }
+.pap-sub { margin: 4px 6px 0; font: 700 12px/1 'Google Sans', 'Inter', sans-serif; letter-spacing: 0.04em; text-transform: uppercase; color: #6750a4; }
+.pap-hint { padding: 0 6px; font-size: 13px; color: #625b71; }
+.pap-templates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 2px; max-height: 46vh; }
+.pap-card { width: auto; min-width: 0; padding: 8px 6px 10px; gap: 6px; border-radius: 18px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); transition: transform 0.1s, box-shadow 0.15s; }
+.pap-card:hover { background: #fff; box-shadow: 0 4px 14px rgba(103, 80, 164, 0.18); }
+.pap-card:active { transform: scale(0.96); }
+.pap-prev { max-width: 100%; height: auto; border-radius: 6px; box-shadow: none; border: 1px solid rgba(0, 0, 0, 0.08); }
+.pap-label { max-width: 100%; font-size: 12.5px; }
+.pap-own-box { width: 100%; max-width: 84px; height: auto; aspect-ratio: 84 / 119; border: 2px dashed rgba(103, 80, 164, 0.5); border-radius: 8px; background: rgba(103, 80, 164, 0.06); }
+.pap-list { margin-top: 2px; border-radius: 20px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); }
+.pap-list button { gap: 12px; padding: 8px 14px 8px 10px; min-height: 54px; font: 600 15px/1.2 'Google Sans', 'Inter', sans-serif; }
+.pap-list button + button { border-top: 1px solid rgba(0, 0, 0, 0.06); }
+.pap-list button:hover { background: rgba(103, 80, 164, 0.06); }
+.pap-list .material-symbols-rounded { flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: #eaddff; color: #21005d; font-size: 20px; }
+html[data-theme="dark"] .page-add-pop { background: #1c1b22; border-color: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .pap-title, html[data-theme="dark"] .pap-label, html[data-theme="dark"] .pap-list button { color: #e6e1e5; }
+html[data-theme="dark"] .pap-sub { color: #d0bcff; }
+html[data-theme="dark"] .pap-hint, html[data-theme="dark"] .pap-card small { color: #cac4d0; }
+html[data-theme="dark"] .pap-card, html[data-theme="dark"] .pap-list { background: #2b2930; }
+html[data-theme="dark"] .pap-card:hover { background: #2b2930; }
+html[data-theme="dark"] .pap-list button + button { border-top-color: rgba(255, 255, 255, 0.08); }
+html[data-theme="dark"] .pap-list .material-symbols-rounded { background: #4a4458; color: #eaddff; }
+html[data-theme="dark"] .page-thumb-add { border-color: rgba(208, 188, 255, 0.45); background: rgba(208, 188, 255, 0.08); color: #d0bcff; }
+/* kompakt: fuenf Vorlagen pro Reihe, flachere Zeilen - passt auch auf das iPad quer */
+.page-add-pop { width: min(440px, calc(100vw - 16px)); max-height: calc(100vh - 84px); gap: 8px; padding: 16px 12px 12px; }
+.pap-templates { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; max-height: none; overflow: visible; }
+.pap-card { padding: 6px 4px 8px; gap: 4px; border-radius: 16px; }
+.pap-label { font-size: 11.5px; }
+.pap-card small { font-size: 10px; }
+.pap-list button { min-height: 46px; padding: 5px 12px 5px 8px; font-size: 14.5px; }
+.pap-list .material-symbols-rounded { width: 32px; height: 32px; font-size: 18px; }
+.pap-title { font-size: 18px; }
