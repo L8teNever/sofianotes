@@ -24503,8 +24503,10 @@
       win.querySelectorAll(".calc-tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
       win.querySelectorAll(".calc-body").forEach((b) => b.classList.toggle("hidden", b.dataset.tab !== tab));
       histBtn.classList.toggle("hidden", tab !== "calc");
+      const title = document.getElementById("calc-title");
+      if (title) title.textContent = tab === "conv" ? "Umrechner" : "Rechner";
       save();
-      place();
+      if (!st.docked) place();
     }
     win.querySelectorAll(".calc-tab").forEach((b) =>
       b.addEventListener("click", (e) => {

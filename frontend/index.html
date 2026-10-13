@@ -1274,14 +1274,16 @@
   </aside>
 
   <div id="calc-win" class="calc-win hidden" role="dialog" aria-label="Rechner">
-    <div id="calc-head" class="calc-head" title="Ziehen, um den Rechner zu verschieben">
-      <div class="calc-tabs">
-        <button type="button" class="calc-tab active" data-tab="calc">Rechner</button>
-        <button type="button" class="calc-tab" data-tab="conv">Umrechner</button>
-      </div>
-      <button type="button" id="calc-hist-btn" class="hw-panel-btn calc-round" title="Verlauf"><span class="material-symbols-rounded">history</span></button>
-      <button type="button" id="calc-dock" class="hw-panel-btn calc-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
-      <button type="button" id="calc-close" class="hw-panel-btn calc-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    <div id="calc-head" class="calc-head tt-side-head" title="Ziehen, um den Rechner zu verschieben">
+      <div class="chat-pill tt-side-title-pill"><span id="calc-title" class="chat-title">Rechner</span></div>
+      <span class="chat-head-gap"></span>
+      <button type="button" id="calc-hist-btn" class="chat-pill chat-round calc-round" title="Verlauf"><span class="material-symbols-rounded">history</span></button>
+      <button type="button" id="calc-dock" class="chat-pill chat-round calc-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+      <button type="button" id="calc-close" class="chat-pill chat-round calc-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <div class="calc-tabs">
+      <button type="button" class="calc-tab active" data-tab="calc">Rechner</button>
+      <button type="button" class="calc-tab" data-tab="conv">Umrechner</button>
     </div>
     <div class="calc-body" data-tab="calc">
       <div class="calc-mode" id="calc-mode">
