@@ -5582,7 +5582,11 @@
       return;
     }
     let st = null;
-    if (msg.stroke && msg.stroke.id && msg.stroke.tool === "text") st = msg.stroke;
+    if (msg.stroke && msg.stroke.id && msg.stroke.tool === "text") {
+      st = msg.stroke;
+      // ich habe genau dieses Feld offen: Aenderung direkt bei mir einbauen
+      if (textEdit && textEdit.kind === "text" && textEdit.strokeId === st.id) mergeRemoteText(msg);
+    }
     else if (msg.cell && msg.cell.tableId) {
       const t = boardStrokes.get(msg.cell.tableId);
       if (!t) return;
@@ -7933,9 +7937,14 @@
 
   // Liest den Editor-Inhalt als Runs: Stil aus den umgebenden Tags/Styles, Zeilen aus
   // <br> und Block-Elementen (Chrome/Safari legen pro Zeile ein <div> an).
-  function serializeEditor(trim = true) {
+  function serializeEditor(trim = true, caret = null) {
     const root = textEditorEl;
     const runs = [];
+    let len = 0;
+    const push = (r) => {
+      runs.push(r);
+      len += r.t.length;
+    };
     const styleOf = (node) => {
       const st = { b: 0, i: 0, s: 0, u: 0 };
       for (let el = node.parentElement; el && el !== root.parentElement; el = el.parentElement) {
@@ -7953,10 +7962,16 @@
     };
     let any = false;
     const walk = (node) => {
-      for (const child of Array.from(node.childNodes)) {
+      const kids = Array.from(node.childNodes);
+      for (let k = 0; k < kids.length; k++) {
+        const child = kids[k];
+        // Cursor steht zwischen Kindern dieses Elements
+        if (caret && caret.at == null && caret.node === node && caret.offset === k) caret.at = len;
         if (child.nodeType === 3) {
+          if (caret && caret.at == null && caret.node === child)
+            caret.at = len + child.nodeValue.slice(0, caret.offset).replace(/\u200B/g, "").length;
           if (child.nodeValue) {
-            runs.push({ t: child.nodeValue.replace(/\u00a0/g, " ").replace(/\u200B/g, ""), ...styleOf(child) });
+            push({ t: child.nodeValue.replace(/\u00a0/g, " ").replace(/\u200B/g, ""), ...styleOf(child) });
             any = true;
           }
         } else if (child.nodeName === "BR") {
@@ -7964,14 +7979,15 @@
           // ueber den Block) - ein <br> allein in <u>/<b> & Co. ist dagegen ein echter Umbruch
           const parent = child.parentNode;
           const placeholder = parent !== root && /^(DIV|P)$/.test(parent.nodeName) && parent.childNodes.length === 1;
-          if (!placeholder) runs.push({ t: "\n" });
+          if (!placeholder) push({ t: "\n" });
         } else if (child.nodeType === 1) {
           const block = /^(DIV|P)$/.test(child.nodeName);
-          if (block && any) runs.push({ t: "\n" });
+          if (block && any) push({ t: "\n" });
           walk(child);
           if (block) any = true;
         }
       }
+      if (caret && caret.at == null && caret.node === node && caret.offset >= kids.length) caret.at = len;
     };
     walk(root);
     const out = normalizeRuns(runs);
@@ -7994,6 +8010,8 @@
     if (textEdit && !textEdit.liveId) textEdit.liveId = (textEdit.kind === "text" && textEdit.strokeId) || uuid();
     const rich = runs && runs.length ? normalizeRuns(runs) : [{ t: value || "" }];
     textEditorEl.innerHTML = runsToHtml(rich);
+    if (textEdit) textEdit.liveBase = runsText(serializeEditor());
+    textMergeQueue.length = 0;
     textEditorEl.classList.remove("hidden");
     textFormatBar.classList.toggle("hidden", !textEdit || textEdit.kind !== "text");
     positionTextEditor();
@@ -8272,10 +8290,10 @@
     const w = screenToWorld(rect.left, rect.top);
     return { x: w.x, y: w.y, h: rect.height / scale };
   }
-  function sendTextLive() {
+  function sendTextLive(force, sync) {
     if (!textEdit || viewOnly || !textEdit.liveId) return;
     const now = performance.now();
-    if (now - textLiveLast < TEXT_LIVE_MS) {
+    if (!force && now - textLiveLast < TEXT_LIVE_MS) {
       if (!textLiveTimer) textLiveTimer = setTimeout(() => ((textLiveTimer = null), sendTextLive()), TEXT_LIVE_MS - (now - textLiveLast));
       return;
     }
@@ -8287,13 +8305,169 @@
       const st = textStrokeFrom(ed, runs);
       stampBoardPage(st);
       msg.stroke = serializeStroke(st);
+      // Stand, auf den sich meine Aenderung bezieht - so koennen die anderen sie in
+      // ihr eigenes offenes Feld einbauen (gemeinsames Bearbeiten)
+      if (typeof ed.liveBase === "string") msg.prev = ed.liveBase;
+      if (sync) msg.sync = true;
     }
     const key = JSON.stringify(msg);
     if (key === textLiveSent) return;
     textLiveSent = key;
     textLiveLast = now;
     ed.liveShared = true;
+    if (ed.kind === "text") {
+      ed.liveBase = runsText(runs);
+      scheduleTextSync(ed);
+    }
     wsSend(msg);
+  }
+  // Tippen zwei genau an derselben Stelle, kann die Reihenfolge bei beiden verschieden
+  // ankommen. Darum nach kurzer Ruhe abgleichen: bei Unterschied gibt einer (feste Regel)
+  // seinen ganzen Stand vor und die anderen uebernehmen ihn.
+  function scheduleTextSync(ed) {
+    clearTimeout(ed.syncTimer);
+    ed.syncTimer = setTimeout(() => {
+      if (textEdit !== ed || !ed.remoteFull || textComposing) return;
+      if (runsText(serializeEditor()) === ed.remoteFull.text) return;
+      if (String(myClientId) < String(ed.remoteFull.from)) {
+        textLiveSent = "";
+        sendTextLive(true, true);
+      }
+    }, 800);
+  }
+
+  // ---- Gemeinsam im selben Textfeld: Aenderungen der anderen ins offene Feld einbauen ----
+  // Die anderen schicken ihren alten (prev) und neuen Stand; der Unterschied ist genau ihre
+  // Aenderung. Die setzen wir an der passenden Stelle (per Text links/rechts davon) bei mir ein -
+  // mit Format, ohne meinen Cursor oder meine eigenen Buchstaben zu verlieren.
+  let textComposing = false;
+  const textMergeQueue = [];
+  let textLiveObserver = null;
+  function textOp(prev, next) {
+    const max = Math.min(prev.length, next.length);
+    let p = 0;
+    while (p < max && prev[p] === next[p]) p++;
+    let e = 0;
+    while (e < max - p && prev[prev.length - 1 - e] === next[next.length - 1 - e]) e++;
+    return {
+      p,
+      del: prev.slice(p, prev.length - e),
+      ins: next.slice(p, next.length - e),
+      left: prev.slice(Math.max(0, p - 24), p),
+      right: prev.slice(prev.length - e, prev.length - e + 24),
+    };
+  }
+  function locateOp(text, op, prevLen) {
+    // ungefaehre Stelle: von vorne gezaehlt, oder - in der hinteren Haelfte - vom Ende her
+    const tail = prevLen - op.p - op.del.length;
+    const est = op.p <= tail ? op.p : Math.max(0, text.length - tail - op.del.length);
+    // erst mit viel Text drumherum suchen, dann mit immer weniger (der andere Teil kann
+    // ja gerade bei mir anders aussehen)
+    for (const n of [24, 12, 6, 3, 1]) {
+      const l = op.left.slice(-n);
+      const r = op.right.slice(0, n);
+      for (const [a, b] of [[l, r], [l, ""], ["", r]]) {
+        const needle = a + op.del + b;
+        if (!needle || (!op.del && !a && !b)) continue;
+        let best = -1;
+        for (let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + 1)) {
+          const at = i + a.length;
+          if (best < 0 || Math.abs(at - est) < Math.abs(best - est)) best = at;
+        }
+        if (best >= 0) return best;
+      }
+    }
+    return op.del ? -1 : Math.min(est, text.length);
+  }
+  function runsChars(runs) {
+    const out = [];
+    for (const r of runs) for (let k = 0; k < r.t.length; k++) out.push({ t: r.t[k], b: r.b, i: r.i, s: r.s, u: r.u });
+    return out;
+  }
+  function setEditorCaret(at) {
+    let left = at;
+    let node = null;
+    let off = 0;
+    const walk = (el) => {
+      for (const ch of Array.from(el.childNodes)) {
+        if (node) return;
+        if (ch.nodeType === 3) {
+          if (left <= ch.nodeValue.length) {
+            node = ch;
+            off = left;
+            return;
+          }
+          left -= ch.nodeValue.length;
+        } else if (ch.nodeName === "BR") {
+          if (left === 0) {
+            node = ch.parentNode;
+            off = Array.prototype.indexOf.call(node.childNodes, ch);
+            return;
+          }
+          left -= 1;
+        } else walk(ch);
+      }
+    };
+    walk(textEditorEl);
+    if (!node) {
+      node = textEditorEl;
+      off = textEditorEl.childNodes.length;
+    }
+    const range = document.createRange();
+    range.setStart(node, off);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    editorRange = range.cloneRange();
+  }
+  function mergeRemoteText(msg) {
+    const ed = textEdit;
+    if (!ed || ed.kind !== "text" || typeof msg.prev !== "string" || !msg.stroke || msg.stroke.id !== ed.strokeId) return;
+    const theirs = runsChars(normalizeRuns(strokeRuns(msg.stroke)));
+    const theirsText = theirs.map((c) => c.t).join("");
+    ed.remoteFull = { from: msg.id, text: theirsText };
+    scheduleTextSync(ed);
+    let op = msg.sync ? null : textOp(msg.prev, theirsText);
+    if (op && !op.del && !op.ins) return;
+    if (textComposing) return void textMergeQueue.push(msg);
+    // was ich selbst noch nicht geschickt habe, jetzt raus - dann bezieht sich alles Weitere
+    // auf den gemeinsamen Stand
+    clearTimeout(textLiveTimer);
+    textLiveTimer = null;
+    sendTextLive(true);
+    const sel = window.getSelection();
+    const caret = {};
+    if (sel && sel.rangeCount && textEditorEl.contains(sel.focusNode)) {
+      caret.node = sel.focusNode;
+      caret.offset = sel.focusOffset;
+    }
+    const chars = runsChars(serializeEditor(false, caret.node ? caret : null));
+    // abschliessendes <br> ist nur der Platzhalter einer leeren letzten Zeile
+    if (textEditorEl.lastChild && textEditorEl.lastChild.nodeName === "BR" && chars.length && chars[chars.length - 1].t === "\n") chars.pop();
+    const text = chars.map((c) => c.t).join("");
+    // Abgleich: ganzen Stand des anderen uebernehmen
+    if (msg.sync) {
+      op = textOp(text, theirsText);
+      if (!op.del && !op.ins) return;
+    }
+    const at = msg.sync ? op.p : locateOp(text, op, msg.prev.length);
+    if (at < 0) return;
+    chars.splice(at, op.del.length, ...theirs.slice(op.p, op.p + op.ins.length));
+    let cur = caret.at;
+    if (cur != null) {
+      cur = Math.min(cur, text.length);
+      if (cur >= at + op.del.length) cur += op.ins.length - op.del.length;
+      else if (cur > at) cur = at + op.ins.length;
+    }
+    const runs = normalizeRuns(chars.map((c) => Object.assign({}, c)));
+    textEditorEl.innerHTML = runsToHtml(runs);
+    if (cur != null) setEditorCaret(cur);
+    ed.liveBase = runsText(serializeEditor());
+    // eigene Aenderung am Feld ist kein Tippen -> nicht wieder zuruecksenden
+    if (textLiveObserver) textLiveObserver.takeRecords();
+    positionTextEditor();
+    syncFormatBar();
   }
   function endTextLive(ed) {
     clearTimeout(textLiveTimer);
@@ -8858,10 +9032,19 @@
       markdownAfterInput(e);
     });
     // Live teilen: jede Aenderung im Feld (Tippen, Formatieren) und jede Cursor-Bewegung
-    new MutationObserver((list) => {
+    textLiveObserver = new MutationObserver((list) => {
       // das Feld selbst bekommt beim Mitwandern staendig neue Styles - das ist keine Aenderung
       if (textEdit && list.some((m) => m.type !== "attributes" || m.target !== textEditorEl)) sendTextLive();
-    }).observe(textEditorEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+    });
+    textEditorEl.addEventListener("compositionstart", () => (textComposing = true));
+    textEditorEl.addEventListener("compositionend", () => {
+      textComposing = false;
+      // waehrend Wortvorschlag/Zusammensetzen Angekommenes jetzt einbauen
+      setTimeout(() => {
+        for (const m of textMergeQueue.splice(0)) mergeRemoteText(m);
+      }, 0);
+    });
+    textLiveObserver.observe(textEditorEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
     document.addEventListener("selectionchange", () => {
       if (textEdit && document.activeElement === textEditorEl) sendTextLive();
     });

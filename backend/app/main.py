@@ -1265,7 +1265,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 # Text, der gerade getippt wird: nur weiterreichen, nicht speichern
                 # (gespeichert wird wie bisher per stroke_move, wenn das Feld geschlossen wird)
                 payload = {"type": "text_live", "id": client.id, "color": client.color, "person": client.person_id, "editId": msg.get("editId")}
-                for key in ("stroke", "cell", "caret", "done"):
+                for key in ("stroke", "cell", "caret", "done", "prev", "sync"):
                     if key in msg:
                         payload[key] = msg[key]
                 await manager.broadcast(payload, exclude=websocket, board_id=room)
