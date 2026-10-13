@@ -1907,6 +1907,15 @@
     if (!b || !Number.isFinite(b.minX)) return null;
     if (st.tool === "text") {
       const size = Math.max(14, st.size || 22);
+      // Textfeld: die Punkte umschliessen den Text schon genau
+      // Textfeld: Hoehe aus den Punkten, Breite aus dem wirklich geschriebenen Text
+      // (das Feld selbst kann viel breiter sein als der Text darin)
+      if (st.points && st.points.length >= 3) {
+        const x0 = st.points[0].x;
+        const lay = layoutRuns(strokeRuns(st), st.size || 22, (st.extra && st.extra.width) || null);
+        const w = Math.max(size, ...lay.widths);
+        return { minX: x0 - size * 0.2, minY: b.minY - size * 0.2, maxX: x0 + w + size * 0.2, maxY: b.maxY + size * 0.2 };
+      }
       const label = (st.points && st.points[0] && st.points[0].text) || "";
       return {
         minX: b.minX,
@@ -2199,7 +2208,10 @@
   function findBoardHome() {
     if (!boardEditId && notebook) return;
     // Board-Seite im Heft oder normales (unendliches) Board
-    const list = boardEditId ? strokesForBoard(boardEditId) : Array.from(boardStrokes.values()).filter((st) => !(st.extra && st.extra.boardPage));
+    let list = boardEditId ? strokesForBoard(boardEditId) : Array.from(boardStrokes.values()).filter((st) => !(st.extra && st.extra.boardPage));
+    // Text (und Tabellen) haben Vorrang: dahin, wo geschrieben steht - nicht zu einzelnen Kritzeln
+    const texts = list.filter((st) => (st.tool === "text" && ((st.points[0] && st.points[0].text) || "").trim()) || st.tool === "table");
+    if (texts.length) list = texts;
     const bounds = boardContentBounds(list);
     let target;
     let note = "Zurück zum Ursprung";
@@ -5572,8 +5584,9 @@
   // damit beim Abbrechen wieder alles so aussieht wie vorher.
   const liveTexts = new Map();
   function applyTextLive(msg) {
-    const id = msg.editId;
-    if (!id) return;
+    if (!msg.editId) return;
+    // pro Person ein Eintrag - im selben Feld koennen mehrere gleichzeitig tippen
+    const id = msg.editId + "|" + msg.id;
     if (msg.done) {
       endTextLiveEntry(id);
       const p = presence.get(msg.id);
@@ -5581,17 +5594,15 @@
       requestRedraw();
       return;
     }
+    // habe ich genau dieses Feld (diese Zelle) offen: Aenderung direkt bei mir einbauen
+    if (textEdit) mergeRemoteText(msg);
     let st = null;
-    if (msg.stroke && msg.stroke.id && msg.stroke.tool === "text") {
-      st = msg.stroke;
-      // ich habe genau dieses Feld offen: Aenderung direkt bei mir einbauen
-      if (textEdit && textEdit.kind === "text" && textEdit.strokeId === st.id) mergeRemoteText(msg);
-    }
+    if (msg.stroke && msg.stroke.id && msg.stroke.tool === "text") st = msg.stroke;
     else if (msg.cell && msg.cell.tableId) {
       const t = boardStrokes.get(msg.cell.tableId);
       if (!t) return;
-      const ent = liveTexts.get(id);
-      const base = ent && ent.orig ? ent.orig : t;
+      // auf dem aktuellen Stand aufbauen, damit Zellen anderer, die gerade tippen, bleiben
+      const base = t;
       const cells = Object.assign({}, (base.extra && base.extra.cells) || {});
       const key = msg.cell.r + "," + msg.cell.c;
       if (msg.cell.text) cells[key] = String(msg.cell.text);
@@ -5602,8 +5613,14 @@
     }
     if (!st) return;
     if (!liveTexts.has(id)) {
-      const cur = boardStrokes.get(st.id);
-      liveTexts.set(id, { owner: msg.id, strokeId: st.id, orig: cur ? cloneStroke(cur) : null });
+      // tippt schon jemand anderes in diesem Feld, gilt dessen Ausgangsstand
+      let orig;
+      for (const e of liveTexts.values()) if (e.strokeId === st.id) orig = e.orig;
+      if (orig === undefined) {
+        const cur = boardStrokes.get(st.id);
+        orig = cur ? cloneStroke(cur) : null;
+      }
+      liveTexts.set(id, { owner: msg.id, strokeId: st.id, orig });
     }
     if (st.author ? st.author !== currentPersonId : !boardStrokes.has(st.id)) foreignIds.add(st.id);
     st.bbox = strokeWorldBBox(st);
@@ -5624,6 +5641,10 @@
     const ent = liveTexts.get(id);
     if (!ent) return;
     liveTexts.delete(id);
+    // schreibt noch jemand anderes darin: dessen Stand bleibt stehen, nichts zuruecksetzen
+    for (const e of liveTexts.values()) if (e.strokeId === ent.strokeId) return;
+    // habe ich das Feld selbst offen, bleibt es auch (ich speichere es beim Schliessen)
+    if (textEdit && (textEdit.kind === "text" ? textEdit.strokeId || textEdit.liveId : textEdit.tableId) === ent.strokeId) return;
     if (ent.orig) {
       ent.orig.bbox = strokeWorldBBox(ent.orig);
       boardStrokes.set(ent.strokeId, ent.orig);
@@ -7146,7 +7167,7 @@
   }
 
   function drawBoxText(c, s) {
-    if (textEdit && textEdit.kind === "text" && textEdit.strokeId === s.id) return;
+    if (textEdit && textEdit.kind === "text" && (textEdit.strokeId || textEdit.liveId) === s.id) return;
     const a = s.points[0];
     const width = s.extra && s.extra.width ? s.extra.width : null;
     const lay = layoutRuns(strokeRuns(s), s.size, width);
@@ -8212,7 +8233,8 @@
       if (!t) return requestRedraw();
       const key = ed.r + "," + ed.c;
       const cells = Object.assign({}, (t.extra && t.extra.cells) || {});
-      if ((cells[key] || "") === value) return requestRedraw();
+      const was = ((ed.before && ed.before.extra && ed.before.extra.cells) || {})[key] || "";
+      if (was === value && (cells[key] || "") === value) return requestRedraw();
       if (value) cells[key] = value;
       else delete cells[key];
       t.extra = Object.assign({}, t.extra, { cells });
@@ -8305,20 +8327,18 @@
       const st = textStrokeFrom(ed, runs);
       stampBoardPage(st);
       msg.stroke = serializeStroke(st);
-      // Stand, auf den sich meine Aenderung bezieht - so koennen die anderen sie in
-      // ihr eigenes offenes Feld einbauen (gemeinsames Bearbeiten)
-      if (typeof ed.liveBase === "string") msg.prev = ed.liveBase;
-      if (sync) msg.sync = true;
     }
+    // Stand, auf den sich meine Aenderung bezieht - so koennen die anderen sie in
+    // ihr eigenes offenes Feld einbauen (gemeinsames Bearbeiten)
+    if (typeof ed.liveBase === "string") msg.prev = ed.liveBase;
+    if (sync) msg.sync = true;
     const key = JSON.stringify(msg);
     if (key === textLiveSent) return;
     textLiveSent = key;
     textLiveLast = now;
     ed.liveShared = true;
-    if (ed.kind === "text") {
-      ed.liveBase = runsText(runs);
-      scheduleTextSync(ed);
-    }
+    ed.liveBase = runsText(runs);
+    scheduleTextSync(ed);
     wsSend(msg);
   }
   // Tippen zwei genau an derselben Stelle, kann die Reihenfolge bei beiden verschieden
@@ -8423,8 +8443,12 @@
   }
   function mergeRemoteText(msg) {
     const ed = textEdit;
-    if (!ed || ed.kind !== "text" || typeof msg.prev !== "string" || !msg.stroke || msg.stroke.id !== ed.strokeId) return;
-    const theirs = runsChars(normalizeRuns(strokeRuns(msg.stroke)));
+    if (!ed || typeof msg.prev !== "string") return;
+    let theirs;
+    if (ed.kind === "text" && msg.stroke && msg.stroke.id === (ed.strokeId || ed.liveId)) theirs = runsChars(normalizeRuns(strokeRuns(msg.stroke)));
+    else if (ed.kind === "cell" && msg.cell && msg.cell.tableId === ed.tableId && msg.cell.r === ed.r && msg.cell.c === ed.c)
+      theirs = runsChars([{ t: String(msg.cell.text || "") }]);
+    else return;
     const theirsText = theirs.map((c) => c.t).join("");
     ed.remoteFull = { from: msg.id, text: theirsText };
     scheduleTextSync(ed);
