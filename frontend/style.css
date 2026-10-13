@@ -6221,3 +6221,16 @@ html[data-theme="dark"] .kd-toggle.on { background: #d0bcff; }
 html[data-theme="dark"] .kd-color { border-color: #26242d; }
 html[data-theme="dark"] .kd-color.active { box-shadow: 0 0 0 2px #f4f1f8; }
 html[data-theme="dark"] .kd-scrim .kd-label, html[data-theme="dark"] .kd-scrim .kd-fn-name { color: inherit; }
+.kd-tip { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 4px; border-radius: 12px; background: #e8def8; color: #1d192b; font: 500 13px/1.35 'Google Sans', 'Inter', sans-serif; }
+.kd-tip .material-symbols-rounded { font-size: 20px; color: #6750a4; }
+.kd-chip.active { background: #6750a4; color: #fff; border-color: #6750a4; }
+.kd-eq { margin: 8px 0 2px; padding: 8px 12px; border-radius: 12px; background: #fff; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08); font: 700 16px/1.3 'Google Sans', 'Inter', sans-serif; word-break: break-word; }
+.kd-pt-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2); flex: 0 0 auto; cursor: pointer; padding: 0; margin-right: 2px; }
+.kd-add.kd-danger { border-color: rgba(179, 38, 30, 0.35); color: #b3261e; }
+html[data-theme="dark"] .kd-tip { background: #4a4458; color: #e8def8; }
+html[data-theme="dark"] .kd-tip .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] .kd-scrim .kd-chip.active { background: #d0bcff; color: #381e72; border-color: #d0bcff; }
+html[data-theme="dark"] .kd-eq { background: #2b2930; }
+html[data-theme="dark"] .kd-pt-dot { border-color: #26242d; }
+html[data-theme="dark"] .kd-scrim .kd-eq { color: #e8def8 !important; }
+html[data-theme="dark"] .kd-color[style*="rgb(32, 33, 36)"], html[data-theme="dark"] .kd-pt-dot[style*="rgb(32, 33, 36)"] { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5); }

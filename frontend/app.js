@@ -11597,6 +11597,7 @@
     if (pasteBtn) pasteBtn.classList.toggle("hidden", cropping || !strokeClipboard.length);
     if (cropBtn) cropBtn.classList.toggle("hidden", cropping || !img || !!(img && img.extra && img.extra.koord));
     document.getElementById("btn-koord-edit")?.classList.toggle("hidden", cropping || !(img && img.extra && img.extra.koord));
+    document.getElementById("btn-koord-points")?.classList.toggle("hidden", cropping || !(img && img.extra && img.extra.koord));
     const table = cropping ? null : selectedTable();
     // im Tabellen-/Text-Modus stehen diese Knoepfe schon unten in der Leiste
     const inTableMode = toolbarEl.dataset.mode === "text";
@@ -12136,6 +12137,13 @@
   }
   document.getElementById("btn-koord-edit")?.addEventListener("click", (e) => {
     e.stopPropagation();
+    editKoord("axes");
+  });
+  document.getElementById("btn-koord-points")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    editKoord("pts");
+  });
+  function editKoord(tab) {
     const st = selectedKoord();
     if (!st || !window.SofiaKoord) return;
     window.SofiaKoord.open(st.extra.koord, async (spec) => {
@@ -12163,8 +12171,8 @@
       pushUndo({ type: "replace", before, after: cloneStroke(cur) });
       selectStrokeIds([cur.id]);
       requestRedraw();
-    });
-  });
+    }, { tab });
+  }
   // "Bild": zuletzt eingefuegte Bilder aller Personen zum direkten Einfuegen, darueber
   // "Neues Bild hochladen". Gibt es noch keine (oder offline), geht gleich die Dateiauswahl auf.
   let imageLibPop = null;

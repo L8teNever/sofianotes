@@ -19,7 +19,9 @@
   function normalize(src) {
     let s = String(src || "").trim();
     s = s.replace(/^\s*(?:[a-zA-Z]\s*\(\s*x\s*\)|y)\s*=\s*/, ""); // "f(x) =" bzw. "y =" weg
-    s = s.replace(/²/g, "^2").replace(/³/g, "^3").replace(/[·×∙]/g, "*").replace(/÷|:/g, "/").replace(/−/g, "-");
+    const SUPD = { "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9" };
+    s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g, (m) => "^" + m.split("").map((d) => SUPD[d]).join("")).replace(/ˣ/g, "^x");
+    s = s.replace(/[·×∙]/g, "*").replace(/÷|:/g, "/").replace(/−/g, "-");
     s = s.replace(/√/g, "sqrt");
     s = s.replace(/(\d),(\d)/g, "$1.$2"); // deutsches Komma
     return s;
@@ -205,6 +207,113 @@
   }
   const deriv = (f, h) => (x) => (f(x + h) - f(x - h)) / (2 * h);
 
+  // ---------- Punkte verbinden: Ausgleichs-/Interpolationsfunktion ----------
+  function solve(A, b) {
+    const n = b.length;
+    const M = A.map((r, i) => r.concat([b[i]]));
+    for (let c = 0; c < n; c++) {
+      let piv = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+      if (Math.abs(M[piv][c]) < 1e-12) return null;
+      [M[c], M[piv]] = [M[piv], M[c]];
+      for (let r = 0; r < n; r++) {
+        if (r === c) continue;
+        const f = M[r][c] / M[c][c];
+        for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+      }
+    }
+    return M.map((r, i) => r[n] / r[i]);
+  }
+  // kleinste Quadrate: Koeffizienten a0..ad (a0 + a1 x + ... )
+  function polyfit(xs, ys, d) {
+    const A = [];
+    const b = [];
+    for (let i = 0; i <= d; i++) {
+      A.push([]);
+      for (let j = 0; j <= d; j++) A[i].push(xs.reduce((sum, x) => sum + Math.pow(x, i + j), 0));
+      b.push(xs.reduce((sum, x, k) => sum + ys[k] * Math.pow(x, i), 0));
+    }
+    return solve(A, b);
+  }
+  const SUP = { 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹" };
+  // Polynom als rechenbarer Ausdruck und als schoene Schreibweise
+  function polyStrings(co) {
+    let ex = "";
+    let pr = "";
+    for (let i = co.length - 1; i >= 0; i--) {
+      const c = co[i];
+      const r = Math.round(c * 1000) / 1000;
+      if (Math.abs(r) < 1e-9) continue;
+      ex += (c < 0 ? "-" : "+") + Math.abs(c).toPrecision(10) + (i ? "*x" + (i > 1 ? "^" + i : "") : "");
+      const a = Math.abs(r);
+      const coef = i && a === 1 ? "" : fmt(a, 3);
+      pr += (pr ? (r < 0 ? " − " : " + ") : r < 0 ? "−" : "") + coef + (i ? "x" + (i > 1 ? SUP[i] || "^" + i : "") : "");
+    }
+    return { ex: ex.replace(/^\+/, "") || "0", pr: pr || "0" };
+  }
+  const FIT_TYPES = [
+    ["none", "Keine"],
+    ["connect", "Strecken"],
+    ["smooth", "Glatte Kurve"],
+    ["line", "Gerade"],
+    ["poly2", "Parabel"],
+    ["poly3", "Kubisch"],
+    ["exp", "Exponentiell"],
+    ["interp", "Polynom durch alle"],
+  ];
+  // -> { fn: {expr, pretty, ...} | null, note, need }
+  function fitInfo(spec) {
+    const ft = (spec.fit && spec.fit.type) || "none";
+    const pts = (spec.points || []).map((q) => ({ x: +q.x, y: +q.y })).filter((q) => Number.isFinite(q.x) && Number.isFinite(q.y));
+    const res = { fn: null, note: "", type: ft, pts };
+    if (ft === "none" || ft === "connect" || ft === "smooth") return res;
+    const xs = pts.map((q) => q.x);
+    const ys = pts.map((q) => q.y);
+    const deg = { line: 1, poly2: 2, poly3: 3 }[ft];
+    let co = null;
+    let pretty = "";
+    let expr = "";
+    if (deg) {
+      if (pts.length < deg + 1) return Object.assign(res, { note: "Dafür braucht es mindestens " + (deg + 1) + " Punkte" });
+      co = polyfit(xs, ys, deg);
+    } else if (ft === "interp") {
+      if (pts.length < 2) return Object.assign(res, { note: "Dafür braucht es mindestens 2 Punkte" });
+      if (pts.length > 9) return Object.assign(res, { note: "Höchstens 9 Punkte" });
+      co = polyfit(xs, ys, pts.length - 1);
+    } else if (ft === "exp") {
+      if (pts.length < 2) return Object.assign(res, { note: "Dafür braucht es mindestens 2 Punkte" });
+      if (ys.some((y) => y <= 0)) return Object.assign(res, { note: "Exponentiell geht nur mit y-Werten über 0" });
+      const l = polyfit(xs, ys.map(Math.log), 1);
+      if (!l) return Object.assign(res, { note: "Punkte brauchen verschiedene x-Werte" });
+      const a = Math.exp(l[0]);
+      const b = Math.exp(l[1]);
+      expr = a.toPrecision(10) + "*(" + b.toPrecision(10) + ")^x";
+      pretty = fmt(a, 3) + " · " + fmt(b, 3) + "ˣ";
+    }
+    if (deg || ft === "interp") {
+      if (!co) return Object.assign(res, { note: "Punkte brauchen verschiedene x-Werte" });
+      const ps = polyStrings(co);
+      expr = ps.ex;
+      pretty = ps.pr;
+    }
+    // Guete bei Ausgleich (mehr Punkte als noetig)
+    let f = null;
+    try {
+      f = compile(expr);
+    } catch (err) {
+      return Object.assign(res, { note: "Hat nicht geklappt" });
+    }
+    const need = deg ? deg + 1 : ft === "exp" ? 2 : pts.length;
+    if (pts.length > need) {
+      const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+      const ssr = pts.reduce((a, q) => a + (q.y - f(q.x)) ** 2, 0);
+      const sst = ys.reduce((a, y) => a + (y - my) ** 2, 0);
+      res.note = "Ausgleich durch " + pts.length + " Punkte · R² = " + fmt(sst ? 1 - ssr / sst : 1, 3);
+    } else res.note = "Geht genau durch die Punkte";
+    res.fn = { expr, pretty, color: (spec.fit && spec.fit.color) || "#9334e6", width: 0.6, dash: "solid", name: "p", fit: true };
+    return res;
+  }
+
   // ---------- Standard ----------
   const COLORS = ["#1a73e8", "#d93025", "#188038", "#9334e6", "#e37400", "#00838f", "#202124"];
   function defaults() {
@@ -224,6 +333,8 @@
       special: { zeros: false, extrema: false, inflection: false, yint: false, cross: false, coords: true },
       points: [],
       guides: true,
+      snap: 0.5, // Punkte setzen: einrasten auf ... Einheiten (0 = frei)
+      fit: { type: "none", color: "#9334e6" }, // Punkte verbinden / Funktion durch die Punkte
       area: { on: false, fn: 0, a: 0, b: 1, color: "#1a73e8" },
       legend: true,
     };
@@ -245,6 +356,7 @@
     }
     out.fns = (out.fns || []).map((f, i) => Object.assign({ expr: "", color: COLORS[i % COLORS.length], width: 0.6, dash: "solid", name: "fghkpq"[i] || "f" }, f));
     out.points = (out.points || []).map((q) => Object.assign({ x: 0, y: 0, label: "", color: "#d93025" }, q));
+    out.fit = Object.assign({ type: "none", color: "#9334e6" }, out.fit || {});
     return out;
   }
 
@@ -258,7 +370,8 @@
     return { pad, top, pw, ph, wMM: pw + pad * 2, hMM: ph + top + pad };
   }
   function render(spec, pxPerMM, opts) {
-    const s = spec;
+    const fi = fitInfo(spec);
+    const s = fi.fn ? Object.assign({}, spec, { fns: spec.fns.concat([fi.fn]) }) : spec;
     const G = geometry(s);
     const k = pxPerMM;
     const cv = (opts && opts.canvas) || document.createElement("canvas");
@@ -467,6 +580,25 @@
       c.stroke();
     });
     c.setLineDash([]);
+    // Punkte verbinden: Strecken (in Reihenfolge) oder glatte Kurve (nach x)
+    if ((fi.type === "connect" || fi.type === "smooth") && fi.pts.length > 1) {
+      c.strokeStyle = (s.fit && s.fit.color) || "#9334e6";
+      c.lineWidth = 0.6;
+      c.lineJoin = "round";
+      c.beginPath();
+      if (fi.type === "connect") {
+        fi.pts.forEach((q, i) => (i ? c.lineTo(X(q.x), Y(q.y)) : c.moveTo(X(q.x), Y(q.y))));
+      } else {
+        // Catmull-Rom durch die Punkte, von links nach rechts
+        const P = fi.pts.slice().sort((a, b) => a.x - b.x).map((q) => ({ x: X(q.x), y: Y(q.y) }));
+        c.moveTo(P[0].x, P[0].y);
+        for (let i = 0; i < P.length - 1; i++) {
+          const p0 = P[i - 1] || P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] || P[i + 1];
+          c.bezierCurveTo(p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6, p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6, p2.x, p2.y);
+        }
+      }
+      c.stroke();
+    }
     c.restore();
 
     // besondere Punkte
@@ -574,7 +706,7 @@
       c.font = font(s.font, 600);
       let y = T + 2;
       for (const fd of named) {
-        const text = (fd.name || "f") + "(x) = " + prettyExpr(fd.expr);
+        const text = (fd.name || "f") + "(x) = " + (fd.pretty || prettyExpr(fd.expr));
         const w = c.measureText(text).width;
         const x0 = R - w - 7;
         c.fillStyle = "rgba(255,255,255,0.9)";
@@ -683,8 +815,79 @@
         renderPanel(t.dataset.tab);
       })
     );
+    bindPreviewPoints();
   }
   let previewTimer = 0;
+  let previewK = 1; // Vorschau: CSS-Pixel pro mm
+  // Vorschau-Pixel -> Koordinaten (und zurueck)
+  function toMath(cv, e) {
+    const r = cv.getBoundingClientRect();
+    const G = geometry(state);
+    const mmX = (e.clientX - r.left) / previewK;
+    const mmY = (e.clientY - r.top) / previewK;
+    return { x: state.xmin + (mmX - G.pad) / state.unit, y: state.ymax - (mmY - G.top) / state.unit, mmX, mmY };
+  }
+  const snapV = (v) => {
+    const st = state.snap || 0;
+    const r = st ? Math.round(v / st) * st : Math.round(v * 100) / 100;
+    return Math.round(r * 1000) / 1000;
+  };
+  // Punkte direkt in der Vorschau setzen (Tab "Punkte"): tippen = neuer Punkt,
+  // Punkt ziehen = verschieben, Punkt antippen = entfernen
+  function bindPreviewPoints() {
+    const cv = dlg.querySelector(".kd-preview");
+    let drag = null;
+    const onPts = () => dlg.querySelector(".kd-panel").dataset.tab === "pts";
+    cv.style.touchAction = "none";
+    cv.addEventListener("pointerdown", (e) => {
+      if (!onPts()) return;
+      e.preventDefault();
+      const m = toMath(cv, e);
+      const G = geometry(state);
+      if (m.mmX < G.pad - 2 || m.mmX > G.pad + G.pw + 2 || m.mmY < G.top - 2 || m.mmY > G.top + G.ph + 2) return;
+      // Treffer auf einen vorhandenen Punkt (3 mm)
+      let hit = -1;
+      state.points.forEach((q, i) => {
+        const dx = (q.x - m.x) * state.unit;
+        const dy = (q.y - m.y) * state.unit;
+        if (Math.hypot(dx, dy) < 3.2 && (hit < 0 || true)) hit = i;
+      });
+      if (hit < 0) {
+        const names = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const used = new Set(state.points.map((q) => q.label));
+        const label = names.split("").find((n) => !used.has(n)) || "";
+        state.points.push({ x: snapV(m.x), y: snapV(m.y), label, color: "#d93025" });
+        hit = state.points.length - 1;
+        drag = { i: hit, moved: true, fresh: true, x0: e.clientX, y0: e.clientY };
+        renderPanel("pts");
+        preview();
+      } else drag = { i: hit, moved: false, x0: e.clientX, y0: e.clientY };
+      try {
+        cv.setPointerCapture(e.pointerId);
+      } catch (err) {}
+    });
+    cv.addEventListener("pointermove", (e) => {
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+      drag.moved = true;
+      const m = toMath(cv, e);
+      const q = state.points[drag.i];
+      if (!q) return;
+      q.x = Math.max(state.xmin, Math.min(state.xmax, snapV(m.x)));
+      q.y = Math.max(state.ymin, Math.min(state.ymax, snapV(m.y)));
+      preview();
+    });
+    const end = () => {
+      if (!drag) return;
+      const d = drag;
+      drag = null;
+      if (!d.moved) state.points.splice(d.i, 1); // angetippt: weg
+      renderPanel("pts");
+      preview();
+    };
+    cv.addEventListener("pointerup", end);
+    cv.addEventListener("pointercancel", end);
+  }
   function preview() {
     cancelAnimationFrame(previewTimer);
     previewTimer = requestAnimationFrame(() => {
@@ -695,6 +898,7 @@
       const maxH = wrap.clientHeight - 48;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const k = Math.max(0.5, Math.min(maxW / G.wMM, maxH / G.hMM));
+      previewK = k;
       render(state, k * dpr, { canvas: cv });
       cv.style.width = Math.round(G.wMM * k) + "px";
       cv.style.height = Math.round(G.hMM * k) + "px";
@@ -947,9 +1151,69 @@
       ar.appendChild(row("von x =", ab));
       p.appendChild(ar);
     } else if (tab === "pts") {
-      const sec = section("Eigene Punkte");
+      const put = section("Punkte setzen");
+      const hint = el("div", "kd-tip", '<span class="material-symbols-rounded">touch_app</span><span>In die Vorschau tippen setzt einen Punkt. Ziehen verschiebt ihn, antippen entfernt ihn.</span>');
+      put.appendChild(hint);
+      put.appendChild(row("Einrasten auf", seg([[1, "1"], [0.5, "0,5"], [0.25, "0,25"], [0, "frei"]], s.snap, (v) => (s.snap = v))));
+      p.appendChild(put);
+
+      const fitSec = section("Punkte verbinden");
+      const chips = el("div", "kd-chips");
+      for (const [v, label] of FIT_TYPES) {
+        const b = el("button", "kd-chip" + (s.fit.type === v ? " active" : ""));
+        b.type = "button";
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          s.fit.type = v;
+          renderPanel("pts");
+          preview();
+        });
+        chips.appendChild(b);
+      }
+      fitSec.appendChild(chips);
+      if (s.fit.type !== "none") {
+        fitSec.appendChild(colorDots(s.fit.color, (v) => (s.fit.color = v)));
+        const fi = fitInfo(s);
+        if (fi.fn) {
+          const eq = el("div", "kd-eq");
+          eq.textContent = "p(x) = " + fi.fn.pretty;
+          eq.style.color = darken(s.fit.color);
+          fitSec.appendChild(eq);
+        }
+        if (fi.note) {
+          const n = el("div", "kd-hint");
+          n.textContent = fi.note;
+          fitSec.appendChild(n);
+        }
+        if (fi.fn) {
+          const take = el("button", "kd-add", '<span class="material-symbols-rounded">arrow_downward</span>Als Funktion übernehmen');
+          take.type = "button";
+          take.title = "p(x) wird eine normale Funktion (bearbeitbar, mit besonderen Punkten)";
+          take.addEventListener("click", () => {
+            const i = s.fns.length;
+            s.fns.push({ expr: fi.fn.pretty.replace(/−/g, "-").replace(/·/g, "*"), color: s.fit.color, width: 0.6, dash: "solid", name: "fghkpq"[i] || "f" });
+            s.fit.type = "none";
+            dlg.querySelectorAll(".kd-tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "fns"));
+            renderPanel("fns");
+            preview();
+          });
+          fitSec.appendChild(take);
+        }
+      }
+      p.appendChild(fitSec);
+
+      const sec = section("Punkte (" + s.points.length + ")");
       s.points.forEach((q, i) => {
         const card = el("div", "kd-pt");
+        const dot = el("button", "kd-pt-dot");
+        dot.type = "button";
+        dot.style.background = q.color;
+        dot.title = "Farbe wechseln";
+        dot.addEventListener("click", () => {
+          q.color = COLORS[(COLORS.indexOf(q.color) + 1) % COLORS.length];
+          dot.style.background = q.color;
+          preview();
+        });
         const nm = textInput(q.label, (v) => (q.label = v), "A");
         nm.classList.add("kd-pt-name");
         const xs = numInput(q.x, (v) => (q.x = parseNum(v, q.x)));
@@ -961,11 +1225,10 @@
           renderPanel("pts");
           preview();
         });
-        card.append(nm, el("span", "kd-to", "("), xs, el("span", "kd-to", "|"), ys, el("span", "kd-to", ")"), del);
+        card.append(dot, nm, el("span", "kd-to", "("), xs, el("span", "kd-to", "|"), ys, el("span", "kd-to", ")"), del);
         sec.appendChild(card);
-        sec.appendChild(colorDots(q.color, (v) => (q.color = v)));
       });
-      const add = el("button", "kd-add", '<span class="material-symbols-rounded">add</span>Punkt hinzufügen');
+      const add = el("button", "kd-add", '<span class="material-symbols-rounded">add</span>Punkt per Zahl hinzufügen');
       add.type = "button";
       add.addEventListener("click", () => {
         const names = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -974,6 +1237,16 @@
         preview();
       });
       sec.appendChild(add);
+      if (s.points.length) {
+        const clear = el("button", "kd-add kd-danger", '<span class="material-symbols-rounded">delete_sweep</span>Alle Punkte entfernen');
+        clear.type = "button";
+        clear.addEventListener("click", () => {
+          s.points = [];
+          renderPanel("pts");
+          preview();
+        });
+        sec.appendChild(clear);
+      }
       sec.appendChild(row("Hilfslinien zu den Achsen", toggle(s.guides, (v) => (s.guides = v))));
       p.appendChild(sec);
     } else if (tab === "look") {
@@ -985,14 +1258,15 @@
       p.appendChild(sec);
     }
   }
-  function open(spec, onDone) {
+  function open(spec, onDone, opts) {
     if (!dlg) build();
     editing = !!spec;
     state = mergeSpec(defaults(), spec || {});
     doneCb = onDone;
+    const tab = (opts && opts.tab) || "axes";
     dlg.querySelector(".kd-ok").textContent = editing ? "Übernehmen" : "Einfügen";
-    dlg.querySelectorAll(".kd-tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === "axes"));
-    renderPanel("axes");
+    dlg.querySelectorAll(".kd-tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+    renderPanel(tab);
     dlg.classList.remove("hidden");
     requestAnimationFrame(preview);
   }
