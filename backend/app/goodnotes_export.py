@@ -373,7 +373,28 @@ def _render_strokes(c, strokes: list[dict[str, Any]], tx, ty, scale: float) -> N
         c.drawPath(path, stroke=1, fill=0)
 
 
-def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
+EXPORT_KINDS = ("ink", "marker", "text", "images")
+
+
+def stroke_kind(stroke: dict[str, Any]) -> str:
+    """Art fuer die Export-Auswahl: Handschrift, Textmarker, Text (inkl. Tabellen) oder Bild."""
+    tool = stroke.get("tool")
+    if tool == "image":
+        return "images"
+    if tool in ("text", "table"):
+        return "text"
+    if tool == "marker":
+        return "marker"
+    return "ink"
+
+
+def filter_kinds(strokes: list[dict[str, Any]], show: set[str] | None) -> list[dict[str, Any]]:
+    if show is None:
+        return strokes
+    return [s for s in strokes if stroke_kind(s) in show]
+
+
+def build_pdf(strokes: list[dict[str, Any]], show: set[str] | None = None, bg: bool = True) -> bytes:
     min_x, min_y, max_x, max_y = _bbox(strokes)
     world_w = max(80.0, max_x - min_x)
     world_h = max(80.0, max_y - min_y)
@@ -390,9 +411,18 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
     buf = io.BytesIO()
     c = pdf_canvas.Canvas(buf, pagesize=(page_w, page_h))
     c.setTitle("sofianotes")
-    c.setFillColor(BG)
+    c.setFillColor(BG if bg else HexColor("#ffffff"))
     c.rect(0, 0, page_w, page_h, stroke=0, fill=1)
+    if bg:
+        _draw_grid(c, min_x, min_y, max_x, max_y, tx, ty)
+    _render_strokes(c, filter_kinds(strokes, show), tx, ty, scale)
 
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def _draw_grid(c, min_x: float, min_y: float, max_x: float, max_y: float, tx, ty) -> None:
     start_x = min_x - (min_x % GRID)
     start_y = min_y - (min_y % GRID)
     c.setLineWidth(0.6)
@@ -408,12 +438,6 @@ def build_pdf(strokes: list[dict[str, Any]]) -> bytes:
         c.setStrokeColor(GRID_BOLD if bold else GRID_LIGHT)
         c.line(tx(min_x), ty(y), tx(max_x), ty(y))
         y += GRID
-
-    _render_strokes(c, strokes, tx, ty, scale)
-
-    c.showPage()
-    c.save()
-    return buf.getvalue()
 
 
 A4_W = 794.0  # Weltbreite einer A4-Seite (wie im Frontend)
@@ -518,7 +542,69 @@ def _board_layout(strokes: list[dict[str, Any]], w: float, h: float) -> dict[str
     }
 
 
-def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]], only: set[str] | None = None) -> bytes:
+def _draw_page_bg(c, pg: dict[str, Any], pw: float, ph: float, bg: bool = True) -> None:
+    """Weisse Seite; mit bg auch Vorlage (PDF/Bild) bzw. Kaestchen/Linien/Punkte."""
+    c.setFillColor(HexColor("#ffffff"))
+    c.rect(0, 0, pw, ph, stroke=0, fill=1)
+    blob = media.load_bytes(str(pg.get("mediaId") or "")) if pg.get("mediaId") else None
+    if blob and bg:
+        try:
+            rot = int(pg.get("rot") or 0) % 4
+            if rot:
+                # Seite wurde gedreht (im Uhrzeigersinn): Bild um die Seitenmitte drehen
+                iw, ih = (ph, pw) if rot % 2 else (pw, ph)
+                c.saveState()
+                c.translate(pw / 2, ph / 2)
+                c.rotate(-90 * rot)
+                c.drawImage(ImageReader(io.BytesIO(blob)), -iw / 2, -ih / 2, width=iw, height=ih)
+                c.restoreState()
+            else:
+                c.drawImage(ImageReader(io.BytesIO(blob)), 0, 0, width=pw, height=ph)
+        except Exception:  # noqa: BLE001
+            pass
+    elif bg and not pg.get("board"):
+        # wie ein echter A4-Block: 5-mm-Kaestchen/Punkte, liniert ca. 8,5 mm mit Randlinie
+        paper = pg.get("paper") or "graph"
+        mm = 72.0 / 25.4
+        step = 5 * mm
+        if paper == "graph":
+            c.setLineWidth(0.35)
+            c.setStrokeColor(Color(80 / 255, 100 / 255, 150 / 255, alpha=0.3))
+            x = step
+            while x < pw:
+                c.line(x, 0, x, ph)
+                x += step
+            y = step
+            while y < ph:
+                c.line(0, ph - y, pw, ph - y)
+                y += step
+        elif paper == "lines":
+            c.setLineWidth(0.4)
+            c.setStrokeColor(Color(80 / 255, 100 / 255, 150 / 255, alpha=0.4))
+            y = 25 * mm
+            while y < ph - 5 * mm:
+                c.line(0, ph - y, pw, ph - y)
+                y += 8.5 * mm
+            c.setStrokeColor(Color(217 / 255, 48 / 255, 37 / 255, alpha=0.5))
+            c.line(20 * mm, 0, 20 * mm, ph)
+        elif paper == "dots":
+            c.setFillColor(Color(60 / 255, 70 / 255, 90 / 255, alpha=0.45))
+            y = step
+            while y < ph:
+                x = step
+                while x < pw:
+                    c.circle(x, ph - y, 0.55, stroke=0, fill=1)
+                    x += step
+                y += step
+
+
+def build_notebook_pdf(
+    notebook: dict[str, Any],
+    strokes: list[dict[str, Any]],
+    only: set[str] | None = None,
+    show: set[str] | None = None,
+    bg: bool = True,
+) -> bytes:
     """Ein PDF mit einer Seite pro Notizbuch-Seite (A4), samt Seiten-Hintergrund.
 
     only: nur diese Seiten (IDs) exportieren, z.B. einzelne in der Seiten-Leiste ausgewaehlte."""
@@ -538,58 +624,7 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]], 
         scale = A4_PT_W / A4_W
         pw, ph = w * scale, h * scale
         c.setPageSize((pw, ph))
-        c.setFillColor(HexColor("#ffffff"))
-        c.rect(0, 0, pw, ph, stroke=0, fill=1)
-        blob = media.load_bytes(str(pg.get("mediaId") or "")) if pg.get("mediaId") else None
-        if blob:
-            try:
-                rot = int(pg.get("rot") or 0) % 4
-                if rot:
-                    # Seite wurde gedreht (im Uhrzeigersinn): Bild um die Seitenmitte drehen
-                    iw, ih = (ph, pw) if rot % 2 else (pw, ph)
-                    c.saveState()
-                    c.translate(pw / 2, ph / 2)
-                    c.rotate(-90 * rot)
-                    c.drawImage(ImageReader(io.BytesIO(blob)), -iw / 2, -ih / 2, width=iw, height=ih)
-                    c.restoreState()
-                else:
-                    c.drawImage(ImageReader(io.BytesIO(blob)), 0, 0, width=pw, height=ph)
-            except Exception:  # noqa: BLE001
-                pass
-        elif not pg.get("board"):
-            # wie ein echter A4-Block: 5-mm-Kaestchen/Punkte, liniert ca. 8,5 mm mit Randlinie
-            paper = pg.get("paper") or "graph"
-            mm = 72.0 / 25.4
-            step = 5 * mm
-            if paper == "graph":
-                c.setLineWidth(0.35)
-                c.setStrokeColor(Color(80 / 255, 100 / 255, 150 / 255, alpha=0.3))
-                x = step
-                while x < pw:
-                    c.line(x, 0, x, ph)
-                    x += step
-                y = step
-                while y < ph:
-                    c.line(0, ph - y, pw, ph - y)
-                    y += step
-            elif paper == "lines":
-                c.setLineWidth(0.4)
-                c.setStrokeColor(Color(80 / 255, 100 / 255, 150 / 255, alpha=0.4))
-                y = 25 * mm
-                while y < ph - 5 * mm:
-                    c.line(0, ph - y, pw, ph - y)
-                    y += 8.5 * mm
-                c.setStrokeColor(Color(217 / 255, 48 / 255, 37 / 255, alpha=0.5))
-                c.line(20 * mm, 0, 20 * mm, ph)
-            elif paper == "dots":
-                c.setFillColor(Color(60 / 255, 70 / 255, 90 / 255, alpha=0.45))
-                y = step
-                while y < ph:
-                    x = step
-                    while x < pw:
-                        c.circle(x, ph - y, 0.55, stroke=0, fill=1)
-                        x += step
-                    y += step
+        _draw_page_bg(c, pg, pw, ph, bg)
         if pg.get("board"):
             mine = board_strokes or []
             layout = _board_layout(mine, w, h)
@@ -606,7 +641,7 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]], 
                 def ty(y: float, _sc=bsc, _oy=boy, _ps=scale, _ph=ph) -> float:
                     return _ph - (y * _sc + _oy) * _ps
 
-                _render_strokes(c, mine, tx, ty, scale * bsc)
+                _render_strokes(c, filter_kinds(mine, show), tx, ty, scale * bsc)
             else:
                 _render_strokes(c, [], lambda x: x, lambda y: y, scale)
         else:
@@ -624,7 +659,7 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]], 
             def ty(y: float, _py=py, _ph=ph) -> float:
                 return _ph - (y - _py) * scale
 
-            _render_strokes(c, mine, tx, ty, scale)
+            _render_strokes(c, filter_kinds(mine, show), tx, ty, scale)
         c.showPage()
     if not rects:
         c.showPage()
@@ -632,11 +667,93 @@ def build_notebook_pdf(notebook: dict[str, Any], strokes: list[dict[str, Any]], 
     return buf.getvalue()
 
 
-def build_board_pdf(board: dict[str, Any] | None, strokes: list[dict[str, Any]], only: set[str] | None = None) -> bytes:
+def build_board_pdf(
+    board: dict[str, Any] | None,
+    strokes: list[dict[str, Any]],
+    only: set[str] | None = None,
+    show: set[str] | None = None,
+    bg: bool = True,
+    area: tuple[float, float, float, float] | None = None,
+    area_page: str | None = None,
+) -> bytes:
+    """show: nur diese Arten (EXPORT_KINDS), bg: Hintergrund (Vorlage, Linien, Kaestchen),
+    area: nur dieser Ausschnitt (Weltkoordinaten), area_page: Ausschnitt liegt in dieser Board-Seite."""
     nb = (board or {}).get("notebook")
+    if area:
+        return build_area_pdf(nb if nb and nb.get("pages") else None, strokes, area, area_page, show, bg)
     if nb and nb.get("pages"):
-        return build_notebook_pdf(nb, strokes, only)
-    return build_pdf(strokes)
+        return build_notebook_pdf(nb, strokes, only, show, bg)
+    return build_pdf(strokes, show, bg)
+
+
+def build_area_pdf(
+    notebook: dict[str, Any] | None,
+    strokes: list[dict[str, Any]],
+    area: tuple[float, float, float, float],
+    area_page: str | None = None,
+    show: set[str] | None = None,
+    bg: bool = True,
+) -> bytes:
+    """Eine Seite mit genau dem Ausschnitt, den man gerade sieht."""
+    x0, y0, x1, y1 = area
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if y1 < y0:
+        y0, y1 = y1, y0
+    ww, wh = max(20.0, x1 - x0), max(20.0, y1 - y0)
+    scale = min(MAX_PAGE / ww, MAX_PAGE / wh, A4_PT_W / A4_W * 1.5)
+    pw, ph = ww * scale, wh * scale
+
+    def tx(x: float) -> float:
+        return (x - x0) * scale
+
+    def ty(y: float) -> float:
+        return ph - (y - y0) * scale
+
+    buf = io.BytesIO()
+    c = pdf_canvas.Canvas(buf, pagesize=(pw, ph))
+    c.setTitle("sofianotes")
+    in_board = bool(area_page) or not notebook
+    if in_board:
+        c.setFillColor(BG if (bg and not area_page) else HexColor("#ffffff"))
+        c.rect(0, 0, pw, ph, stroke=0, fill=1)
+        if bg and not area_page:
+            _draw_grid(c, x0, y0, x1, y1, tx, ty)
+        pool = [s for s in strokes if ((s.get("extra") or {}).get("boardPage") or None) == (area_page or None)]
+    else:
+        # Heft: Umgebung grau, die Seiten darin mit ihrem Hintergrund
+        c.setFillColor(HexColor("#e8e8ec"))
+        c.rect(0, 0, pw, ph, stroke=0, fill=1)
+        page_scale = A4_PT_W / A4_W
+        for pg, px, py, w, h in page_rects(notebook):
+            if pg.get("board") or pg.get("boardOf"):
+                continue
+            if px > x1 or px + w < x0 or py > y1 or py + h < y0:
+                continue
+            c.saveState()
+            path = c.beginPath()
+            path.rect(tx(px), ty(py + h), w * scale, h * scale)
+            c.clipPath(path, stroke=0, fill=0)
+            # Seite in ihrem eigenen Mass zeichnen und auf den Ausschnitt abbilden
+            c.translate(tx(px), ty(py + h))
+            c.scale(scale / page_scale, scale / page_scale)
+            _draw_page_bg(c, pg, w * page_scale, h * page_scale, bg)
+            c.restoreState()
+        pool = [s for s in strokes if not (s.get("extra") or {}).get("boardPage")]
+    mine = []
+    for s in pool:
+        b = _stroke_bounds(s)
+        if b and b[2] >= x0 and b[0] <= x1 and b[3] >= y0 and b[1] <= y1:
+            mine.append(s)
+    c.saveState()
+    path = c.beginPath()
+    path.rect(0, 0, pw, ph)
+    c.clipPath(path, stroke=0, fill=0)
+    _render_strokes(c, filter_kinds(mine, show), tx, ty, scale)
+    c.restoreState()
+    c.showPage()
+    c.save()
+    return buf.getvalue()
 
 
 def build_goodnotes_archive(strokes: list[dict[str, Any]], pdf_bytes: bytes | None = None) -> bytes:

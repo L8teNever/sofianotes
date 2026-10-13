@@ -6285,3 +6285,29 @@ html[data-theme="dark"] .board-nav-find,
 html[data-theme="dark"] .board-nav-find span { background: #d0bcff; color: #381e72; }
 html[data-theme="dark"] .board-nav-find span { background: none; }
 html[data-theme="dark"] .board-nav-person { border-color: #2b2930; }
+
+/* ---- PDF-Export: was rein soll ---- */
+.export-kinds { display: flex; flex-wrap: wrap; gap: 8px; }
+.export-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #f3edf7;
+  padding: 8px 14px 8px 10px;
+  font: 600 14px/1 'Google Sans', 'Inter', sans-serif;
+  color: #79747e;
+  cursor: pointer;
+  text-decoration: line-through;
+}
+.export-kind .material-symbols-rounded { font-size: 18px; }
+.export-kind.on { background: #eaddff; border-color: #6750a4; color: #1c1b1f; text-decoration: none; }
+.export-kind.on .material-symbols-rounded { color: #6750a4; }
+#export-pdf-go.hidden { display: none; }
+#export-pdf-go:disabled { opacity: 0.45; }
+#export-scope button.hidden { display: none; }
+html[data-theme="dark"] .export-kind { background: #2b2930; color: #938f99; }
+html[data-theme="dark"] .export-kind.on { background: #3a3350; border-color: #d0bcff; color: #f4f1f8; }
+html[data-theme="dark"] .export-kind.on .material-symbols-rounded { color: #d0bcff; }
+html[data-theme="dark"] .dlg .sheet-title { color: #f4f1f8; }

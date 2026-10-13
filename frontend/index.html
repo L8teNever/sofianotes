@@ -1129,6 +1129,24 @@
       <span class="material-symbols-rounded set-chev">chevron_right</span>
     </button>
     </div>
+    <div id="export-pdf" class="export-pane hidden">
+      <div class="set-sub">Was soll ins PDF?</div>
+      <div class="export-kinds" id="export-kinds">
+        <button type="button" class="export-kind on" data-kind="ink"><span class="material-symbols-rounded">ink_pen</span><span>Handschrift</span></button>
+        <button type="button" class="export-kind on" data-kind="marker"><span class="material-symbols-rounded">ink_highlighter</span><span>Textmarker</span></button>
+        <button type="button" class="export-kind on" data-kind="text"><span class="material-symbols-rounded">text_fields</span><span>Text &amp; Tabellen</span></button>
+        <button type="button" class="export-kind on" data-kind="images"><span class="material-symbols-rounded">image</span><span>Bilder</span></button>
+        <button type="button" class="export-kind on" data-kind="bg"><span class="material-symbols-rounded">wallpaper</span><span>Hintergrund</span></button>
+      </div>
+      <p class="set-hint">Hintergrund = Linien, Kästchen und eingefügte PDF-Vorlagen.</p>
+      <div class="set-sub" id="export-scope-title">Welcher Teil?</div>
+      <div class="set-seg" id="export-scope">
+        <button type="button" data-scope="all" class="active">Alles</button>
+        <button type="button" data-scope="page">Diese Seite</button>
+        <button type="button" data-scope="view">Sichtbarer Bereich</button>
+      </div>
+      <p class="set-hint" id="export-scope-hint"></p>
+    </div>
     <div id="export-send" class="export-pane hidden">
       <div class="set-sub">An wen?</div>
       <div id="export-people" class="export-people"></div>
@@ -1142,6 +1160,7 @@
     <div class="m3-sheet-actions">
       <button type="button" id="export-cancel" class="m3-btn-outline">Abbrechen</button>
       <button type="button" id="export-send-go" class="m3-btn-primary hidden" disabled>Senden</button>
+      <button type="button" id="export-pdf-go" class="m3-btn-primary hidden">PDF erstellen</button>
     </div>
   </div>
 </div>

@@ -1,4 +1,5 @@
 import asyncio
+import math
 import hashlib
 import json
 import os
@@ -1044,18 +1045,40 @@ async def download_goodnotes(board: str) -> FileResponse:
 
 
 @app.get("/api/export.pdf")
-async def download_pdf(board: str, pages: str = "", me: dict = Depends(get_current_person)) -> Response:
+async def download_pdf(
+    board: str,
+    pages: str = "",
+    show: str = "",
+    bg: int = 1,
+    area: str = "",
+    bp: str = "",
+    me: dict = Depends(get_current_person),
+) -> Response:
     if not await db.can_access(me["id"], board):
         raise HTTPException(status_code=404, detail="not found")
     b = await db.get_board(board)
     # pages=id1,id2: nur diese Notizbuch-Seiten (in der Seiten-Leiste ausgewaehlt)
     only = {p for p in (x.strip() for x in pages.split(",")) if p} or None
-    pdf = goodnotes_export.build_board_pdf(b, await db.load_all(board), only)
+    # show=ink,marker,text,images: nur diese Arten; bg=0: ohne Vorlage/Linien/Kaestchen
+    kinds = {k for k in (x.strip() for x in show.split(",")) if k in goodnotes_export.EXPORT_KINDS} if show else None
+    # area=x0,y0,x1,y1: nur dieser Ausschnitt (bp: in dieser Board-Seite)
+    box = None
+    if area:
+        try:
+            vals = [float(v) for v in area.split(",")]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad area") from None
+        if len(vals) != 4 or not all(math.isfinite(v) for v in vals):
+            raise HTTPException(status_code=400, detail="bad area")
+        box = (vals[0], vals[1], vals[2], vals[3])
+    pdf = goodnotes_export.build_board_pdf(b, await db.load_all(board), only, kinds, bool(bg), box, bp or None)
     from urllib.parse import quote
 
     name = _safe_filename(b.get("title") or "Blatt")
     nb_pages = ((b.get("notebook") or {}).get("pages") or []) if b else []
-    if only and nb_pages:
+    if box:
+        name += " - Ausschnitt"
+    elif only and nb_pages:
         nums = [str(i + 1) for i, pg in enumerate(nb_pages) if str(pg.get("id")) in only]
         if nums:
             name += (" - Seite " if len(nums) == 1 else " - Seiten ") + ", ".join(nums[:12]) + (" ..." if len(nums) > 12 else "")

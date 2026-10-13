@@ -6122,7 +6122,9 @@
   redoBtn.addEventListener("click", redo);
   function downloadCurrentBoard() {
     // GoodNotes importiert PDF; das eigene .goodnotes-ZIP ist kein natives GN-Dokument.
-    saveFileFromUrl("/api/export.pdf?board=" + encodeURIComponent(currentBoardId || ""), "blatt.pdf", "PDF wird erstellt …");
+    if (!currentBoardId) return;
+    if (window.sofiaOpenPdfExport) return window.sofiaOpenPdfExport(currentBoardId, filenameInput ? filenameInput.value : "");
+    saveFileFromUrl("/api/export.pdf?board=" + encodeURIComponent(currentBoardId), "blatt.pdf", "PDF wird erstellt …");
   }
   window.addEventListener("keydown", (e) => {
     const meta = e.ctrlKey || e.metaKey;
@@ -18770,15 +18772,127 @@
   let exportBoardId = null;
   let exportTitle = "";
   const sendState = { to: new Set(), format: "sofianotes" };
-  function showExportPane(send) {
-    document.getElementById("export-main").classList.toggle("hidden", send);
+  // mode: false = Auswahl, true/"send" = an Person senden, "pdf" = PDF-Einstellungen
+  let exportMode = false;
+  function showExportPane(mode) {
+    if (mode === true) mode = "send";
+    exportMode = mode;
+    const send = mode === "send";
+    const pdf = mode === "pdf";
+    document.getElementById("export-main").classList.toggle("hidden", !!mode);
     document.getElementById("export-send").classList.toggle("hidden", !send);
+    document.getElementById("export-pdf").classList.toggle("hidden", !pdf);
     document.getElementById("export-send-go").classList.toggle("hidden", !send);
-    document.getElementById("export-title").textContent = send ? "An Person senden" : "Exportieren";
-    document.getElementById("export-name").textContent = send ? "„" + exportTitle + "“" : "„" + exportTitle + "“ speichern als:";
-    document.getElementById("export-cancel").textContent = send ? "Zurück" : "Abbrechen";
+    document.getElementById("export-pdf-go").classList.toggle("hidden", !pdf);
+    document.getElementById("export-title").textContent = send ? "An Person senden" : pdf ? "Als PDF exportieren" : "Exportieren";
+    document.getElementById("export-name").textContent = mode ? "„" + exportTitle + "“" : "„" + exportTitle + "“ speichern als:";
+    // aus den ausgewaehlten Seiten direkt hierher: "Zurueck" waere sinnlos
+    document.getElementById("export-cancel").textContent = mode && !exportPdfPages ? "Zurück" : "Abbrechen";
     if (send) renderSendPane();
+    if (pdf) renderPdfPane();
   }
+
+  // ---- PDF-Export: was rein soll (Handschrift, Textmarker, Text, Bilder, Hintergrund) und welcher Teil ----
+  const PDF_KINDS = ["ink", "marker", "text", "images"];
+  const PDF_OPTS_KEY = "sofianotes-pdf-export";
+  let exportPdfPages = null; // aus der Seiten-Leiste ausgewaehlte Seiten (dann ist der Teil fest)
+  const pdfOpts = (() => {
+    let o = null;
+    try {
+      o = JSON.parse(localStorage.getItem(PDF_OPTS_KEY) || "null");
+    } catch (err) {}
+    const kinds = Array.isArray(o && o.kinds) ? o.kinds.filter((k) => PDF_KINDS.includes(k)) : PDF_KINDS.slice();
+    return { kinds: new Set(kinds), bg: !(o && o.bg === false), scope: "all" };
+  })();
+  function savePdfOpts() {
+    try {
+      localStorage.setItem(PDF_OPTS_KEY, JSON.stringify({ kinds: [...pdfOpts.kinds], bg: pdfOpts.bg }));
+    } catch (err) {}
+  }
+  function pdfScopeAvail() {
+    const here = !!currentBoardId && exportBoardId === currentBoardId && !exportPdfPages;
+    return { page: here && (!!notebook || !!boardEditId), view: here };
+  }
+  function renderPdfPane() {
+    document.querySelectorAll("#export-kinds .export-kind").forEach((b) => {
+      const k = b.dataset.kind;
+      b.classList.toggle("on", k === "bg" ? pdfOpts.bg : pdfOpts.kinds.has(k));
+    });
+    const av = pdfScopeAvail();
+    if ((pdfOpts.scope === "page" && !av.page) || (pdfOpts.scope === "view" && !av.view)) pdfOpts.scope = "all";
+    const seg = document.getElementById("export-scope");
+    seg.querySelectorAll("button").forEach((b) => {
+      const sc = b.dataset.scope;
+      b.classList.toggle("hidden", (sc === "page" && !av.page) || (sc === "view" && !av.view));
+      b.classList.toggle("active", sc === pdfOpts.scope);
+    });
+    const fixed = !!exportPdfPages;
+    seg.classList.toggle("hidden", fixed || (!av.page && !av.view));
+    document.getElementById("export-scope-title").classList.toggle("hidden", !fixed && !av.page && !av.view);
+    document.getElementById("export-scope-hint").textContent = fixed
+      ? (exportPdfPages.length === 1 ? "Die ausgewählte Seite" : "Die " + exportPdfPages.length + " ausgewählten Seiten") + " aus der Seiten-Leiste."
+      : pdfOpts.scope === "view"
+        ? "Genau der Ausschnitt, den du gerade auf dem Bildschirm siehst – als eine Seite."
+        : pdfOpts.scope === "page"
+          ? "Nur die Seite, auf der du gerade bist."
+          : "";
+    const none = !pdfOpts.kinds.size && !pdfOpts.bg;
+    const go = document.getElementById("export-pdf-go");
+    go.disabled = none;
+    go.textContent = none ? "Nichts ausgewählt" : "PDF erstellen";
+  }
+  document.querySelectorAll("#export-kinds .export-kind").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const k = b.dataset.kind;
+      if (k === "bg") pdfOpts.bg = !pdfOpts.bg;
+      else if (pdfOpts.kinds.has(k)) pdfOpts.kinds.delete(k);
+      else pdfOpts.kinds.add(k);
+      savePdfOpts();
+      renderPdfPane();
+    })
+  );
+  document.querySelectorAll("#export-scope button").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pdfOpts.scope = b.dataset.scope;
+      renderPdfPane();
+    })
+  );
+  function pdfExportUrl() {
+    let url = "/api/export.pdf?board=" + encodeURIComponent(exportBoardId);
+    if (pdfOpts.kinds.size < PDF_KINDS.length) url += "&show=" + encodeURIComponent(PDF_KINDS.filter((k) => pdfOpts.kinds.has(k)).join(",") || "none");
+    if (!pdfOpts.bg) url += "&bg=0";
+    if (exportPdfPages) url += "&pages=" + encodeURIComponent(exportPdfPages.join(","));
+    else if (pdfOpts.scope === "page" && pdfScopeAvail().page) {
+      let id = boardEditId;
+      if (!id && notebook && window.sofiaCurrentPage) {
+        const pg = notebook.pages[window.sofiaCurrentPage()];
+        id = pg && (pg.boardOf || pg.id);
+      }
+      if (id) url += "&pages=" + encodeURIComponent(id);
+    } else if (pdfOpts.scope === "view" && pdfScopeAvail().view) {
+      const a = screenToWorld(viewLeft, 0);
+      const b = screenToWorld(window.innerWidth - viewRight, window.innerHeight);
+      url += "&area=" + [a.x, a.y, b.x, b.y].map((v) => Math.round(v * 10) / 10).join(",");
+      if (boardEditId) url += "&bp=" + encodeURIComponent(boardEditId);
+    }
+    return url;
+  }
+  document.getElementById("export-pdf-go").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!exportBoardId) return;
+    const url = pdfExportUrl();
+    const n = exportPdfPages ? exportPdfPages.length : 0;
+    closeExport();
+    saveFileFromUrl(url, "blatt.pdf", n > 1 ? "PDF mit " + n + " Seiten wird erstellt …" : "PDF wird erstellt …");
+  });
+  // direkt die PDF-Einstellungen oeffnen (Menue "Herunterladen", ausgewaehlte Seiten)
+  function openPdfExport(boardId, title, pages) {
+    openExportDialog(boardId, title, pages);
+    showExportPane("pdf");
+  }
+  window.sofiaOpenPdfExport = openPdfExport;
   function renderSendPane() {
     const box = document.getElementById("export-people");
     box.innerHTML = "";
@@ -18841,10 +18955,11 @@
       renderSendPane();
     }
   });
-  function openExportDialog(boardId, title) {
+  function openExportDialog(boardId, title, pages) {
     if (!boardId) return;
     exportBoardId = boardId;
     exportTitle = title || "Blatt";
+    exportPdfPages = pages && pages.length ? pages.slice() : null;
     sendState.to.clear();
     showExportPane(false);
     exportScrim.classList.remove("hidden");
@@ -18854,7 +18969,7 @@
     if (e.target === exportScrim) closeExport();
   });
   document.getElementById("export-cancel").addEventListener("click", () => {
-    if (!document.getElementById("export-send").classList.contains("hidden")) showExportPane(false);
+    if (exportMode && !exportPdfPages) showExportPane(false);
     else closeExport();
   });
 
@@ -18924,9 +19039,9 @@
   exportScrim.querySelectorAll(".export-opt").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (b.dataset.format === "pdf") return showExportPane("pdf");
       closeExport();
-      if (b.dataset.format === "pdf") saveFileFromUrl("/api/export.pdf?board=" + encodeURIComponent(exportBoardId), "blatt.pdf", "PDF wird erstellt …");
-      else exportBoardFile(exportBoardId);
+      exportBoardFile(exportBoardId);
     })
   );
   document.getElementById("canvas-menu-export")?.addEventListener("click", (e) => {
@@ -22568,6 +22683,8 @@
       if (!currentBoardId || !ids || !ids.length) return;
       if (navigator.onLine === false) return showToast("PDF-Export braucht Internet");
       const order = allPickIds().filter((id) => ids.includes(id));
+      // erst einstellen, was rein soll (Handschrift, Text, Bilder, Hintergrund)
+      if (window.sofiaOpenPdfExport) return window.sofiaOpenPdfExport(currentBoardId, filenameInput ? filenameInput.value : "", order);
       window.sofiaSaveFile(
         "/api/export.pdf?board=" + encodeURIComponent(currentBoardId) + "&pages=" + encodeURIComponent(order.join(",")),
         "seiten.pdf",
