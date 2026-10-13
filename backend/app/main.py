@@ -768,6 +768,17 @@ async def get_file(file_id: str, me: dict = Depends(get_current_person)) -> Resp
     )
 
 
+@app.post("/api/convert-image")
+async def convert_image(request: Request, me: dict = Depends(get_current_person)) -> Response:
+    """Bild, das der Browser nicht selbst lesen kann (z.B. HEIC am PC), als JPEG zurueck."""
+    data = await request.body()
+    try:
+        jpg = await asyncio.get_event_loop().run_in_executor(None, media.convert_to_jpeg, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=413 if str(exc) == "too_large" else 415, detail=str(exc)) from exc
+    return Response(content=jpg, media_type="image/jpeg")
+
+
 @app.put("/api/media/{media_id}")
 async def upload_media_raw(media_id: str, request: Request) -> dict:
     """Bild als rohes JPEG (Body) - spart Base64 und JSON."""

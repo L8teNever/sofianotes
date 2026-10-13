@@ -59,6 +59,45 @@ def load_bytes(media_id: str) -> bytes | None:
     return path.read_bytes()
 
 
+CONVERT_MAX = 40 * 1024 * 1024
+
+
+def convert_to_jpeg(blob: bytes, max_edge: int = 4000) -> bytes:
+    """Beliebiges Bild (HEIC/HEIF, TIFF, BMP, WebP, PNG ...) -> JPEG, richtig gedreht,
+    Transparenz auf Weiss. Wirft ValueError("too_large"/"format")."""
+    if not blob or len(blob) > CONVERT_MAX:
+        raise ValueError("too_large" if blob else "format")
+    try:
+        from PIL import Image, ImageOps
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("format") from exc
+    try:
+        import pillow_heif  # type: ignore
+
+        pillow_heif.register_heif_opener()
+    except Exception:  # noqa: BLE001 - ohne HEIC-Unterstuetzung geht der Rest trotzdem
+        pass
+    import io
+
+    try:
+        im = Image.open(io.BytesIO(blob))
+        im.seek(0)
+        im = ImageOps.exif_transpose(im)
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+        im.thumbnail((max_edge, max_edge))
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=90)
+        return out.getvalue()
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("format") from exc
+
+
 def save_bytes(blob: bytes, media_id: str) -> dict:
     """Rohes JPEG speichern (schneller als der Weg ueber Base64)."""
     if not valid_id(media_id):

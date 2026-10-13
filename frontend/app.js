@@ -1492,10 +1492,17 @@
     };
     img.src = "/api/media/" + encodeURIComponent(mediaId);
     let tries = 0;
+    // erneut laden (z.B. wenn sich am Bild etwas tut, waehrend es noch fehlt)
+    img.sofiaRetry = () => {
+      if (img.complete && img.naturalWidth) return;
+      tries = 0;
+      img.src = "/api/media/" + encodeURIComponent(mediaId) + "?r=" + Date.now();
+    };
     img.onerror = () => {
       const retry = () => {
-        // evtl. laedt jemand das Bild gerade erst hoch: ein paar Mal spaeter erneut versuchen
-        if (tries++ < 6) setTimeout(() => (img.src = "/api/media/" + encodeURIComponent(mediaId) + "?r=" + tries), 1500 * tries);
+        // evtl. laedt jemand das Bild gerade erst hoch (grosse Fotos, langsames WLAN):
+        // ueber mehrere Minuten immer wieder versuchen statt nach 30 s aufzugeben
+        if (tries++ < 40) setTimeout(() => (img.src = "/api/media/" + encodeURIComponent(mediaId) + "?r=" + tries), Math.min(10000, 1200 * tries));
       };
       if (!window.SofiaOffline) return retry();
       SofiaOffline.getMedia(mediaId).then((blob) => {
@@ -5531,7 +5538,11 @@
           if (s.author ? s.author !== currentPersonId : !boardStrokes.has(s.id)) foreignIds.add(s.id);
           s.bbox = strokeWorldBBox(s);
           boardStrokes.set(s.id, s);
-          if (s.tool === "image" && s.extra && s.extra.mediaId) ensureMedia(s.extra.mediaId);
+          if (s.tool === "image" && s.extra && s.extra.mediaId) {
+            const im = ensureMedia(s.extra.mediaId);
+            // fehlte das Bild bisher (noch nicht hochgeladen): jetzt gleich nochmal holen
+            if (im && im.complete && !im.naturalWidth && im.sofiaRetry) im.sofiaRetry();
+          }
           requestRedraw();
         }
         break;
@@ -11846,16 +11857,22 @@
         });
       return id;
     }
-    // erst lokal sichern und als "noch hochzuladen" merken, dann im Hintergrund senden
-    stored.then(() => pendingMedia.add(id)).then(() =>
+    // erst lokal sichern und als "noch hochzuladen" merken, dann im Hintergrund senden.
+    // mediaUploads: andere bekommen das Bild erst gemeldet, wenn die Datei auf dem Server ist
+    const up = stored.then(() => pendingMedia.add(id)).then(() =>
       send()
         .then((r) => {
           if (r.ok || (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429)) pendingMedia.done(id);
         })
         .catch(() => {})
     );
+    mediaUploads.set(id, up);
+    up.finally(() => setTimeout(() => mediaUploads.delete(id), 1000));
     return id;
   }
+  // Bild-Upload, der noch laeuft (id -> Promise)
+  const mediaUploads = new Map();
+  window.sofiaMediaUploaded = (id) => mediaUploads.get(id) || Promise.resolve();
 
   async function uploadJpegDataUrl(dataUrl) {
     const id = uuid();
@@ -11916,10 +11933,80 @@
     }
     boardStrokes.set(id, stroke);
     ensureMedia(mediaId);
-    wsSend({ type: "stroke_move", stroke: serializeStroke(stroke) });
+    // den anderen erst zeigen, wenn die Bilddatei auf dem Server liegt (sonst sehen sie nichts)
+    const bid = currentBoardId;
+    const sendIt = () => {
+      const cur = boardStrokes.get(id);
+      if (cur && currentBoardId === bid) wsSend({ type: "stroke_move", stroke: serializeStroke(cur) });
+    };
+    if (mediaUploads.has(mediaId)) mediaUploads.get(mediaId).then(sendIt, sendIt);
+    else sendIt();
     pushUndo({ type: "add", stroke: cloneStroke(stroke) });
     return stroke;
   }
+
+  // Alle Bildformate: was der Browser selbst kann (JPEG, PNG, GIF, WebP, AVIF, BMP, SVG,
+  // auf dem iPad auch HEIC), direkt; sonst (HEIC am PC, TIFF ...) wandelt der Server um.
+  const IMAGE_EXT = /\.(png|jpe?g|jfif|pjpeg|gif|webp|avif|heic|heif|bmp|dib|tiff?|svg|ico)$/i;
+  function isImageFile(f) {
+    return !!f && (/^image\//i.test(f.type || "") || IMAGE_EXT.test(f.name || ""));
+  }
+  window.sofiaIsImageFile = isImageFile;
+  function loadViaImg(blob) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.decoding = "async";
+      img.onload = () => {
+        // SVG ohne feste Groesse: in brauchbarer Aufloesung zeichnen
+        let w = img.naturalWidth || 0;
+        let h = img.naturalHeight || 0;
+        if (!w || !h) {
+          w = 1600;
+          h = 1200;
+        }
+        if (/svg/i.test(blob.type || "") && Math.max(w, h) < 1600) {
+          const k = 1600 / Math.max(w, h);
+          w = Math.round(w * k);
+          h = Math.round(h * k);
+        }
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const g = c.getContext("2d");
+        g.fillStyle = "#ffffff";
+        g.fillRect(0, 0, w, h);
+        g.drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(c);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("img"));
+      };
+      img.src = url;
+    });
+  }
+  // -> zeichenbares Bild (ImageBitmap oder Canvas); wirft, wenn es gar nicht geht
+  async function decodeImage(blob) {
+    const isSvg = /svg/i.test(blob.type || "") || /\.svg$/i.test(blob.name || "");
+    if (!isSvg) {
+      try {
+        return await createImageBitmap(blob, { imageOrientation: "from-image" });
+      } catch (err) {}
+      try {
+        return await createImageBitmap(blob);
+      } catch (err) {}
+    }
+    try {
+      return await loadViaImg(isSvg && !blob.type ? new Blob([blob], { type: "image/svg+xml" }) : blob);
+    } catch (err) {}
+    // Server wandelt um (HEIC/HEIF, TIFF, ...) -> JPEG
+    const r = await fetch("/api/convert-image", { method: "POST", headers: { "content-type": blob.type || "application/octet-stream" }, body: blob });
+    if (!r.ok) throw new Error(r.status === 413 ? "too_large" : "format");
+    return await createImageBitmap(await r.blob());
+  }
+  window.sofiaDecodeImage = decodeImage;
 
   // Bild -> Scan-Dialog (Blatt erkennen, zuschneiden) -> JPEG. null = abgebrochen.
   async function scanImageToJpeg(file, maxEdge) {
@@ -11928,7 +12015,7 @@
       if (!res) return null;
       return bitmapToJpeg(res.canvas, maxEdge);
     }
-    const bmp = await createImageBitmap(file);
+    const bmp = await decodeImage(file);
     const jpeg = bitmapToJpeg(bmp, maxEdge);
     if (bmp.close) bmp.close();
     return jpeg;
@@ -12135,7 +12222,7 @@
           if (placed.length) {
             y = placed[placed.length - 1].points[1].y + 40;
           }
-        } else if (/^image\//.test(file.type) || /\.(png|jpe?g|gif|webp|heic)$/i.test(file.name)) {
+        } else if (isImageFile(file)) {
           const s = await importImageFile(file, origin);
           if (!s) continue;
           ids.push(s.id);
@@ -12266,7 +12353,10 @@
       delete cur.extra.rot;
       cur.bbox = strokeWorldBBox(cur);
       ensureMedia(img.mediaId);
-      wsSend({ type: "stroke_move", stroke: serializeStroke(cur) });
+      window.sofiaMediaUploaded(img.mediaId).finally(() => {
+        const now = boardStrokes.get(cur.id);
+        if (now) wsSend({ type: "stroke_move", stroke: serializeStroke(now) });
+      });
       pushUndo({ type: "replace", before, after: cloneStroke(cur) });
       selectStrokeIds([cur.id]);
       requestRedraw();
@@ -12295,7 +12385,7 @@
     closeImageLibrary();
     const items = imageLibItems.slice();
     refreshImageLibrary();
-    if (!items.length) return pickImportFiles("image/*");
+    if (!items.length) return pickImportFiles("image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif");
     const pop = document.createElement("div");
     pop.className = "image-lib-pop";
     const up = document.createElement("button");
@@ -12305,7 +12395,7 @@
     up.addEventListener("click", (ev) => {
       ev.stopPropagation();
       closeImageLibrary();
-      pickImportFiles("image/*");
+      pickImportFiles("image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif");
     });
     pop.appendChild(up);
     const title = document.createElement("div");
@@ -12367,7 +12457,7 @@
   document.getElementById("insert-pdf")?.addEventListener("click", (e) => {
     e.stopPropagation();
     insertMenu.classList.add("hidden");
-    pickImportFiles("application/pdf,.pdf,image/*");
+    pickImportFiles("application/pdf,.pdf,image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif");
   });
   document.addEventListener("pointerdown", (e) => {
     if (insertMenu && !insertMenu.classList.contains("hidden") && !e.target.closest(".insert-menu-wrap") && !e.target.closest("#insert-menu")) insertMenu.classList.add("hidden");
@@ -15659,7 +15749,7 @@
     const uploads = [];
     try {
       for (const file of files) {
-        const isImage = /^image\//i.test(file.type) && !/svg/i.test(file.type);
+        const isImage = isImageFile(file);
         if (!isImage) {
           // PDF und alle anderen Dateien bleiben die Originaldatei - sofort sichtbar,
           // hochgeladen wird im Hintergrund
@@ -15892,7 +15982,7 @@
   async function insertHwImage(att, at) {
     try {
       const blob = await (await fetch(att.url)).blob();
-      const bmp = await createImageBitmap(blob);
+      const bmp = await decodeImage(blob);
       const jpeg = bitmapToJpeg(bmp, 1600);
       if (bmp.close) bmp.close();
       const mediaId = await uploadJpeg(jpeg);
@@ -17923,7 +18013,8 @@
   });
   // Einstellung: eigener Zurueck-Knopf oben links oder "Blatt verlassen" im Zahnrad-Menue
   function backMode() {
-    return lsGetRaw("sofianotes-back-mode") === "menu" ? "menu" : "button";
+    // Standard: Verlassen im Zahnrad-Menue; der Zurueck-Pfeil nur, wenn so eingestellt
+    return lsGetRaw("sofianotes-back-mode") === "button" ? "button" : "menu";
   }
   function applyBackMode() {
     const m = backMode();
@@ -21250,7 +21341,7 @@
     };
     const bgInput = document.createElement("input");
     bgInput.type = "file";
-    bgInput.accept = "image/*,application/pdf,.pdf";
+    bgInput.accept = "image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif,application/pdf,.pdf";
     bgInput.style.display = "none";
     document.body.appendChild(bgInput);
     let bgTarget = null; // {kind: "page", index} | {kind: "template"}
@@ -22389,7 +22480,7 @@
     }
     const tplInput = document.createElement("input");
     tplInput.type = "file";
-    tplInput.accept = "image/*,application/pdf,.pdf";
+    tplInput.accept = "image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif,application/pdf,.pdf";
     tplInput.style.display = "none";
     document.body.appendChild(tplInput);
     let tplThenAdd = false;
@@ -22502,13 +22593,13 @@
     // ---- "Seite hinzufuegen" ----
     const photoInput = document.createElement("input");
     photoInput.type = "file";
-    photoInput.accept = "image/*";
+    photoInput.accept = "image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif";
     photoInput.setAttribute("capture", "environment");
     photoInput.style.display = "none";
     document.body.appendChild(photoInput);
     const imageInput = document.createElement("input");
     imageInput.type = "file";
-    imageInput.accept = "image/*";
+    imageInput.accept = "image/*,.heic,.heif,.tif,.tiff,.bmp,.svg,.avif,.webp,.jfif";
     imageInput.style.display = "none";
     document.body.appendChild(imageInput);
     const pdfInput = document.createElement("input");
@@ -23046,9 +23137,10 @@
     window.sofiaScan = async (file) => {
       let bmp;
       try {
-        bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+        bmp = await window.sofiaDecodeImage(file);
       } catch (err) {
-        bmp = await createImageBitmap(file);
+        showToast(String(err && err.message) === "too_large" ? "Das Bild ist zu groß" : "Dieses Bildformat geht leider nicht");
+        return null;
       }
       bmpRef = bmp;
       rot = 0;

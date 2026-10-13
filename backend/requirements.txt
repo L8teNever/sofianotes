@@ -2,3 +2,6 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 reportlab==4.2.5
 tzdata==2024.2
+# Bilder umwandeln, die der Browser nicht kann (HEIC vom iPhone, TIFF ...)
+pillow
+pillow-heif==0.18.0
