@@ -1,0 +1,226 @@
+import asyncio
+import tempfile
+import unittest
+from pathlib import Path
+
+from app import db
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+class LibraryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_people(self):
+        people = run(db.people())
+        self.assertEqual([p["id"] for p in people], ["simon", "franz", "jungen"])
+
+    def test_separate_boards_and_share(self):
+        s = run(db.create_board("simon", "Mathe", None))
+        f = run(db.create_board("franz", "Musik", None))
+        self.assertIsNotNone(s)
+        lib_s = run(db.library("simon", None))
+        lib_f = run(db.library("franz", None))
+        self.assertEqual(len(lib_s["boards"]), 1)
+        self.assertEqual(len(lib_f["boards"]), 1)
+        self.assertEqual(lib_s["boards"][0]["title"], "Mathe")
+        run(db.share_board("simon", s["id"], "jungen"))
+        lib_j = run(db.library("jungen", None))
+        self.assertEqual(len(lib_j["boards"]), 1)
+        self.assertTrue(lib_j["boards"][0]["shared"])
+        self.assertEqual(lib_j["boards"][0]["title"], "Mathe")
+        folder = run(db.create_folder("jungen", "Schule", None))
+        self.assertTrue(run(db.place_board("jungen", s["id"], folder["id"])))
+        root = run(db.library("jungen", None))
+        nested = run(db.library("jungen", folder["id"]))
+        self.assertEqual(len(root["boards"]), 0)
+        self.assertEqual(len(nested["boards"]), 1)
+        sim = run(db.library("simon", None))
+        self.assertEqual(sim["boards"][0]["folderId"], None)
+
+    def test_share_roles_and_authors(self):
+        s = run(db.create_board("simon", "Mathe", None))
+        bid = s["id"]
+        self.assertEqual(run(db.board_role("simon", bid)), "owner")
+        self.assertIsNone(run(db.board_role("franz", bid)))
+        run(db.share_board("simon", bid, "franz"))
+        self.assertEqual(run(db.board_role("franz", bid)), "edit")
+        b = run(db.share_board("simon", bid, "franz", "add"))
+        self.assertEqual(b["shareRoles"], {"franz": "add"})
+        self.assertEqual(run(db.board_role("franz", bid)), "add")
+        run(db.share_board("simon", bid, "franz", "view"))
+        self.assertEqual(run(db.board_role("franz", bid)), "view")
+        lib = run(db.library("franz", None))
+        self.assertEqual(lib["boards"][0]["shareRoles"], {"franz": "view"})
+        stroke = {"id": "x1", "tool": "pen", "color": "#000", "size": 4, "points": [{"x": 1, "y": 1}], "board_id": bid}
+        run(db.insert_stroke(dict(stroke), "simon"))
+        # spaeteres Aendern durch jemand anderen laesst den Autor stehen
+        run(db.insert_stroke(dict(stroke, color="#f00"), "franz"))
+        self.assertEqual(run(db.stroke_owners(["x1", "nope"])), {"x1": "simon"})
+        loaded = run(db.load_all(bid))
+        self.assertEqual(loaded[0]["author"], "simon")
+
+    def test_notebook_centering_moves_strokes_once(self):
+        b = run(db.create_board("simon", "Heft", None))
+        bid = b["id"]
+        nb = {"layout": "vertical", "pages": [
+            {"id": "pq", "paper": "blank", "w": 1123, "h": 794},
+            {"id": "ph", "paper": "graph", "w": 794, "h": 1123},
+        ]}
+        run(db.set_board_notebook(bid, db.clean_notebook(nb)))
+        # Strich auf der Hochformat-Seite (alte Lage: x ab 0, y ab 794 + 48)
+        run(db.insert_stroke({"id": "s1", "tool": "pen", "color": "#000", "size": 3,
+                              "points": [{"x": 100, "y": 900}, {"x": 120, "y": 910}], "board_id": bid}, "simon"))
+        # Strich auf der Querformat-Seite bleibt, wo er ist
+        run(db.insert_stroke({"id": "s2", "tool": "pen", "color": "#000", "size": 3,
+                              "points": [{"x": 500, "y": 300}], "board_id": bid}, "simon"))
+        self.assertTrue(run(db.center_notebook(bid)))
+        board = run(db.get_board(bid))
+        self.assertTrue(board["notebook"].get("centered"))
+        pts = {s["id"]: s["points"] for s in run(db.load_all(bid))}
+        dx = (1123 - 794) / 2
+        self.assertAlmostEqual(pts["s1"][0]["x"], 100 + dx)
+        self.assertAlmostEqual(pts["s1"][0]["y"], 900)
+        self.assertAlmostEqual(pts["s2"][0]["x"], 500)
+        # zweiter Aufruf aendert nichts mehr
+        self.assertFalse(run(db.center_notebook(bid)))
+        self.assertAlmostEqual(run(db.load_all(bid))[0]["points"][0]["x"] if run(db.load_all(bid))[0]["id"] == "s1" else 100 + dx, 100 + dx)
+        rects = db.notebook_page_rects(board["notebook"])
+        self.assertAlmostEqual(rects[1][1], dx)
+
+    def test_strokes_stay_on_board(self):
+        a = run(db.create_board("simon", "A", None))
+        b = run(db.create_board("simon", "B", None))
+        run(
+            db.insert_stroke(
+                {
+                    "id": "s1",
+                    "tool": "pen",
+                    "color": "#000",
+                    "size": 4,
+                    "points": [{"x": 1, "y": 1, "p": 1}],
+                    "board_id": a["id"],
+                }
+            )
+        )
+        self.assertEqual(len(run(db.load_all(a["id"]))), 1)
+        self.assertEqual(len(run(db.load_all(b["id"]))), 0)
+        self.assertTrue(run(db.can_access("simon", a["id"])))
+        self.assertFalse(run(db.can_access("franz", a["id"])))
+
+    def test_owner_strokes_protected_from_guest(self):
+        s = run(db.create_board("simon", "Geteilt", None))
+        bid = s["id"]
+        run(db.share_board("simon", bid, "franz", "edit"))
+        stroke = {
+            "id": "own1",
+            "tool": "pen",
+            "color": "#000",
+            "size": 4,
+            "points": [{"x": 1, "y": 1}],
+            "board_id": bid,
+        }
+        run(db.insert_stroke(dict(stroke), "simon"))
+        guest = {
+            "id": "g1",
+            "tool": "pen",
+            "color": "#0f0",
+            "size": 3,
+            "points": [{"x": 2, "y": 2}],
+            "board_id": bid,
+        }
+        run(db.insert_stroke(dict(guest), "franz"))
+        kept = run(db.filter_owner_protected(bid, "franz", ["own1", "g1", "new"]))
+        self.assertEqual(kept, ["g1", "new"])
+        as_owner = run(db.filter_owner_protected(bid, "simon", ["own1", "g1"]))
+        self.assertEqual(as_owner, ["own1", "g1"])
+
+    def test_client_ids_and_upsert(self):
+        bid = "11111111-1111-4111-8111-111111111111"
+        board = run(db.create_board("simon", "Offline", None, bid))
+        self.assertEqual(board["id"], bid)
+        again = run(db.create_board("simon", "Offline", None, bid))
+        self.assertEqual(again["id"], bid)
+        run(
+            db.insert_stroke(
+                {
+                    "id": "off1",
+                    "tool": "pen",
+                    "color": "#000",
+                    "size": 3,
+                    "points": [{"x": 0, "y": 0, "p": 1}],
+                    "board_id": bid,
+                }
+            )
+        )
+        self.assertEqual(len(run(db.load_all(bid))), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class MediaLibraryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_newest_first_with_person_name(self):
+        a = "11111111-1111-4111-8111-111111111111"
+        b = "22222222-2222-4222-8222-222222222222"
+        run(db.media_library_add(a, "franz", "Tafel.jpg", 800, 600))
+        run(db.media_library_add(b, "simon", "Buch.jpg", 600, 900))
+        items = run(db.media_library_list(10))
+        self.assertEqual([i["id"] for i in items], [b, a])
+        self.assertEqual(items[1]["personId"], "franz")
+        self.assertEqual(items[1]["w"], 800)
+        self.assertTrue(items[0]["personName"])
+
+    def test_reinsert_moves_up_and_keeps_uploader(self):
+        a = "11111111-1111-4111-8111-111111111111"
+        b = "22222222-2222-4222-8222-222222222222"
+        run(db.media_library_add(a, "franz", "Tafel.jpg", 800, 600))
+        run(db.media_library_add(b, "simon", "Buch.jpg", 600, 900))
+        run(db.media_library_add(a, "simon", "Tafel.jpg", 800, 600))
+        items = run(db.media_library_list(10))
+        self.assertEqual([i["id"] for i in items], [a, b])
+        self.assertEqual(items[0]["personId"], "franz")
+
+
+class CompactPointsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        db.use_database(str(Path(self.tmp.name) / "t.db"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_points_are_rounded_and_compact(self):
+        b = run(db.create_board("simon", "R", None))
+        st = {"id": "s1", "tool": "pen", "color": "#000", "size": 3, "board_id": b["id"],
+              "points": [{"x": -367.4727053967903, "y": 421.7515025264502, "p": 0.07999999821186066}, {"x": 5, "y": 6, "p": 1, "text": "a"}]}
+        run(db.insert_stroke(st, "simon"))
+        raw = db._conn.execute("SELECT points FROM strokes WHERE id = 's1'").fetchone()[0]
+        self.assertEqual(raw, '[{"x":-367.47,"y":421.75,"p":0.08},{"x":5,"y":6,"p":1,"text":"a"}]')
+        loaded = run(db.load_all(b["id"]))
+        self.assertEqual(loaded[0]["points"][0], {"x": -367.47, "y": 421.75, "p": 0.08})
+
+    def test_migration_rewrites_old_rows_once(self):
+        b = run(db.create_board("simon", "R", None))
+        db._conn.execute("INSERT INTO strokes (id, tool, color, size, points, created_at, board_id) VALUES (?,?,?,?,?,?,?)",
+                         ("old", "pen", "#000", 3, '[{"x": 1.23456789, "y": 2.0, "p": 0.5}]', 1.0, b["id"]))
+        db._conn.execute("PRAGMA user_version = 0")
+        db._migrate_compact_points_sync()
+        raw = db._conn.execute("SELECT points FROM strokes WHERE id = 'old'").fetchone()[0]
+        self.assertEqual(raw, '[{"x":1.23,"y":2.0,"p":0.5}]')
+        self.assertEqual(db._conn.execute("PRAGMA user_version").fetchone()[0], 1)

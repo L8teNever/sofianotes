@@ -1,9 +1,31 @@
 services:
   sofianotes:
-    build: .
-    container_name: sofianotes
+    build:
+      context: .
+      args:
+        # Leer = Dockerfile nimmt git HEAD aus dem Build-Kontext (.git).
+        # Ueberschreiben: GIT_COMMIT=$(git rev-parse --short HEAD) docker compose build
+        GIT_COMMIT: ${GIT_COMMIT:-}
+        # von deploy.sh gesetzt: Version automatisch hochgezaehlt
+        APP_VERSION: ${APP_VERSION:-}
+    # Pro Instanz per .env ueberschreibbar (z.B. CONTAINER_NAME=sofianotes-multiboard),
+    # damit mehrere Stacks aus demselben Repo nebeneinander laufen koennen.
+    container_name: ${CONTAINER_NAME:-sofianotes}
     restart: unless-stopped
     ports:
       - "${BIND_HOST:-127.0.0.1}:${BIND_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
+    environment:
+      GIT_COMMIT: ${GIT_COMMIT:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_OCR_MODEL: ${CLOUDFLARE_OCR_MODEL:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      DEV_BYPASS_EMAIL: ${DEV_BYPASS_EMAIL:-}
+      # Abgleich mit der Sofia-App (Personen, Faecher, Stundenplan) - leer = aus
+      SOFIA_API_BASE: ${SOFIA_API_BASE:-}
+      SOFIA_TOKEN_FILE: ${SOFIA_TOKEN_FILE:-}
+      SOFIA_INTERNAL_TOKEN: ${SOFIA_INTERNAL_TOKEN:-}
+      SOFIA_ACT_AS: ${SOFIA_ACT_AS:-}
+      SOFIA_SYNC_SECONDS: ${SOFIA_SYNC_SECONDS:-120}

@@ -5,4 +5,11 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+data/*.goodnotes
+data/*.pdf
+data/*.tmp
+data/media/*
+!data/media/.gitkeep
 .env
+data/files/*
+data/client-log.jsonl
