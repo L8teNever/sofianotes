@@ -4,50 +4,1523 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>sofianotes</title>
-<meta name="theme-color" content="#ece9e3" />
+<meta name="theme-color" content="#e8e6ed" />
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#e8e6ed" />
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#e8e6ed" />
 <link rel="manifest" href="manifest.json" />
-<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-<link rel="icon" href="icons/favicon.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=__BUILD__" />
+<link rel="icon" href="icons/favicon.png?v=__BUILD__" sizes="32x32" />
+<link rel="icon" href="icons/icon.svg?v=__BUILD__" type="image/svg+xml" />
+<meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="sofianotes" />
-<link rel="stylesheet" href="style.css?v=2" />
+<script>
+  (function () {
+    var standalone =
+      window.navigator.standalone === true ||
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.matchMedia("(display-mode: fullscreen)").matches ||
+      window.matchMedia("(display-mode: minimal-ui)").matches;
+    if (standalone) document.documentElement.classList.add("pwa-standalone");
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem("sofianotes-theme") === "dark" ? "dark" : "light";
+    } catch (err) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,500,0,0&icon_names=abc,add,add_box,add_circle,add_photo_alternate,add_row_above,add_row_below,arrow_back,arrow_downward,arrow_forward,arrow_upward,assignment,attach_file,auto_awesome,auto_fix_high,auto_stories,backspace,beach_access,block,bookmark,bookmark_add,brush,calculate,calendar_month,celebration,change_history,chat,check,check_box,check_box_outline_blank,check_circle,chevron_left,chevron_right,circle,close,close_fullscreen,cloud_done,cloud_off,cloud_upload,content_copy,content_cut,content_paste,create_new_folder,crop,crop_portrait,crop_square,dark_mode,delete,delete_sweep,description,dock_to_left,dock_to_right,document_scanner,done_all,download,drive_file_move,east,edit,edit_note,expand_more,fit_screen,flashlight_on,flip_to_back,flip_to_front,folder,folder_open,format_bold,format_italic,format_strikethrough,format_underlined,grain,grid_4x4,group,hide_image,history,home,horizontal_rule,image,inbox,ink_eraser,ink_highlighter,ink_pen,ios_share,keyboard_return,lasso_select,layers,line_end,line_start,logout,menu_book,more_horiz,more_vert,my_location,note_add,open_in_full,open_with,palette,person,photo_camera,picture_as_pdf,picture_in_picture,progress_activity,radio_button_unchecked,rectangle,redo,refresh,remove,remove_done,reorder,reply,restart_alt,rotate_right,save,school,send,settings,shapes,share,splitscreen,square_foot,star,straighten,swap_horiz,swap_vert,sync,sync_problem,table,table_rows,text_decrease,text_fields,text_increase,timer,touch_app,trending_flat,tune,undo,upload_file,vertical_split,view_agenda,view_column,view_sidebar,visibility,visibility_off,wallpaper,wifi,zoom_in,zoom_in_map,zoom_out&display=block" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.js" defer></script>
+<link rel="stylesheet" href="style.css?v=__BUILD__" />
+<script>
+  window.__APP_VERSION__ = "%%APP_VERSION%%";
+  window.__BUILD_TS__ = "__BUILD__";
+</script>
+<script>
+  (function () {
+    var mine = String(window.__APP_VERSION__ || "");
+    if (!mine || mine.indexOf("%") >= 0) return;
+    fetch("/version.json", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (info) {
+        if (!info || !info.version || String(info.version) === mine) return;
+        var remote = String(info.version);
+        try {
+          if (sessionStorage.getItem("sofianotes-ver-reload") === remote) return;
+          sessionStorage.setItem("sofianotes-ver-reload", remote);
+        } catch (err) { return; }
+        location.reload();
+      })
+      .catch(function () {});
+  })();
+</script>
 </head>
 <body>
+<div id="update-banner" class="update-banner hidden" role="status">
+  <span>Neue Version bereit</span>
+  <button type="button" id="btn-update-now">Jetzt laden</button>
+  <button type="button" id="btn-update-later" class="update-later">Später</button>
+</div>
 <canvas id="board"></canvas>
+<div id="ink-overlay"></div>
 <div id="eraser-cursor"></div>
-
-<div id="status"><span class="dot"></span><span id="status-text">Verbinde…</span></div>
-<div id="zoom-indicator">100%</div>
-
-<div id="toolbar">
-  <button id="undo-btn" class="tool-btn" title="Rückgängig (Strg/Cmd+Z)">↩️</button>
-  <button id="redo-btn" class="tool-btn" title="Wiederholen (Strg/Cmd+Shift+Z)">↪️</button>
-  <div class="divider"></div>
-  <button class="tool-btn active" data-tool="pen" title="Stift">✏️</button>
-  <button class="tool-btn" data-tool="marker" title="Textmarker">🖍️</button>
-  <button class="tool-btn" data-tool="eraser" title="Radiergummi">🧹</button>
-  <button class="tool-btn" data-tool="select" title="Auswahl (Lasso) — markieren &amp; verschieben">👆</button>
-  <div class="divider"></div>
-  <button id="shape-toggle" class="tool-btn active" title="Formen-Erkennung (Kreis/Rechteck/Dreieck/Linie beim Halten erkennen)">🔷</button>
-  <button id="finger-draw-toggle" class="tool-btn" title="Mit dem Finger zeichnen erlauben (sonst nur Pencil/Maus, Finger = Navigation)">🖐️</button>
-  <div class="divider"></div>
-  <button class="swatch active" style="background:#1c1c1e" data-color="#1c1c1e"></button>
-  <button class="swatch" style="background:#e63946" data-color="#e63946"></button>
-  <button class="swatch" style="background:#2a6f97" data-color="#2a6f97"></button>
-  <button class="swatch" style="background:#2a9d59" data-color="#2a9d59"></button>
-  <button class="swatch" style="background:#f4a300" data-color="#f4a300"></button>
-  <div class="divider"></div>
-  <input type="range" id="size-slider" min="1" max="40" value="4" />
+<!-- zweite Leiste: erscheint, solange Lineal/Geodreieck an ist -->
+<div id="ruler-bar" class="ruler-bar hidden" role="toolbar" aria-label="Lineal">
+  <div class="tbar-seg" role="group" aria-label="Art">
+    <button type="button" class="tool-btn kind-btn active" data-kind="ruler" title="Lineal"><span class="material-symbols-rounded">straighten</span></button>
+    <button type="button" class="tool-btn kind-btn" data-kind="triangle" title="Geodreieck"><span class="material-symbols-rounded">square_foot</span></button>
+  </div>
+  <div class="tbar-seg" role="group" aria-label="Winkel">
+    <button type="button" class="tool-btn angle-btn" data-angle="0" title="Waagrecht"><span class="angle-label">0°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="30"><span class="angle-label">30°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="45"><span class="angle-label">45°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="60"><span class="angle-label">60°</span></button>
+    <button type="button" class="tool-btn angle-btn" data-angle="90" title="Senkrecht"><span class="angle-label">90°</span></button>
+  </div>
+  <label class="angle-field" title="Winkel eintippen"><input id="ruler-bar-angle" type="number" inputmode="decimal" min="0" max="359" step="1" value="0" /><span>°</span></label>
+  <button type="button" id="ruler-bar-close" class="tool-btn tbar-round" title="Lineal ausblenden"><span class="material-symbols-rounded">close</span></button>
+</div>
+<input id="ruler-angle-input" class="ruler-angle-input hidden" type="number" inputmode="decimal" min="0" max="359" step="1" aria-label="Winkel in Grad" />
+<div id="zoom-box" class="hidden">
+  <div id="zoom-grip" class="zoom-handle" title="Rahmen verschieben"><span class="material-symbols-rounded">open_with</span></div>
+  <div id="zoom-margin-left" class="zoom-margin" title="Linker Rand"></div>
+  <div id="zoom-margin-right" class="zoom-margin" title="Rechter Rand"></div>
+</div>
+<div id="zoom-pane" class="zoom-pane chrome-side hidden" title="Leiste ziehen, um die Schreibfläche zu verschieben">
+  <div id="zoom-pane-chrome" class="zoom-pane-chrome">
+    <div class="zoom-pane-controls">
+      <button type="button" id="btn-zw-back" title="Zurück"><span class="material-symbols-rounded">arrow_back</span></button>
+      <button type="button" id="btn-zw-fwd" title="Weiter"><span class="material-symbols-rounded">arrow_forward</span></button>
+      <button type="button" id="btn-zw-return" title="Neue Zeile"><span class="material-symbols-rounded">keyboard_return</span></button>
+      <button type="button" id="btn-zw-in" title="Stärker vergrößern"><span class="material-symbols-rounded">add</span></button>
+      <button type="button" id="btn-zw-out" title="Weniger vergrößern"><span class="material-symbols-rounded">remove</span></button>
+      <button type="button" id="btn-zw-media" title="Bilder im Zoom-Fenster ausblenden"><span class="material-symbols-rounded">image</span></button>
+      <button type="button" id="btn-zw-pen" title="Stiftleiste hier"><span class="material-symbols-rounded">ink_pen</span></button>
+      <button type="button" id="btn-zw-close" title="Zoom-Fenster schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+  </div>
+  <canvas id="zoom-canvas"></canvas>
+</div>
+<div id="te-move" class="te-move hidden" title="Textfeld verschieben"><span class="material-symbols-rounded">open_with</span></div>
+<div id="te-handle-l" class="te-handle hidden" title="Breite ziehen"></div>
+<div id="te-handle-r" class="te-handle hidden" title="Breite ziehen"></div>
+<div id="text-editor" class="text-editor hidden" contenteditable="true" spellcheck="true" autocapitalize="sentences" role="textbox" aria-multiline="true" aria-label="Text"></div>
+<div id="text-format-bar" class="text-format-bar hidden" role="toolbar" aria-label="Textformat">
+  <button type="button" data-cmd="bold" title="Fett (Strg/Cmd+B)"><span class="material-symbols-rounded">format_bold</span></button>
+  <button type="button" data-cmd="italic" title="Kursiv (Strg/Cmd+I)"><span class="material-symbols-rounded">format_italic</span></button>
+  <button type="button" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
+  <button type="button" data-cmd="underline" title="Unterstrichen (Strg/Cmd+U)"><span class="material-symbols-rounded">format_underlined</span></button>
+  <span class="fmt-divider"></span>
+  <button type="button" data-size="down" title="Schrift kleiner"><span class="material-symbols-rounded">text_decrease</span></button>
+  <button type="button" data-size="up" title="Schrift größer"><span class="material-symbols-rounded">text_increase</span></button>
+</div>
+<div id="selection-toolbar" class="selection-toolbar hidden">
+  <button type="button" id="btn-sel-ki" title="Nur die Auswahl mit KI lesen">
+    <span class="material-symbols-rounded">auto_awesome</span>
+    KI
+  </button>
+  <button type="button" id="btn-sel-copy" title="Kopieren">
+    <span class="material-symbols-rounded">content_copy</span>
+  </button>
+  <button type="button" id="btn-sel-cut" title="Ausschneiden">
+    <span class="material-symbols-rounded">content_cut</span>
+  </button>
+  <button type="button" id="btn-sel-paste" class="hidden" title="Einfügen">
+    <span class="material-symbols-rounded">content_paste</span>
+  </button>
+  <button type="button" id="btn-sel-layer" title="Ebene: nach vorne / nach hinten">
+    <span class="material-symbols-rounded">layers</span>
+  </button>
+  <button type="button" id="btn-sel-rotate" title="Um 90° drehen">
+    <span class="material-symbols-rounded">rotate_right</span>
+  </button>
+  <button type="button" id="btn-sel-delete" title="Löschen (Entf)">
+    <span class="material-symbols-rounded">delete</span>
+  </button>
+  <button type="button" class="txt-btn hidden" data-flag="b" title="Fett"><span class="material-symbols-rounded">format_bold</span></button>
+  <button type="button" class="txt-btn hidden" data-flag="i" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
+  <button type="button" class="txt-btn hidden" data-flag="s" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
+  <button type="button" class="txt-btn hidden" data-flag="u" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
+  <button type="button" id="btn-tbl-edit" class="tbl-btn hidden" title="Tabelle bearbeiten: Spalten, Zeilen, Breiten">
+    <span class="material-symbols-rounded">table</span>
+    Tabelle
+  </button>
+  <button type="button" id="btn-media-crop" class="hidden" title="Zuschneiden">
+    <span class="material-symbols-rounded">crop</span>
+    Zuschneiden
+  </button>
+  <button type="button" id="btn-media-crop-done" class="hidden" title="Zuschnitt übernehmen">
+    <span class="material-symbols-rounded">check</span>
+    Fertig
+  </button>
+  <button type="button" id="btn-media-crop-cancel" class="hidden" title="Abbrechen">
+    <span class="material-symbols-rounded">close</span>
+    Abbrechen
+  </button>
+</div>
+<div id="tb-more-menu" class="lib-add-menu hidden"></div>
+<div id="layer-menu" class="lib-add-menu hidden layer-menu">
+  <button type="button" class="lib-add-opt" data-layer="front"><span class="material-symbols-rounded">flip_to_front</span>In den Vordergrund</button>
+  <button type="button" class="lib-add-opt" data-layer="up"><span class="material-symbols-rounded">arrow_upward</span>Eine Ebene nach vorne</button>
+  <button type="button" class="lib-add-opt" data-layer="down"><span class="material-symbols-rounded">arrow_downward</span>Eine Ebene nach hinten</button>
+  <button type="button" class="lib-add-opt" data-layer="back"><span class="material-symbols-rounded">flip_to_back</span>In den Hintergrund</button>
+</div>
+<input id="import-file" type="file" accept="image/*,application/pdf,.pdf" multiple hidden />
+<div id="erase-all-menu" class="erase-all-menu hidden">
+  <button type="button" id="btn-erase-all-here">
+    <span class="material-symbols-rounded">delete_sweep</span>
+    Alle Striche löschen
+  </button>
+</div>
+<div id="paste-menu" class="erase-all-menu paste-menu hidden">
+  <button type="button" id="btn-paste-here">
+    <span class="material-symbols-rounded">content_paste</span>
+    Einfügen
+  </button>
 </div>
 
-<script src="app.js?v=2"></script>
+<div id="guide-top" class="drag-guide"></div>
+<div id="guide-bottom" class="drag-guide"></div>
+<div id="guide-left" class="drag-guide"></div>
+<div id="guide-right" class="drag-guide"></div>
+<div id="guide-tl" class="drag-guide guide-corner"></div>
+<div id="guide-tr" class="drag-guide guide-corner"></div>
+<div id="guide-bl" class="drag-guide guide-corner"></div>
+<div id="guide-br" class="drag-guide guide-corner"></div>
+
+<!-- eigene kleine Leiste direkt neben der Kopfleiste: Seiten, geteilte Ansicht, Schau-Ansicht -->
+<!-- ganz links: grosser Zurueck-Pfeil (zurueck zur Ordner-Ansicht) -->
+<div id="top-back-bar" class="top-back-bar">
+  <button type="button" id="btn-back" class="icon-btn back-icon" title="Dokumente" aria-label="Dokumente">
+    <span class="material-symbols-rounded">arrow_back</span>
+    <span id="btn-back-label" hidden>Dokumente</span>
+  </button>
+</div>
+<!-- Schliessen der Seiten-Leiste: eigener runder Knopf am rechten Rand der Leiste -->
+<div id="top-close-bar" class="top-back-bar top-close-bar">
+  <!-- nur im Tab "Auswahl": alle auswaehlen und die Auswahl als PDF exportieren -->
+  <button type="button" id="pages-select-all" class="tsel-all" title="Alle Seiten auswählen"><span class="material-symbols-rounded">done_all</span><span class="tsel-all-text">Alle</span></button>
+  <button type="button" id="pages-select-pdf" class="tsel-export" title="Ausgewählte Seiten als PDF exportieren" disabled><span class="material-symbols-rounded">ios_share</span></button>
+  <button type="button" id="btn-pages-close" class="icon-btn" title="Seiten-Leiste schließen">
+    <span class="material-symbols-rounded">close</span>
+  </button>
+</div>
+<div id="top-side-bar" class="top-side-bar">
+  <button type="button" id="btn-board-open" class="icon-btn hidden" title="Board öffnen">
+    <span class="material-symbols-rounded">open_in_full</span>
+  </button>
+  <span class="tsb-title">Seiten</span>
+
+  <button type="button" id="btn-pages" class="icon-btn hidden" title="Seiten">
+    <span class="material-symbols-rounded">view_sidebar</span>
+  </button>
+  <button type="button" id="btn-split" class="icon-btn" title="Geteilte Ansicht: zwei Blätter oder zwei Stellen nebeneinander">
+    <span class="material-symbols-rounded">vertical_split</span>
+  </button>
+</div>
+
+<!-- ganz rechts oben: Einstellungen & Menue (Teilen, Exportieren, Verlauf ...) -->
+<div id="top-menu-bar" class="top-back-bar top-menu-bar">
+  <!-- Countdown der laufenden Schulstunde; antippen klappt Details auf -->
+  <button type="button" id="btn-school" class="icon-btn school-btn hidden" title="Schulstunde: Restzeit · antippen für mehr" aria-expanded="false">
+    <span id="school-btn-time" class="school-btn-time">–</span>
+  </button>
+  <div class="canvas-menu-wrap">
+    <button type="button" id="btn-canvas-menu" class="icon-btn" title="Einstellungen und mehr">
+      <span class="material-symbols-rounded">settings</span>
+    </button>
+    <!-- gleicher Stil wie das Seiten-Menue (GoodNotes): grosse Zeilen, Gruppen, Blatt verlassen rot -->
+    <div id="canvas-menu" class="lib-add-menu page-menu page-menu-side hidden">
+      <button type="button" id="canvas-menu-share" class="lib-add-opt page-menu-item first">
+        <span class="material-symbols-rounded">share</span><span class="pmi-label">Teilen mit …</span>
+      </button>
+      <button type="button" id="canvas-menu-export" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">download</span><span class="pmi-label">Exportieren …</span>
+      </button>
+      <button type="button" id="canvas-menu-history" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">history</span><span class="pmi-label">Versionsverlauf</span>
+      </button>
+      <div class="page-menu-gap"></div>
+      <button type="button" id="canvas-menu-settings" class="lib-add-opt page-menu-item first">
+        <span class="material-symbols-rounded">tune</span><span class="pmi-label">Einstellungen</span>
+      </button>
+      <button type="button" id="canvas-menu-timetable" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">calendar_month</span><span class="pmi-label">Stundenplan</span>
+      </button>
+      <button type="button" id="canvas-menu-chat" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">chat</span><span class="pmi-label">Chats</span><span id="canvas-menu-chat-badge" class="chat-badge hidden"></span>
+      </button>
+      <button type="button" id="canvas-menu-friends" class="lib-add-opt page-menu-item">
+        <span class="material-symbols-rounded">group</span><span class="pmi-label">Freunde</span>
+      </button>
+      <button type="button" id="canvas-menu-find" class="lib-add-opt page-menu-item hidden">
+        <span class="material-symbols-rounded">my_location</span><span class="pmi-label">Zurückfinden</span>
+      </button>
+      <div id="canvas-menu-leave-gap" class="page-menu-gap hidden"></div>
+      <button type="button" id="canvas-menu-leave" class="lib-add-opt page-menu-item first danger hidden">
+        <span class="material-symbols-rounded">logout</span><span class="pmi-label">Blatt verlassen</span>
+      </button>
+    </div>
+    <div id="canvas-share-submenu" class="lib-add-menu hidden"></div>
+  </div>
+</div>
+
+<header id="top-filename-bar" title="Leiste ziehen oder lange drücken, dann an einen Rand ziehen">
+  <button type="button" id="btn-open-library" class="file-icon" title="Blätter und Ordner">
+    <span class="material-symbols-rounded">folder</span>
+  </button>
+  <input id="canvas-filename" type="text" value="Unbenannte Skizze" title="Klicken zum Umbenennen" maxlength="80" autocomplete="off" autocorrect="off" spellcheck="false" name="board-title-input" />
+  <div class="bar-divider"></div>
+  <button type="button" id="status" class="hidden" title="Offline – antippen, um neu zu verbinden"><span class="material-symbols-rounded status-ico">cloud_off</span><span id="status-text">Offline</span></button>
+  <div class="bar-divider"></div>
+  <!-- Modus: bestimmt, was die Werkzeugleiste unten zeigt -->
+  <div id="mode-switch" class="mode-switch" role="tablist" aria-label="Modus">
+    <button type="button" class="icon-btn mode-btn active" data-mode="pen" title="Stift: Stift, Marker, Radierer, Farben"><span class="material-symbols-rounded">ink_pen</span></button>
+    <button type="button" class="icon-btn mode-btn" data-mode="eraser" title="Radierer: Größe, alle Striche löschen"><span class="material-symbols-rounded">ink_eraser</span></button>
+    <button type="button" class="icon-btn mode-btn" data-mode="text" title="Text: Textfelder, Tabellen, Größe, Fett/Kursiv/…"><span class="material-symbols-rounded">text_fields</span></button>
+    <button type="button" class="icon-btn mode-btn" data-mode="lasso" title="Lasso: auswählen, verschieben, umfärben"><span class="material-symbols-rounded">lasso_select</span></button>
+  </div>
+  <div class="bar-divider"></div>
+  <button id="btn-ruler" class="icon-btn" type="button" title="Lineal an/aus (1 Finger schieben, 2 Finger drehen; Stift an der Kante zieht gerade)">
+    <span class="material-symbols-rounded">straighten</span>
+  </button>
+  <button id="btn-laser" class="icon-btn" type="button" title="Laserpointer: nur Stift oder Maus, Finger verschieben und zoomen">
+    <span class="material-symbols-rounded">flashlight_on</span>
+  </button>
+  <div class="insert-menu-wrap objects-menu-wrap">
+    <button id="btn-objects" class="icon-btn" type="button" title="Formen: Rechteck, Linie, Kreis, Dreieck, Pfeil">
+      <span class="material-symbols-rounded">shapes</span>
+    </button>
+  </div>
+  <button id="btn-zoom-window" class="icon-btn" type="button" title="Zoom-Fenster: groß schreiben, klein aufs Blatt">
+    <span class="material-symbols-rounded">zoom_in_map</span>
+  </button>
+  <button id="btn-auto-advance" class="icon-btn" type="button" title="Auto-Weiter: normal schreiben, am rechten Rand rutscht das Blatt weiter">
+    <span class="material-symbols-rounded">east</span>
+  </button>
+  <button id="btn-calc" class="icon-btn" type="button" title="Rechner &amp; Umrechner">
+    <span class="material-symbols-rounded">calculate</span>
+  </button>
+  <button id="btn-hw-panel" class="icon-btn hidden" type="button" title="Aufgabe &amp; Material: Bilder, Buchseiten, Fotos">
+    <span class="material-symbols-rounded">assignment</span>
+  </button>
+  <div class="insert-menu-wrap">
+    <button id="btn-insert" class="icon-btn" type="button" title="Einfügen: Tabelle, Bild, PDF">
+      <span class="material-symbols-rounded">add_box</span>
+    </button>
+    <div id="insert-menu" class="lib-add-menu insert-menu hidden">
+      <button type="button" id="insert-table" class="lib-add-opt">
+        <span class="material-symbols-rounded">table</span>
+        Tabelle
+      </button>
+      <button type="button" id="insert-image" class="lib-add-opt">
+        <span class="material-symbols-rounded">add_photo_alternate</span>
+        Bild
+      </button>
+      <button type="button" id="insert-pdf" class="lib-add-opt">
+        <span class="material-symbols-rounded">description</span>
+        PDF / Datei
+      </button>
+    </div>
+  </div>
+  <div id="tb-more-wrap" class="tb-more-wrap tb-off">
+    <button type="button" id="btn-tb-more" class="icon-btn" title="Weitere Werkzeuge">
+      <span class="material-symbols-rounded">expand_more</span>
+    </button>
+  </div>
+</header>
+
+<aside id="undo-redo-dock" class="corner-top-left" title="Leiste ziehen oder lange drücken, dann in eine Ecke ziehen">
+  <button id="undo-btn" class="icon-btn" title="Rückgängig (Strg/Cmd+Z)" disabled>
+    <span class="material-symbols-rounded">undo</span>
+  </button>
+  <button id="redo-btn" class="icon-btn" title="Wiederholen (Strg/Cmd+Shift+Z)" disabled>
+    <span class="material-symbols-rounded">redo</span>
+  </button>
+  <div class="bar-divider"></div>
+  <button type="button" id="btn-view-only" class="icon-btn" title="Schau-Ansicht: nur ansehen, nichts ändern">
+    <span class="material-symbols-rounded">visibility</span>
+  </button>
+  <div class="zoom-wrap hidden">
+    <button id="btn-zoom-toggle" class="icon-btn" title="Zoom">
+      <span class="material-symbols-rounded">zoom_in</span>
+    </button>
+    <div id="zoom-popover" class="popover hidden">
+      <div class="popover-head">
+        <span>Zoom</span>
+        <span id="zoom-indicator" class="chip">100%</span>
+      </div>
+      <div class="zoom-row">
+        <button id="btn-zoom-out" class="icon-btn" title="Herauszoomen"><span class="material-symbols-rounded">remove</span></button>
+        <button id="btn-zoom-reset" class="text-btn" title="100%">100%</button>
+        <button id="btn-zoom-in" class="icon-btn" title="Hereinzoomen"><span class="material-symbols-rounded">add</span></button>
+      </div>
+      <div class="zoom-presets">
+        <button class="btn-zoom-preset" data-zoom="75">75%</button>
+        <button class="btn-zoom-preset" data-zoom="100">100%</button>
+        <button class="btn-zoom-preset" data-zoom="150">150%</button>
+      </div>
+      <div class="popover-label">Personen</div>
+      <div id="zoom-people" class="zoom-people">
+        <div class="zoom-people-empty">Niemand sonst auf dem Blatt</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<nav id="toolbar" class="dock-bottom" data-mode="pen" title="Leiste ziehen oder lange drücken, dann an einen Rand ziehen">
+  <div class="tools-container">
+    <div class="tbar-seg tool-seg" data-modes="pen">
+    <div class="tool-wrapper" data-modes="pen">
+      <button class="tool-btn active" data-tool="pen" title="Stift">
+        <span class="material-symbols-rounded">ink_pen</span>
+      </button>
+    </div>
+    <div class="tool-wrapper" data-modes="pen">
+      <button class="tool-btn" data-tool="marker" title="Textmarker">
+        <span class="material-symbols-rounded">ink_highlighter</span>
+      </button>
+    </div>
+    </div>
+    <div class="tbar-seg tool-seg" data-modes="eraser">
+    <div class="tool-wrapper" data-modes="eraser">
+      <button class="tool-btn" data-tool="eraser" title="Radiergummi">
+        <span class="material-symbols-rounded">ink_eraser</span>
+      </button>
+    </div>
+    </div>
+    <div class="tbar-seg tool-seg" data-modes="lasso">
+    <div class="tool-wrapper" data-modes="lasso">
+      <button class="tool-btn" data-tool="select" title="Auswahl (Lasso)">
+        <span class="material-symbols-rounded">lasso_select</span>
+      </button>
+    </div>
+    </div>
+    <div class="mode-group" data-modes="text">
+      <button type="button" id="btn-text-edit-only" class="tool-btn tbar-round" title="Nur bearbeiten: Antippen öffnet vorhandene Textfelder, legt aber kein neues an" aria-pressed="false">
+        <span class="material-symbols-rounded">touch_app</span>
+      </button>
+    </div>
+    <div class="tbar-seg tool-seg" data-modes="text">
+    <div class="tool-wrapper" data-modes="text">
+      <button class="tool-btn" data-tool="text" title="Text (tippen = Textfeld, ziehen = Textfeld mit fester Breite)">
+        <span class="material-symbols-rounded">text_fields</span>
+      </button>
+    </div>
+    </div>
+    <div class="mode-group text-bar" data-modes="text">
+      <div class="tbar-seg" role="group" aria-label="Schriftgröße">
+        <button type="button" class="tool-btn size-btn" data-text-size="18" title="Kleine Schrift"><span class="size-a" style="font-size:12px">A</span></button>
+        <button type="button" class="tool-btn size-btn" data-text-size="28" title="Mittlere Schrift"><span class="size-a" style="font-size:16px">A</span></button>
+        <button type="button" class="tool-btn size-btn" data-text-size="44" title="Große Schrift"><span class="size-a" style="font-size:21px">A</span></button>
+      </div>
+      <div class="tbar-seg" role="group" aria-label="Format">
+        <button type="button" class="tool-btn fmt-btn" data-cmd="bold" title="Fett"><span class="material-symbols-rounded">format_bold</span></button>
+        <button type="button" class="tool-btn fmt-btn" data-cmd="italic" title="Kursiv"><span class="material-symbols-rounded">format_italic</span></button>
+        <button type="button" class="tool-btn fmt-btn" data-cmd="strikeThrough" title="Durchgestrichen"><span class="material-symbols-rounded">format_strikethrough</span></button>
+        <button type="button" class="tool-btn fmt-btn" data-cmd="underline" title="Unterstrichen"><span class="material-symbols-rounded">format_underlined</span></button>
+      </div>
+      <button type="button" id="btn-text-color" class="tool-btn text-color-btn tbar-round" title="Textfarbe" aria-haspopup="true" aria-expanded="false">
+        <span class="text-color-flag" aria-hidden="true"></span>
+      </button>
+      <button id="btn-insert-table" class="tool-btn tbar-round" type="button" title="Tabelle einfügen"><span class="material-symbols-rounded">table</span></button>
+    </div>
+    <div class="mode-group tbar-group" data-modes="shapes" id="shape-tools">
+      <div class="tbar-seg" role="group" aria-label="Form">
+      <button type="button" class="tool-btn kind-btn" data-obj="rect" title="Rechteck"><span class="material-symbols-rounded">rectangle</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="line" title="Gerade Linie"><span class="material-symbols-rounded">horizontal_rule</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="circle" title="Kreis"><span class="material-symbols-rounded">circle</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="triangle" title="Dreieck"><span class="material-symbols-rounded">change_history</span></button>
+      <button type="button" class="tool-btn kind-btn" data-obj="arrow" title="Pfeil"><span class="material-symbols-rounded">east</span></button>
+      </div>
+      <span id="obj-dash" class="tbar-seg">
+        <button type="button" class="tool-btn" data-dash="0" title="Durchgezogen"><span class="angle-label">—</span></button>
+        <button type="button" class="tool-btn" data-dash="1" title="Gestrichelt"><span class="angle-label">- -</span></button>
+      </span>
+      <span id="obj-arrow" class="obj-heads tbar-seg">
+        <button type="button" class="tool-btn" data-heads="end" title="Pfeilspitze am Ende"><span class="material-symbols-rounded">line_end</span></button>
+        <button type="button" class="tool-btn" data-heads="start" title="Pfeilspitze am Anfang"><span class="material-symbols-rounded">line_start</span></button>
+        <button type="button" class="tool-btn" data-heads="both" title="Beide Enden"><span class="material-symbols-rounded">swap_horiz</span></button>
+      </span>
+      <div class="tbar-seg" role="group" aria-label="Strichstärke">
+      <button type="button" class="tool-btn stroke-size-btn" data-stroke="3" title="Dünner Strich"><span class="stroke-dot" style="width:4px;height:4px"></span></button>
+      <button type="button" class="tool-btn stroke-size-btn" data-stroke="8" title="Mittlerer Strich"><span class="stroke-dot" style="width:8px;height:8px"></span></button>
+      <button type="button" class="tool-btn stroke-size-btn" data-stroke="20" title="Dicker Strich"><span class="stroke-dot" style="width:14px;height:14px"></span></button>
+      </div>
+    </div>
+    <div class="mode-group tbar-group" data-modes="eraser">
+      <div class="tbar-seg" role="group" aria-label="Radierer-Größe">
+      <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="12" title="Kleiner Radierer"><span class="eraser-dot" style="width:8px;height:8px"></span></button>
+      <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="28" title="Mittlerer Radierer"><span class="eraser-dot" style="width:14px;height:14px"></span></button>
+      <button type="button" class="tool-btn eraser-size-btn" data-eraser-size="55" title="Großer Radierer"><span class="eraser-dot" style="width:21px;height:21px"></span></button>
+      </div>
+      <button type="button" id="btn-bar-erase-all" class="tool-btn tbar-round tbar-danger" title="Alle Striche löschen (Bilder, Texte und Tabellen bleiben)"><span class="material-symbols-rounded">delete_sweep</span></button>
+    </div>
+
+    <div id="tool-popover" class="tool-popover hidden">
+      <div class="popover-head">
+        <span id="popover-tool-title">Stift Stärke</span>
+        <span id="popover-size-text" class="chip">6 px</span>
+      </div>
+      <div class="size-stepper">
+        <button type="button" id="size-minus" class="size-step" title="Dünner" aria-label="Dünner"><span class="material-symbols-rounded">remove</span></button>
+        <div class="size-stage"><span id="popover-brush-preview"></span></div>
+        <button type="button" id="size-plus" class="size-step" title="Dicker" aria-label="Dicker"><span class="material-symbols-rounded">add</span></button>
+      </div>
+      <input id="size-slider" class="size-slider" type="range" min="1" max="45" value="6" />
+      <div class="presets-head"><span>Eigene Stärken</span><small>lange drücken = speichern</small></div>
+      <div id="popover-presets" class="presets"></div>
+      <div id="eraser-clear-row" class="eraser-clear-row hidden">
+        <button id="btn-erase-all" type="button" class="erase-all-btn" title="Alle Striche löschen (Bilder, Texte und Tabellen bleiben)">
+          <span class="material-symbols-rounded">delete_sweep</span>
+          Alle Striche löschen
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dock-divider" data-modes="pen lasso shapes"></div>
+  <div id="swatches-container" data-modes="pen lasso shapes">
+    <div id="swatch-base" class="swatch-group"></div>
+    <div id="swatch-custom" class="swatch-group swatch-scroll"></div>
+    <label class="custom-color" title="Neue Farbe hinzufügen">
+      <input id="custom-color-input" type="color" value="#8b5cf6" />
+      <span class="material-symbols-rounded">add</span>
+    </label>
+  </div>
+
+</nav>
+
+<div id="settings-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div id="settings-popover" class="settings-modal dlg set-dlg" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-modal-head set-head">
+      <button type="button" id="btn-settings-back" class="icon-btn set-back hidden" title="Zurück">
+        <span class="material-symbols-rounded">arrow_back</span>
+      </button>
+      <h2 id="settings-title">Einstellungen</h2>
+      <button type="button" id="btn-settings-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+
+    <div class="set-body">
+    <nav class="set-page set-navcol" data-page="main" aria-label="Bereiche">
+      <div class="set-group">Blatt</div>
+      <button type="button" class="set-nav" data-go="paper" data-title="Papier">
+        <span class="set-ico"><span class="material-symbols-rounded">grid_4x4</span></span>
+        <span class="set-nav-text"><strong>Papier</strong><small id="set-sum-paper">Kariert</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="write" data-title="Schreiben &amp; Erkennung">
+        <span class="set-ico"><span class="material-symbols-rounded">ink_pen</span></span>
+        <span class="set-nav-text"><strong>Schreiben &amp; Erkennung</strong><small id="set-sum-write">Formen, Rechnungen, Finger</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="notebook" data-title="Notizbuch">
+        <span class="set-ico"><span class="material-symbols-rounded">auto_stories</span></span>
+        <span class="set-nav-text"><strong>Notizbuch</strong><small id="set-sum-notebook">Seiten, Blättern, Vorlagen</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <div class="set-group">Ansicht</div>
+      <button type="button" class="set-nav" data-go="theme" data-title="Darstellung">
+        <span class="set-ico"><span class="material-symbols-rounded">dark_mode</span></span>
+        <span class="set-nav-text"><strong>Darstellung</strong><small id="set-sum-theme">Hell</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="bar" data-title="Werkzeugleiste">
+        <span class="set-ico"><span class="material-symbols-rounded">tune</span></span>
+        <span class="set-nav-text"><strong>Werkzeugleiste</strong><small id="set-sum-bar">Unten</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="zoom" data-title="Zoom-Fenster">
+        <span class="set-ico"><span class="material-symbols-rounded">zoom_in_map</span></span>
+        <span class="set-nav-text"><strong>Zoom-Fenster</strong><small id="set-sum-zoom">1 Kästchen hoch</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <div class="set-group">Schule</div>
+      <button type="button" class="set-nav" data-go="school" data-title="Schul-Timer">
+        <span class="set-ico"><span class="material-symbols-rounded">timer</span></span>
+        <span class="set-nav-text"><strong>Schul-Timer</strong><small id="set-sum-school">Restzeit der Stunde, Hinweise</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav hidden" id="set-nav-people" data-go="people" data-title="Personen">
+        <span class="set-ico"><span class="material-symbols-rounded">group</span></span>
+        <span class="set-nav-text"><strong>Personen</strong><small>Nur für Admins</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav hidden" id="set-nav-sofia" data-go="sofia" data-title="Sofia">
+        <span class="set-ico"><span class="material-symbols-rounded">cloud_upload</span></span>
+        <span class="set-nav-text"><strong>Sofia &amp; Lösungen</strong><small id="set-sum-sofia">Automatisch teilen</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <div class="set-group">Daten</div>
+      <button type="button" class="set-nav" data-go="import" data-title="Import">
+        <span class="set-ico"><span class="material-symbols-rounded">upload_file</span></span>
+        <span class="set-nav-text"><strong>Import</strong><small id="set-sum-import">GoodNotes-Ordner als PDFs</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <button type="button" class="set-nav" data-go="app" data-title="App &amp; Version">
+        <span class="set-ico"><span class="material-symbols-rounded">auto_awesome</span></span>
+        <span class="set-nav-text"><strong>App &amp; Version</strong><small id="set-sum-app">Updates</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+      <div class="set-group">Experimentell</div>
+      <button type="button" class="set-nav" data-go="exp" data-title="Experimentell">
+        <span class="set-ico"><span class="material-symbols-rounded">auto_fix_high</span></span>
+        <span class="set-nav-text"><strong>Experimentell</strong><small id="set-sum-exp">Noch nicht fertig, nur zum Ausprobieren</small></span>
+        <span class="material-symbols-rounded set-chev">chevron_right</span>
+      </button>
+    </nav>
+    <div class="set-content">
+      <h3 id="set-section-title" class="set-section-title hidden">Papier</h3>
+
+    <div class="set-page hidden" data-page="paper">
+      <div class="set-sub">Dieses Blatt</div>
+      <div class="grid-style-row set-paper-row" id="set-paper-board">
+        <button class="btn-grid-style active" data-grid="graph"><span class="set-paper-prev paper-graph"></span>Kariert</button>
+        <button class="btn-grid-style" data-grid="dots"><span class="set-paper-prev paper-dots"></span>Punkte</button>
+        <button class="btn-grid-style" data-grid="lines"><span class="set-paper-prev paper-lines"></span>Liniert</button>
+        <button class="btn-grid-style" data-grid="blank"><span class="set-paper-prev paper-blank"></span>Blanko</button>
+      </div>
+      <div class="set-sub">Neue Blätter</div>
+      <p class="set-hint">So beginnen neue Blätter. Für einzelne Ordner kannst du es auf der Startseite im ⋯-Menü des Ordners anders festlegen.</p>
+      <div class="set-seg" id="set-paper-default">
+        <button type="button" data-paper="graph">Kariert</button>
+        <button type="button" data-paper="dots">Punkte</button>
+        <button type="button" data-paper="lines">Liniert</button>
+        <button type="button" data-paper="blank">Blanko</button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="write">
+      <button id="shape-toggle" class="setting-toggle set-switch active" title="Formen-Erkennung">
+        <span class="set-ico"><span class="material-symbols-rounded">shapes</span></span>
+        <span class="set-nav-text"><strong>Formen erkennen</strong><small id="shape-learn-info">Lernt mit allen Geräten mit.</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="math-toggle" class="setting-toggle set-switch active" title="Rechnungen automatisch lösen">
+        <span class="set-ico"><span class="material-symbols-rounded">calculate</span></span>
+        <span class="set-nav-text"><strong>Rechnungen lösen</strong><small>Ergebnis erscheint neben „=“</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="finger-draw-toggle" class="setting-toggle set-switch" title="Mit dem Finger zeichnen">
+        <span class="set-ico"><span class="material-symbols-rounded">touch_app</span></span>
+        <span class="set-nav-text"><strong>Finger zeichnet</strong><small>Aus: Finger verschiebt nur das Blatt</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="eraser-return-toggle" class="setting-toggle set-switch active" title="Nach dem Radieren wieder den Stift davor nehmen">
+        <span class="set-ico"><span class="material-symbols-rounded">ink_eraser</span></span>
+        <span class="set-nav-text"><strong>Nach Radieren zurück</strong><small>Danach automatisch wieder der Stift</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <button id="text-lines-toggle" class="setting-toggle set-switch active" title="Text direkt auf die Linien tippen">
+        <span class="set-ico"><span class="material-symbols-rounded">text_fields</span></span>
+        <span class="set-nav-text"><strong>Text auf die Linien</strong><small>Im Text-Modus tippen: schreibt direkt auf die Linie, Größe passend. Ziehen macht ein freies Textfeld.</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <div class="set-sub">Stift-Gesten</div>
+      <p class="set-hint">Mit dem Stift schnell auf dieselbe Stelle tippen. Die Tipp-Punkte werden dabei wieder entfernt. Nochmal tippen schaltet zurück zum Stift. Achtung bei Ü-Punkten: nur sehr dicht beieinander liegende Tipps zählen.</p>
+      <div class="set-sub set-sub-small">2× tippen</div>
+      <div class="set-seg set-seg-wrap" id="set-pen-tap2">
+        <button type="button" data-act="off">Aus</button>
+        <button type="button" data-act="lasso">Lasso</button>
+        <button type="button" data-act="eraser">Radierer</button>
+        <button type="button" data-act="ruler">Lineal</button>
+        <button type="button" data-act="marker">Marker</button>
+        <button type="button" data-act="shapes">Formen</button>
+        <button type="button" data-act="undo">Rückgängig</button>
+      </div>
+      <div class="set-sub set-sub-small">3× tippen</div>
+      <div class="set-seg set-seg-wrap" id="set-pen-tap3">
+        <button type="button" data-act="off">Aus</button>
+        <button type="button" data-act="lasso">Lasso</button>
+        <button type="button" data-act="eraser">Radierer</button>
+        <button type="button" data-act="ruler">Lineal</button>
+        <button type="button" data-act="marker">Marker</button>
+        <button type="button" data-act="shapes">Formen</button>
+        <button type="button" data-act="undo">Rückgängig</button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="theme">
+      <div class="set-sub">Erscheinungsbild</div>
+      <p class="set-hint">Gilt für die ganze App und die Seiten. Dunkle Schrift wird im Dunkelmodus weiß, helle Schrift im Hellmodus dunkel. Bunte Stifte bleiben bunt.</p>
+      <div class="set-radio" id="set-theme">
+        <button type="button" data-theme="light"><strong>Hell</strong><small>Weiße Seiten, dunkle Schrift</small></button>
+        <button type="button" data-theme="dark"><strong>Dunkel</strong><small>Dunkle Seiten, weiße Schrift</small></button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="bar">
+      <div class="set-sub">Kopfleiste</div>
+      <p class="set-hint">Was oben direkt zu sehen ist. Ausgeblendetes liegt unter dem ▾ ganz am Ende der Leiste. Jedes Fach kann eigene Werkzeuge zeigen (z. B. Rechner und Lineal nur in Mathe). Lange halten und an einen Rand ziehen verschiebt die Leiste.</p>
+      <div class="set-seg hidden" id="set-topbar-scope">
+        <button type="button" data-scope="subject">Dieses Fach</button>
+        <button type="button" data-scope="all">Alle Fächer (Standard)</button>
+      </div>
+      <div id="set-topbar-items" class="set-checks"></div>
+      <button type="button" id="set-topbar-reset" class="set-check hidden"><span class="material-symbols-rounded">restart_alt</span><span>Dieses Fach wie Standard</span><span></span></button>
+      <div class="set-seg" id="set-topbar-pos">
+        <button type="button" data-pos="top">Oben</button>
+        <button type="button" data-pos="bottom">Unten</button>
+        <button type="button" data-pos="left">Links</button>
+        <button type="button" data-pos="right">Rechts</button>
+      </div>
+      <div class="set-sub">Zurück zum Ordner</div>
+      <p class="set-hint">Eigener Knopf oben links oder „Blatt verlassen“ ganz unten im Zahnrad-Menü.</p>
+      <div class="set-seg" id="set-back-mode">
+        <button type="button" data-back="button">Eigener Knopf</button>
+        <button type="button" data-back="menu">Im Zahnrad-Menü</button>
+      </div>
+      <div class="set-sub">Werkzeugleiste</div>
+      <p class="set-hint">Wo die Werkzeugleiste sitzt. Du kannst sie auch lange halten und an einen Rand ziehen.</p>
+      <div class="dock-quick-row set-dock-row">
+        <button class="btn-dock-quick" data-pos="top" title="Oben"><span class="material-symbols-rounded">arrow_upward</span><span>Oben</span></button>
+        <button class="btn-dock-quick" data-pos="bottom" title="Unten"><span class="material-symbols-rounded">arrow_downward</span><span>Unten</span></button>
+        <button class="btn-dock-quick" data-pos="left" title="Links"><span class="material-symbols-rounded">arrow_back</span><span>Links</span></button>
+        <button class="btn-dock-quick" data-pos="right" title="Rechts"><span class="material-symbols-rounded">arrow_forward</span><span>Rechts</span></button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="notebook">
+      <div id="set-nb-current">
+        <div class="set-sub">Dieses Notizbuch – Anordnung</div>
+        <div class="set-seg" id="set-nb-layout">
+          <button type="button" data-layout="vertical">Untereinander</button>
+          <button type="button" data-layout="horizontal">Nebeneinander</button>
+        </div>
+      </div>
+      <p class="set-hint hidden" id="set-nb-none">Öffne ein Notizbuch, um seine Anordnung zu ändern.</p>
+      <div class="set-sub">Blättern</div>
+      <div class="set-radio" id="set-nb-paging">
+        <button type="button" data-paging="scroll"><strong>Durchgehend scrollen</strong><small>Seiten laufen frei durch, wie eine lange Rolle</small></button>
+        <button type="button" data-paging="page"><strong>Seite für Seite</strong><small>Immer eine ganze Seite – Wischen springt direkt zur nächsten</small></button>
+      </div>
+      <div class="set-sub">Bei Seiten nebeneinander</div>
+      <div class="set-seg" id="set-nb-spread">
+        <button type="button" data-spread="1">1 Seite</button>
+        <button type="button" data-spread="2">2 Seiten nebeneinander</button>
+      </div>
+      <div class="set-sub">Eigene Vorlagen</div>
+      <p class="set-hint">Eigene Seiten-Vorlagen aus PDF oder Bild (z. B. Cornell-Protokoll). Sie erscheinen bei „Seite hinzufügen“ und gelten auf all deinen Geräten.</p>
+      <div id="set-nb-templates" class="set-nb-templates"></div>
+      <button type="button" id="set-nb-tpl-add" class="set-check active"><span class="material-symbols-rounded">upload_file</span><span>Vorlage hinzufügen (PDF oder Bild)</span><span></span></button>
+    </div>
+
+    <div class="set-page hidden" data-page="school">
+      <p class="set-hint">Nimmt deinen Stundenplan aus Sofia und zählt mit, wie lange die Stunde und der Schultag noch gehen.</p>
+      <div class="set-sub">Anzeige</div>
+      <div class="set-radio" id="set-school-mode">
+        <button type="button" data-mode="off"><strong>Aus</strong><small>Kein Timer, keine Hinweise</small></button>
+        <button type="button" data-mode="widget"><strong>Countdown oben</strong><small>Restzeit als Knopf neben dem Zahnrad – antippen für mehr</small></button>
+        <button type="button" data-mode="notes"><strong>Nur Hinweise links</strong><small>Kleine Meldungen kurz vor Stundenende / Schulschluss</small></button>
+        <button type="button" data-mode="both"><strong>Countdown und Hinweise</strong><small>Beides zusammen</small></button>
+      </div>
+      <div class="set-sub">Hinweis vor Stundenende</div>
+      <div class="set-seg set-seg-multi" id="set-school-before">
+        <button type="button" data-min="0">Aus</button>
+        <button type="button" data-min="1">1</button>
+        <button type="button" data-min="2">2</button>
+        <button type="button" data-min="5">5</button>
+        <button type="button" data-min="10">10</button>
+        <button type="button" data-min="15">15</button>
+        <button type="button" data-min="20">20</button>
+        <button type="button" data-min="30">30</button>
+      </div>
+      <p class="set-hint">Minuten vor Stundenende – mehrere antippen, z. B. 30, 15 und 5.</p>
+      <div class="set-sub">Hinweis vor Schulschluss</div>
+      <div class="set-seg" id="set-school-end">
+        <button type="button" data-min="0">Aus</button>
+        <button type="button" data-min="5">5 min</button>
+        <button type="button" data-min="10">10 min</button>
+        <button type="button" data-min="15">15 min</button>
+        <button type="button" data-min="30">30 min</button>
+      </div>
+      <div class="set-sub">Hinweis bei Stundenbeginn</div>
+      <div class="set-seg" id="set-school-start">
+        <button type="button" data-on="0">Aus</button>
+        <button type="button" data-on="1">An</button>
+      </div>
+      <p class="set-hint" id="set-school-status"></p>
+    </div>
+
+    <div class="set-page hidden" data-page="zoom">
+      <div class="set-sub">Schreibhöhe</div>
+      <p class="set-hint">Wie groß du im Zoom-Fenster schreibst. Das Fenster zeigt immer drei Zeilen: In der mittleren schreibst du, darüber und darunter siehst du die Nachbarzeilen. Beim Zeilenwechsel rückt es genau eine Zeile weiter. Mit + und − im Zoom-Fenster änderst du es nur bis zum Schließen.</p>
+      <div class="set-seg" id="set-zoom-rows">
+        <button type="button" data-rows="1">1 Kästchen</button>
+        <button type="button" data-rows="1.5">1½</button>
+        <button type="button" data-rows="2">2 Kästchen</button>
+        <button type="button" data-rows="3">3</button>
+      </div>
+      <div class="set-sub">Zeilenwechsel</div>
+      <p class="set-hint">Um wie viele Kästchen es bei Enter bzw. am Zeilenende runtergeht – z. B. 1 Kästchen hoch schreiben, aber jedes Mal 2 Kästchen weiter.</p>
+      <div class="set-seg" id="set-zoom-step">
+        <button type="button" data-step="0">Wie Höhe</button>
+        <button type="button" data-step="1">1</button>
+        <button type="button" data-step="1.5">1½</button>
+        <button type="button" data-step="2">2</button>
+        <button type="button" data-step="3">3</button>
+      </div>
+      <div class="set-sub">Knöpfe am Zoom-Fenster</div>
+      <p class="set-hint">Ohne Stiftleiste im Fenster: Steuerung hochkant an der Seite oder oben. Mit Stiftleiste stehen Zoom-Knöpfe und Werkzeuge in einer Zeile oben.</p>
+      <div class="set-seg" id="set-zoom-chrome">
+        <button type="button" data-chrome="side">An der Seite</button>
+        <button type="button" data-chrome="top">Oben</button>
+      </div>
+      <button id="set-zoom-inner" class="setting-toggle set-switch active" title="Stiftleiste im Zoom-Fenster">
+        <span class="set-ico"><span class="material-symbols-rounded">ink_pen</span></span>
+        <span class="set-nav-text"><strong>Stiftleiste im Zoom-Fenster</strong><small>In derselben oberen Zeile wie die Zoom-Knöpfe. Beim Schließen zurück an den alten Platz.</small></span>
+        <span class="set-knob"></span>
+      </button>
+    </div>
+
+    <div class="set-page hidden" data-page="sofia">
+      <p class="set-hint">Blätter zu einer Hausaufgabe als PDF in Sofia als deine Lösung teilen – dann sehen die anderen sie dort.</p>
+      <div class="set-radio" id="set-solution-mode">
+        <button type="button" data-mode="auto"><strong>Automatisch</strong><small>Nach dem Schreiben selbst hochladen und aktuell halten</small></button>
+        <button type="button" data-mode="manual"><strong>Nur per Knopf</strong><small>Kleiner Knopf oben im Aufgabenfenster – erst dann wird geteilt</small></button>
+        <button type="button" data-mode="off"><strong>Nie</strong><small>Nichts wird geteilt</small></button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="import">
+      <p class="set-hint">Aus GoodNotes die Bibliothek oder Ordner als <strong>bearbeitbare PDFs</strong> exportieren (mit Unterordnern). Hier die Ordnerstruktur wählen und jedem obersten Ordner ein Fach zuordnen. Paginierte Hefte (DIN A4 u. Ä.) werden Notizbücher mit beschreibbaren Seiten; große Whiteboard-/Board-PDFs werden ein unendliches Blatt – wie „Neues Blatt“ bzw. „Neues Notizbuch (A4-Seiten)“.</p>
+      <div id="gn-import-pick">
+        <div class="set-sub">Dateien wählen</div>
+        <button type="button" id="gn-pick-dir" class="set-check active"><span class="material-symbols-rounded">folder_open</span><span>Ordner wählen</span><span></span></button>
+        <button type="button" id="gn-pick-zip" class="set-check active"><span class="material-symbols-rounded">upload_file</span><span>ZIP-Datei wählen</span><span></span></button>
+        <input id="gn-dir-input" type="file" webkitdirectory directory multiple hidden />
+        <input id="gn-zip-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+      </div>
+      <div id="gn-import-map" class="hidden">
+        <div class="set-sub">Oberste Ordner → Fach</div>
+        <p class="set-hint" id="gn-import-count"></p>
+        <div id="gn-map-rows"></div>
+        <button type="button" id="gn-import-go" class="m3-btn-primary gn-import-go">Importieren</button>
+        <button type="button" id="gn-import-reset" class="m3-btn-outline gn-import-reset">Andere Dateien</button>
+      </div>
+      <p class="set-hint" id="gn-import-status"></p>
+    </div>
+
+    <div class="set-page hidden" data-page="people">
+      <p class="set-hint">Wer sich mit welcher Mail-Adresse anmeldet, landet automatisch bei der zugeordneten Person. Eine Person kann mehrere Mail-Adressen haben.</p>
+      <div id="admin-people-list" class="admin-people-list"></div>
+      <div class="admin-new-person-row">
+        <input id="admin-new-person-name" type="text" placeholder="Name der neuen Person" maxlength="40" autocomplete="off" autocorrect="off" spellcheck="false" name="admin-person-input" />
+        <button type="button" id="btn-admin-new-person">Anlegen</button>
+      </div>
+    </div>
+
+    <div class="set-page hidden" data-page="exp">
+      <p class="set-hint">Funktionen, die noch nicht fertig sind. Sie gelten nur für dieses Gerät und bleiben aus, bis du sie hier einschaltest.</p>
+      <button id="exp-local-ocr-toggle" class="setting-toggle set-switch" title="Handschrift auf dem Gerät erkennen">
+        <span class="set-ico"><span class="material-symbols-rounded">document_scanner</span></span>
+        <span class="set-nav-text"><strong>Handschrift auf dem Gerät erkennen</strong><small id="exp-local-ocr-status">Aus</small></span>
+        <span class="set-knob"></span>
+      </button>
+      <div class="version-actions exp-ocr-actions">
+        <button type="button" id="exp-local-ocr-reload" class="version-btn">
+          <span class="material-symbols-rounded">refresh</span>
+          Modell neu laden
+        </button>
+        <button type="button" id="exp-local-ocr-remove" class="version-btn exp-danger">
+          <span class="material-symbols-rounded">delete</span>
+          Modell löschen
+        </button>
+      </div>
+      <p id="exp-local-ocr-info" class="set-hint"></p>
+      <p class="set-hint">Lädt einmal ein deutsches Handschrift-Modell (etwa 65 MB). Danach liest „KI“ im Lasso ohne Server und auch offline. Es liest Zeile für Zeile; mehrere Zeilen werden vorher getrennt, ganze Seiten auf einmal noch nicht. Gibt es auf dem Server eine neue Fassung, lädt das Gerät sie beim nächsten Start selbst; „Modell neu laden“ holt sie sofort, „Modell löschen“ gibt den Speicher wieder frei.</p>
+    </div>
+
+    <div class="set-page hidden" data-page="app">
+      <div class="version-card">
+        <div class="version-row">
+          <div>
+            <div class="version-name">sofianotes <span id="settings-commit-badge">#main</span></div>
+            <div id="settings-build-date" class="version-date">Build wird geladen…</div>
+          </div>
+          <div class="version-right">
+            <div id="settings-version-label">v%%APP_VERSION%%</div>
+            <div id="settings-version-status" class="version-status">
+              <span class="material-symbols-rounded">check</span>
+              <span id="settings-version-status-text">Auf neuestem Stand</span>
+            </div>
+          </div>
+        </div>
+        <p id="settings-update-desc">Automatische Prüfung beim Öffnen aktiv.</p>
+        <div class="version-actions">
+          <button type="button" id="btn-check-updates" class="version-btn">
+            <span class="material-symbols-rounded">refresh</span>
+            <span id="text-check-updates">Nach Updates suchen</span>
+          </button>
+          <button type="button" id="btn-apply-update" class="version-btn version-btn-apply hidden">
+            <span class="material-symbols-rounded">download</span>
+            Jetzt aktualisieren
+          </button>
+        </div>
+      </div>
+    </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<div id="who-backdrop" class="who-backdrop" role="status" aria-live="polite" aria-busy="true">
+  <div class="who-card" data-state="loading">
+    <div class="gate-mark" aria-hidden="true">
+      <svg class="gate-spin" viewBox="0 0 88 88">
+        <circle cx="44" cy="44" r="38" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" />
+      </svg>
+      <img class="app-logo" src="icons/icon-192.png?v=__BUILD__" alt="" width="72" height="72" />
+    </div>
+    <h1 id="gate-title">Lädt…</h1>
+    <p id="gate-text"></p>
+    <button type="button" id="gate-retry" class="gate-retry hidden">Neu laden</button>
+  </div>
+</div>
+
+<div id="library-backdrop" class="library-backdrop hidden">
+  <div class="library-sheet lib-page">
+    <div class="lib-header">
+      <button type="button" id="btn-library-home" class="lib-icon-btn" title="Zurück">
+        <i data-lucide="arrow-left"></i>
+      </button>
+      <div class="lib-header-text">
+        <div id="library-person" class="lib-eyebrow">Simon</div>
+        <div id="library-crumbs" class="lib-title">Alle Blätter</div>
+      </div>
+      <button type="button" id="btn-library-inbox" class="lib-icon-btn lib-hw-btn" title="Eingang: dir geschickte Blätter">
+        <i data-lucide="inbox"></i>
+        <span id="inbox-count" class="lib-badge hidden">0</span>
+      </button>
+      <button type="button" id="btn-library-homework" class="lib-icon-btn lib-hw-btn hidden" title="Hausaufgaben">
+        <i data-lucide="clipboard-list"></i>
+        <span id="hw-count" class="lib-badge hidden">0</span>
+      </button>
+      <button type="button" id="btn-library-search" class="lib-icon-btn" title="Suchen">
+        <i data-lucide="search"></i>
+      </button>
+      <div class="lib-add-wrap">
+        <button type="button" id="btn-library-add" class="lib-new-btn" title="Neu">
+          <i data-lucide="plus"></i>
+          <span>Neu</span>
+        </button>
+        <div id="lib-add-menu" class="lib-add-menu hidden">
+          <button type="button" id="lib-add-board" class="lib-add-opt">
+            <i data-lucide="file-plus-2"></i>
+            Neues Blatt
+          </button>
+          <button type="button" id="lib-add-notebook" class="lib-add-opt">
+            <i data-lucide="notebook-pen"></i>
+            Neues Notizbuch (A4-Seiten)
+          </button>
+          <button type="button" id="lib-add-folder" class="lib-add-opt">
+            <i data-lucide="folder-plus"></i>
+            Neuer Ordner
+          </button>
+          <button type="button" id="lib-add-import" class="lib-add-opt">
+            <i data-lucide="file-up"></i>
+            Datei importieren
+          </button>
+        </div>
+      </div>
+      <button type="button" id="btn-library-settings" class="lib-icon-btn" title="Einstellungen">
+        <i data-lucide="settings"></i>
+      </button>
+      <button type="button" id="btn-library-close" class="lib-icon-btn hidden" title="Zurück zum Blatt">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <div id="lib-search-row" class="lib-search-row hidden">
+      <i data-lucide="search" class="lib-search-ico"></i>
+      <input id="lib-search-input" type="text" placeholder="Blätter und Ordner suchen…" autocomplete="off" autocorrect="off" spellcheck="false" name="lib-search" />
+    </div>
+    <div id="library-list" class="library-list"></div>
+  </div>
+  <div id="lib-item-menu" class="lib-item-menu hidden" role="menu"></div>
+</div>
+
+<div id="share-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div class="settings-modal dlg share-dlg" role="dialog" aria-modal="true">
+    <div class="settings-modal-head">
+      <h2>Teilen</h2>
+      <button type="button" id="btn-share-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+    <p class="share-hint" id="share-sub"></p>
+    <div id="share-here" class="share-here hidden"></div>
+    <div id="share-choices" class="share-list"></div>
+  </div>
+</div>
+
+<div id="timetable-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div class="settings-modal dlg tt-dlg" role="dialog" aria-modal="true" aria-labelledby="tt-title">
+    <!-- eine Zeile wie oben an der Seiten-Leiste: Titel-Pille, Tag|Woche, Datum, Pfeile, ✕ -->
+    <div class="tt-head">
+      <h2 id="tt-title" class="tt-title-pill">Stundenplan</h2>
+      <div class="tt-chips">
+        <button type="button" class="tt-chip active" data-mode="day">Tag</button>
+        <button type="button" class="tt-chip" data-mode="week">Woche</button>
+      </div>
+      <span class="tt-head-gap"></span>
+      <span id="tt-sub" class="tt-sub"></span>
+      <button type="button" id="tt-prev" class="tt-round" title="Zurück"><span class="material-symbols-rounded">chevron_left</span></button>
+      <button type="button" id="tt-next" class="tt-round" title="Weiter"><span class="material-symbols-rounded">chevron_right</span></button>
+      <button type="button" id="btn-tt-close" class="tt-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <div id="tt-body" class="tt-body"></div>
+  </div>
+</div>
+
+<!-- Farbwaehler (wie GoodNotes): ersetzt die Standard-Farbauswahl -->
+<div id="color-picker" class="cp hidden" role="dialog" aria-label="Farbe wählen">
+  <div class="cp-head">
+    <span class="cp-title">Farbe</span>
+    <button type="button" class="cp-x" title="Abbrechen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div class="cp-tabs" role="tablist">
+    <button type="button" class="cp-tab active" data-tab="grid">Raster</button>
+    <button type="button" class="cp-tab" data-tab="spectrum">Spektrum</button>
+  </div>
+  <div class="cp-grid"></div>
+  <div class="cp-spectrum hidden">
+    <div class="cp-sv"><div class="cp-sv-knob"></div></div>
+    <input type="range" class="cp-hue" min="0" max="360" step="1" value="0" aria-label="Farbton" />
+  </div>
+  <div class="cp-foot">
+    <div class="cp-compare" title="Vorher / Nachher (vorher antippen = zurück)"><button type="button" class="cp-old"></button><span class="cp-new"></span></div>
+    <input type="text" class="cp-hex" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Hex-Code" />
+    <button type="button" class="cp-ok">Fertig</button>
+  </div>
+</div>
+
+<!-- Countdown aufgeklappt: Stunde, naechste Stunde, Schulschluss -->
+<div id="school-pop" class="school-pop hidden" role="dialog" aria-label="Schulstunde">
+  <div class="sp-head">
+    <div class="sp-icon"><span class="material-symbols-rounded">school</span></div>
+    <div class="sp-head-text"><div id="sp-subject" class="sp-subject"></div><div id="sp-room" class="sp-room"></div></div>
+  </div>
+  <div id="sp-big" class="sp-big"></div>
+  <div class="sp-bar"><div id="sp-fill" class="sp-fill"></div></div>
+  <div id="sp-rows" class="sp-rows"></div>
+  <div class="sp-actions">
+    <button type="button" id="sp-day" class="sp-action"><span class="material-symbols-rounded">view_agenda</span><span>Tagesplan</span></button>
+    <button type="button" id="sp-week" class="sp-action"><span class="material-symbols-rounded">calendar_month</span><span>Woche</span></button>
+  </div>
+</div>
+
+<!-- Tagesplan als Seitenleiste rechts -->
+<div id="tt-side" class="tt-side hidden" role="complementary" aria-label="Tagesplan">
+  <div class="tt-side-head">
+    <div class="chat-pill tt-side-title-pill"><span id="tt-side-title" class="chat-title">Heute</span></div>
+    <span class="chat-head-gap"></span>
+    <button type="button" id="tt-side-prev" class="chat-pill chat-round" title="Vorheriger Tag"><span class="material-symbols-rounded">chevron_left</span></button>
+    <button type="button" id="tt-side-next" class="chat-pill chat-round" title="Nächster Tag"><span class="material-symbols-rounded">chevron_right</span></button>
+    <button type="button" id="tt-side-week" class="chat-pill chat-round" title="Ganze Woche"><span class="material-symbols-rounded">calendar_month</span></button>
+    <button type="button" id="tt-side-close" class="chat-pill chat-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div id="tt-side-body" class="tt-side-body"></div>
+</div>
+
+<!-- Freunde: wer ist online, in welchem Dokument - zuschauen (nur ansehen) -->
+<div id="friends-side" class="tt-side fr-side hidden" role="complementary" aria-label="Freunde">
+  <div class="tt-side-head">
+    <div class="chat-pill tt-side-title-pill"><span class="chat-title">Freunde</span></div>
+    <span class="chat-head-gap"></span>
+    <button type="button" id="friends-refresh" class="chat-pill chat-round" title="Aktualisieren"><span class="material-symbols-rounded">refresh</span></button>
+    <button type="button" id="friends-close" class="chat-pill chat-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div id="friends-body" class="tt-side-body fr-body"></div>
+  <label class="fr-allow">
+    <span class="fr-allow-text"><b>Andere dürfen mir zuschauen</b><small>Sie sehen dein Dokument und können es nur ansehen</small></span>
+    <input type="checkbox" id="friends-allow" class="fr-switch" checked>
+  </label>
+</div>
+
+<!-- Sofia-Chats: schwebendes Fenster oder links/rechts angedockt (Stil wie die Seiten-Leiste) -->
+<div id="chat-win" class="chat-win hidden" role="dialog" aria-label="Chats">
+  <div id="chat-head" class="chat-head" title="Ziehen zum Verschieben, an den Rand ziehen zum Andocken">
+    <button type="button" id="chat-back" class="chat-pill chat-round hidden" title="Zurück zu den Chats"><span class="material-symbols-rounded">arrow_back</span></button>
+    <div class="chat-pill chat-title-pill">
+      <div id="chat-avatar" class="chat-avatar hidden"></div>
+      <div class="chat-head-text"><div id="chat-title" class="chat-title">Chats</div><div id="chat-subtitle" class="chat-subtitle"></div></div>
+    </div>
+    <span class="chat-head-gap"></span>
+    <button type="button" id="chat-mode" class="chat-pill chat-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+    <button type="button" id="chat-close" class="chat-pill chat-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+  <div id="chat-tabs" class="chat-tabs" role="tablist">
+    <button type="button" class="chat-tab active" data-filter="all">Alle</button>
+    <button type="button" class="chat-tab" data-filter="groups">Gruppen</button>
+    <button type="button" class="chat-tab" data-filter="unread">Ungelesen</button>
+  </div>
+  <div id="chat-list" class="chat-list"></div>
+  <div id="chat-conv" class="chat-conv hidden">
+    <div id="chat-msgs" class="chat-msgs"></div>
+    <div class="chat-compose">
+      <div id="chat-reply" class="chat-reply hidden"><div class="chat-reply-text"><b id="chat-reply-name"></b><span id="chat-reply-prev"></span></div><button type="button" id="chat-reply-x" class="chat-round chat-flat" title="Antwort abbrechen"><span class="material-symbols-rounded">close</span></button></div>
+      <form id="chat-form" class="chat-form" autocomplete="off">
+        <button type="button" id="chat-attach" class="chat-round chat-flat" title="Bild oder Datei senden"><span class="material-symbols-rounded">attach_file</span></button>
+        <textarea id="chat-input" rows="1" placeholder="Nachricht" enterkeyhint="send"></textarea>
+        <button type="submit" id="chat-send" class="chat-round chat-send" title="Senden"><span class="material-symbols-rounded">send</span></button>
+      </form>
+    </div>
+  </div>
+  <div id="chat-resize" class="chat-resize" title="Größe ändern"></div>
+</div>
+<div id="chat-menu" class="chat-menu hidden"></div>
+
+<!-- Antippen einer Stunde: alle Infos (wie in Sofia) -->
+<div id="tt-lesson-backdrop" class="settings-backdrop dlg-scrim tt-lesson-scrim hidden">
+  <div class="settings-modal dlg tt-lesson-dlg" role="dialog" aria-modal="true">
+    <div id="tt-lesson-body"></div>
+    <button type="button" id="btn-tt-lesson-close" class="tt-close-btn">Schließen</button>
+  </div>
+</div>
+
+<div id="move-backdrop" class="settings-backdrop dlg-scrim hidden">
+  <div class="settings-modal dlg" role="dialog" aria-modal="true">
+    <div class="settings-modal-head">
+      <h2 id="move-title">Verschieben nach</h2>
+      <button type="button" id="btn-move-close" class="icon-btn" title="Schließen">
+        <span class="material-symbols-rounded">close</span>
+      </button>
+    </div>
+    <div id="move-choices" class="share-choices"></div>
+  </div>
+</div>
+
+<div id="export-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg dlg-export" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title" id="export-title">Exportieren</div>
+    <p class="dlg-text" id="export-name"></p>
+    <div id="export-main" class="export-pane">
+    <button type="button" class="set-nav export-opt" data-format="pdf">
+      <span class="set-ico"><span class="material-symbols-rounded">picture_as_pdf</span></span>
+      <span class="set-nav-text"><strong>PDF</strong><small>Zum Ansehen, Drucken oder Abgeben – nicht mehr bearbeitbar</small></span>
+      <span class="material-symbols-rounded set-chev">chevron_right</span>
+    </button>
+    <button type="button" class="set-nav export-opt" data-format="sofianotes">
+      <span class="set-ico"><span class="material-symbols-rounded">save</span></span>
+      <span class="set-nav-text"><strong>sofianotes-Datei (.sofianotes)</strong><small>Alles zum Sichern und wieder Importieren – bleibt voll bearbeitbar, mit Material</small></span>
+      <span class="material-symbols-rounded set-chev">chevron_right</span>
+    </button>
+    <button type="button" class="set-nav" id="export-to-person">
+      <span class="set-ico"><span class="material-symbols-rounded">send</span></span>
+      <span class="set-nav-text"><strong>An Person senden</strong><small>Schickt eine eigene Kopie – keine Zusammenarbeit, Änderungen bleiben getrennt</small></span>
+      <span class="material-symbols-rounded set-chev">chevron_right</span>
+    </button>
+    </div>
+    <div id="export-send" class="export-pane hidden">
+      <div class="set-sub">An wen?</div>
+      <div id="export-people" class="export-people"></div>
+      <div class="set-sub">Als</div>
+      <div class="set-seg" id="export-send-format">
+        <button type="button" data-format="sofianotes" class="active">sofianotes-Blatt</button>
+        <button type="button" data-format="pdf">PDF</button>
+      </div>
+      <p class="set-hint" id="export-send-hint">Die Person bekommt eine eigene Kopie des Blatts in ihre Bibliothek – voll bearbeitbar.</p>
+    </div>
+    <div class="m3-sheet-actions">
+      <button type="button" id="export-cancel" class="m3-btn-outline">Abbrechen</button>
+      <button type="button" id="export-send-go" class="m3-btn-primary hidden" disabled>Senden</button>
+    </div>
+  </div>
+</div>
+
+<div id="inbox-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg dlg-inbox" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="inbox-head">
+      <div class="sheet-title">Eingang</div>
+      <button type="button" id="inbox-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <div id="inbox-list" class="inbox-list"></div>
+  </div>
+</div>
+
+<div id="school-notes" class="school-notes" aria-live="polite"></div>
+
+<div id="scan-scrim" class="scan-scrim hidden" role="dialog" aria-modal="true" aria-label="Scannen">
+  <div class="scan-top">
+    <button type="button" id="scan-cancel" class="scan-btn">Abbrechen</button>
+    <strong>Zuschneiden</strong>
+    <button type="button" id="scan-ok" class="scan-btn primary">Übernehmen</button>
+  </div>
+  <div id="scan-stage" class="scan-stage"><canvas id="scan-canvas"></canvas></div>
+  <div class="scan-bottom">
+    <button type="button" id="scan-full" class="scan-chip"><span class="material-symbols-rounded">fit_screen</span>Ganzes Bild</button>
+    <button type="button" id="scan-auto" class="scan-chip"><span class="material-symbols-rounded">document_scanner</span>Blatt erkennen</button>
+    <button type="button" id="scan-enhance" class="scan-chip"><span class="material-symbols-rounded">auto_fix_high</span>Verbessern</button>
+    <button type="button" id="scan-rotate" class="scan-chip"><span class="material-symbols-rounded">rotate_right</span>Drehen</button>
+  </div>
+  <p id="scan-hint" class="scan-hint">Ecken ziehen, um den Ausschnitt anzupassen.</p>
+</div>
+
+<div id="confirm-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg dlg-confirm" role="alertdialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="dlg-confirm-icon"><span class="material-symbols-rounded">delete</span></div>
+    <div class="sheet-title" id="confirm-title">Löschen?</div>
+    <p class="dlg-text" id="confirm-text"></p>
+    <div class="m3-sheet-actions">
+      <button type="button" id="confirm-cancel" class="m3-btn-outline">Abbrechen</button>
+      <button type="button" id="confirm-ok" class="m3-btn-primary danger">Löschen</button>
+    </div>
+  </div>
+</div>
+
+<div id="name-sheet-scrim" class="dlg-scrim hidden">
+  <div class="bottom-sheet dlg" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title" id="name-sheet-title">Name</div>
+    <div class="m3-field">
+      <label class="m3-field-label" id="name-sheet-label">Name</label>
+      <input class="m3-input" id="name-sheet-input" type="text" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false" name="lib-name-input" />
+    </div>
+    <div class="m3-field hidden" id="name-sheet-color-field">
+      <label class="m3-field-label">Farbe</label>
+      <div id="name-sheet-colors" class="name-sheet-colors"></div>
+    </div>
+    <div class="m3-sheet-actions">
+      <button type="button" id="name-sheet-cancel" class="m3-btn-outline">Abbrechen</button>
+      <button type="button" id="name-sheet-save" class="m3-btn-primary">Speichern</button>
+    </div>
+  </div>
+</div>
+
+  <div id="hw-scrim" class="dlg-scrim hidden">
+    <div class="settings-modal dlg hw-dlg" role="dialog" aria-modal="true" aria-labelledby="hw-title">
+      <div class="settings-modal-head set-head">
+        <button type="button" id="hw-back" class="icon-btn set-back hidden" title="Zurück"><span class="material-symbols-rounded">arrow_back</span></button>
+        <h2 id="hw-title">Hausaufgaben</h2>
+        <button type="button" id="hw-close" class="icon-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      </div>
+      <div id="hw-list" class="hw-list"></div>
+      <div id="hw-detail" class="hw-detail hidden"></div>
+    </div>
+  </div>
+
+  <div id="split-divider" class="split-divider hidden" title="Ziehen: Breite ändern"><span class="split-grip"></span></div>
+  <div id="split-active" class="split-active hidden"></div>
+  <div id="split-menu" class="lib-add-menu split-menu hidden"></div>
+  <div id="split-pick-scrim" class="dlg-scrim hidden">
+    <div class="bottom-sheet dlg dlg-inbox" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div class="inbox-head">
+        <div class="sheet-title">Welches Blatt daneben?</div>
+        <button type="button" id="split-pick-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      </div>
+      <input type="search" id="split-pick-search" class="split-pick-search" placeholder="Suchen…" autocomplete="off" />
+      <div id="split-pick-list" class="inbox-list"></div>
+    </div>
+  </div>
+
+  <aside id="pages-panel" class="pages-panel hidden" aria-label="Seiten">
+    <div class="pages-head">
+      <button type="button" id="pages-more" class="hw-panel-btn" title="Notizbuch"><span class="material-symbols-rounded">more_horiz</span></button>
+      <strong>Seiten</strong>
+      <button type="button" id="pages-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <div class="pages-tabs" role="tablist" aria-label="Ansicht der Seiten-Leiste">
+      <button type="button" id="pages-tab-pages" class="pages-tab active" role="tab" aria-selected="true" title="Seiten"><span class="material-symbols-rounded">description</span></button>
+      <button type="button" id="pages-tab-marks" class="pages-tab" role="tab" aria-selected="false" title="Lesezeichen"><span class="material-symbols-rounded">bookmark</span></button>
+      <button type="button" id="pages-tab-select" class="pages-tab" role="tab" aria-selected="false" title="Seiten auswählen (z.B. als PDF exportieren)"><span class="material-symbols-rounded">check_circle</span></button>
+    </div>
+    <div id="pages-select" class="pages-select hidden"><span id="pages-select-count"></span></div>
+    <div id="pages-marks" class="pages-marks hidden"></div>
+    <div id="pages-grid" class="pages-grid"></div>
+  </aside>
+  <div id="page-add-pop" class="page-add-pop hidden" role="dialog" aria-label="Seite hinzufügen">
+    <div class="pap-title">Seite hinzufügen</div>
+    <div class="pap-sub">Neue Vorlagen</div>
+    <p class="pap-hint">Die neue Seite kommt hinter die aktuelle Seite.</p>
+    <div id="pap-templates" class="pap-templates"></div>
+    <div class="pap-list">
+      <button type="button" data-act="read"><span class="material-symbols-rounded">auto_stories</span>Leseseite</button>
+      <button type="button" data-act="board"><span class="material-symbols-rounded">open_in_full</span>Unendliches Board</button>
+      <button type="button" data-act="image"><span class="material-symbols-rounded">image</span>Bild</button>
+      <button type="button" data-act="photo"><span class="material-symbols-rounded">photo_camera</span>Foto aufnehmen</button>
+      <button type="button" data-act="import"><span class="material-symbols-rounded">download</span>PDF importieren</button>
+    </div>
+  </div>
+  <div id="page-menu" class="lib-add-menu page-menu hidden"></div>
+
+  <aside id="history-panel" class="history-panel hidden" aria-label="Versionsverlauf">
+    <div class="history-head">
+      <span class="material-symbols-rounded">history</span>
+      <strong>Versionsverlauf</strong>
+      <button type="button" id="history-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <button type="button" id="history-marks" class="history-toggle">
+      <span class="history-toggle-text"><strong>Änderungen farbig markieren</strong><small>Zeigt auf dem Blatt, wer was geschrieben hat</small></span>
+      <span class="set-knob"></span>
+    </button>
+    <div id="history-legend" class="history-legend"></div>
+    <div id="history-list" class="history-list"></div>
+    <div id="history-foot" class="history-foot hidden">
+      <div id="history-foot-text" class="history-foot-text"></div>
+      <div class="history-foot-btns">
+        <button type="button" id="history-back" class="m3-btn-outline">Aktuelle Version</button>
+        <button type="button" id="history-restore" class="m3-btn-primary">Wiederherstellen</button>
+      </div>
+    </div>
+  </aside>
+
+  <div id="calc-win" class="calc-win hidden" role="dialog" aria-label="Rechner">
+    <div id="calc-head" class="calc-head tt-side-head" title="Ziehen, um den Rechner zu verschieben">
+      <div class="chat-pill tt-side-title-pill"><span id="calc-title" class="chat-title">Rechner</span></div>
+      <span class="chat-head-gap"></span>
+      <button type="button" id="calc-hist-btn" class="chat-pill chat-round calc-round" title="Verlauf"><span class="material-symbols-rounded">history</span></button>
+      <button type="button" id="calc-dock" class="chat-pill chat-round calc-round" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+      <button type="button" id="calc-close" class="chat-pill chat-round calc-round" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+    </div>
+    <!-- ein Umschalter fuer alles: Rechner, wissenschaftlicher Rechner, Umrechner -->
+    <div class="calc-tabs" role="tablist" aria-label="Ansicht">
+      <button type="button" class="calc-tab active" data-view="basic">Rechner</button>
+      <button type="button" class="calc-tab" data-view="sci">Wissenschaftlich</button>
+      <button type="button" class="calc-tab" data-view="conv">Umrechner</button>
+    </div>
+    <div class="calc-body" data-tab="calc">
+      <div class="calc-display">
+        <div id="calc-prev" class="calc-prev"></div>
+        <div id="calc-expr" class="calc-expr">0</div>
+        <div id="calc-live" class="calc-live"></div>
+      </div>
+      <div id="calc-keys" class="calc-keys"></div>
+      <div id="calc-hist" class="calc-hist hidden"></div>
+    </div>
+    <div class="calc-body hidden" data-tab="conv">
+      <button type="button" id="conv-cat" class="conv-select conv-dd"><span class="conv-dd-label"></span><span class="material-symbols-rounded">expand_more</span></button>
+      <div class="conv-row">
+        <input id="conv-in" class="conv-input" type="text" inputmode="decimal" autocomplete="off" value="1" />
+        <button type="button" id="conv-from" class="conv-select conv-dd"><span class="conv-dd-label"></span><span class="material-symbols-rounded">expand_more</span></button>
+      </div>
+      <button type="button" id="conv-swap" class="conv-swap" title="Tauschen"><span class="material-symbols-rounded">swap_vert</span></button>
+      <div class="conv-row">
+        <div id="conv-out" class="conv-input conv-out">0</div>
+        <button type="button" id="conv-to" class="conv-select conv-dd"><span class="conv-dd-label"></span><span class="material-symbols-rounded">expand_more</span></button>
+      </div>
+      <div id="conv-all" class="conv-all"></div>
+    </div>
+  </div>
+
+  <div id="hw-panel" class="hw-panel hidden" role="complementary" aria-label="Aufgabenstellung">
+    <div id="hw-panel-head" class="hw-panel-head" title="Ziehen, um die Leiste zu verschieben">
+      <span id="hw-panel-subject" class="hw-subject-chip"></span>
+      <span class="top-side-bar"><span class="tsb-title hw-panel-title">Aufgabe</span></span>
+      <button type="button" id="hw-panel-mode" class="hw-panel-btn hw-chrome-close" title="Als Seitenleiste andocken"><span class="material-symbols-rounded">dock_to_right</span></button>
+      <div class="hw-chrome-dock">
+        <button type="button" id="hw-panel-share" class="hw-panel-btn hidden" title="Blatt jetzt als Lösung in Sofia teilen"><span class="material-symbols-rounded">cloud_upload</span></button>
+        <button type="button" id="hw-panel-side" class="hw-panel-btn hidden" title="Seite wechseln"><span class="material-symbols-rounded">swap_horiz</span></button>
+        <button type="button" id="hw-panel-min" class="hw-panel-btn" title="Minimieren"><span class="material-symbols-rounded">remove</span></button>
+        <button type="button" id="hw-panel-close" class="hw-panel-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      </div>
+    </div>
+    <div id="hw-panel-body" class="hw-panel-body"></div>
+    <div id="hw-viewer" class="hw-viewer hidden">
+      <div class="hw-viewer-bar">
+        <button type="button" id="hw-viewer-back" class="hw-panel-btn hw-chrome-close" title="Zurück zur Aufgabe"><span class="material-symbols-rounded">arrow_back</span></button>
+        <span id="hw-viewer-name" class="hw-viewer-name"></span>
+        <div class="hw-chrome-dock">
+          <button type="button" id="hw-viewer-out" class="hw-panel-btn" title="Verkleinern"><span class="material-symbols-rounded">zoom_out</span></button>
+          <button type="button" id="hw-viewer-in" class="hw-panel-btn" title="Vergrößern"><span class="material-symbols-rounded">zoom_in</span></button>
+          <button type="button" id="hw-viewer-fit" class="hw-panel-btn" title="Einpassen"><span class="material-symbols-rounded">fit_screen</span></button>
+        </div>
+      </div>
+      <div id="hw-viewer-stage" class="hw-viewer-stage"><img id="hw-viewer-img" alt="" draggable="false" /></div>
+    </div>
+    <div id="hw-panel-resize" class="hw-panel-resize" title="Größe ändern"></div>
+    <div id="hw-dock-edge" class="hw-dock-edge" title="Breite ziehen"></div>
+  </div>
+  <button type="button" id="hw-pill" class="hw-pill hidden" title="Aufgabenstellung aufklappen">
+    <span class="material-symbols-rounded">assignment</span>
+    <span id="hw-pill-text">Aufgabe</span>
+    <span class="material-symbols-rounded">open_in_full</span>
+  </button>
+
+  <div id="lightbox" class="lightbox hidden" role="dialog" aria-modal="true">
+    <img id="lightbox-img" alt="" />
+    <button type="button" id="lightbox-close" class="lightbox-close" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+  </div>
+
+  <div id="table-dialog" class="table-dialog hidden" role="dialog" aria-label="Tabelle">
+    <div class="td-card">
+      <div class="td-head">
+        <span id="td-title">Tabelle einfügen</span>
+        <button type="button" id="td-close" class="icon-btn" title="Schließen"><span class="material-symbols-rounded">close</span></button>
+      </div>
+      <div class="td-row">
+        <div class="td-stepper">
+          <span class="td-label">Spalten</span>
+          <button type="button" class="td-step" data-k="cols" data-d="-1" title="Spalte weniger"><span class="material-symbols-rounded">remove</span></button>
+          <span id="td-cols" class="td-num">3</span>
+          <button type="button" class="td-step" data-k="cols" data-d="1" title="Spalte mehr"><span class="material-symbols-rounded">add</span></button>
+        </div>
+        <div class="td-stepper">
+          <span class="td-label">Zeilen</span>
+          <button type="button" class="td-step" data-k="rows" data-d="-1" title="Zeile weniger"><span class="material-symbols-rounded">remove</span></button>
+          <span id="td-rows" class="td-num">3</span>
+          <button type="button" class="td-step" data-k="rows" data-d="1" title="Zeile mehr"><span class="material-symbols-rounded">add</span></button>
+        </div>
+        <button type="button" id="td-even" class="td-chip" title="Alle Spalten gleich breit, alle Zeilen gleich hoch">Gleich verteilen</button>
+      </div>
+      <canvas id="td-preview" class="td-preview"></canvas>
+      <div class="td-hint">Linien in der Vorschau ziehen: Spalten breiter/schmaler, Zeilen höher/niedriger</div>
+      <div class="td-actions">
+        <button type="button" id="td-cancel" class="td-btn">Abbrechen</button>
+        <button type="button" id="td-ok" class="td-btn primary">Einfügen</button>
+      </div>
+    </div>
+  </div>
+  <div id="text-color-pop" class="text-color-pop hidden" role="menu" aria-label="Textfarbe">
+    <div class="text-color-pop-title">Farbe</div>
+    <div id="text-color-pop-swatches" class="text-color-pop-swatches"></div>
+    <label class="text-color-pop-add" title="Neue Farbe hinzufügen">
+      <input id="text-color-pop-input" type="color" value="#8b5cf6" />
+      <span class="material-symbols-rounded">add</span>
+      Neue Farbe
+    </label>
+  </div>
+  <div id="swatch-menu" class="swatch-menu hidden" role="menu">
+    <label class="swatch-menu-btn" title="Farbe ändern">
+      <span class="material-symbols-rounded">palette</span>
+      <span>Ändern</span>
+      <input id="swatch-edit-input" type="color" value="#000000" />
+    </label>
+    <button id="swatch-menu-left" type="button" class="swatch-menu-btn" title="Nach links"><span class="material-symbols-rounded">chevron_left</span></button>
+    <button id="swatch-menu-right" type="button" class="swatch-menu-btn" title="Nach rechts"><span class="material-symbols-rounded">chevron_right</span></button>
+    <button id="swatch-menu-remove" type="button" class="swatch-menu-btn danger" title="Entfernen"><span class="material-symbols-rounded">delete</span><span>Entfernen</span></button>
+  </div>
 <script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
-  });
-}
+  // Grosse Bibliotheken erst nachladen, wenn sie gebraucht werden (schnellerer Start)
+  (function () {
+    var cache = {};
+    function load(src) {
+      if (!cache[src]) {
+        cache[src] = new Promise(function (resolve, reject) {
+          var s = document.createElement("script");
+          s.src = src;
+          s.async = true;
+          s.onload = function () { resolve(); };
+          s.onerror = function () { delete cache[src]; reject(new Error("load " + src)); };
+          document.head.appendChild(s);
+        });
+      }
+      return cache[src];
+    }
+    // pdf.js liegt in der App selbst (offline nutzbar), das CDN nur als Notnagel
+    var PDFJS_LOCAL = "/vendor/pdfjs/";
+    var PDFJS_V = "?v=3.11.174";
+    var PDFJS_CDN_BASE = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+    window.ensurePdf = function () {
+      var local = true;
+      return load(PDFJS_LOCAL + "pdf.min.js" + PDFJS_V)
+        .catch(function () {
+          local = false;
+          return load(PDFJS_CDN_BASE + "pdf.min.js");
+        })
+        .then(function () {
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = local
+              ? PDFJS_LOCAL + "pdf.worker.min.js" + PDFJS_V
+              : PDFJS_CDN_BASE + "pdf.worker.min.js";
+          }
+          return window.pdfjsLib;
+        });
+    };
+    // Arbeits-Thread einmal abrufen, damit der Service Worker ihn fuer offline ablegt
+    window.sofiaPrefetchPdfWorker = function () {
+      return fetch(PDFJS_LOCAL + "pdf.worker.min.js" + PDFJS_V).catch(function () {});
+    };
+    window.ensureTf = function () {
+      return load("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js").then(function () { return window.tf; });
+    };
+    window.ensureFflate = function () {
+      return load("https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js").then(function () { return window.fflate; });
+    };
+  })();
 </script>
+<script>
+  (function () {
+    var LIMIT = 12000;
+    var settled = false;
+    var recovering = false;
+    function clearSwCaches() {
+      if (!window.caches) return Promise.resolve();
+      return caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      });
+    }
+    function hardReload() {
+      var finish = function () { location.reload(); };
+      clearSwCaches().then(finish, finish);
+    }
+    function recoverOnce() {
+      if (recovering) return true;
+      try {
+        if (sessionStorage.getItem("sofianotes-boot-recover") === "1") return false;
+        sessionStorage.setItem("sofianotes-boot-recover", "1");
+      } catch (err) {
+        return false;
+      }
+      recovering = true;
+      clearSwCaches().then(function () { location.reload(); }, function () { location.reload(); });
+      return true;
+    }
+    function showBootError(msg) {
+      if (settled || recovering) return;
+      var gate = document.getElementById("who-backdrop");
+      if (!gate || gate.classList.contains("hidden")) return;
+      var title = document.getElementById("gate-title");
+      if (title && title.textContent && title.textContent !== "Lädt…") return;
+      if (recoverOnce()) return;
+      settled = true;
+      gate.setAttribute("aria-busy", "false");
+      var card = gate.querySelector(".who-card");
+      if (card) card.setAttribute("data-state", "error");
+      if (title) title.textContent = "Start fehlgeschlagen";
+      var text = document.getElementById("gate-text");
+      if (text) text.textContent = msg || "Die App konnte nicht starten. Bitte neu laden.";
+      var btn = document.getElementById("gate-retry");
+      if (btn) btn.classList.remove("hidden");
+    }
+    window.sofiaBootOk = function () {
+      settled = true;
+      try { sessionStorage.removeItem("sofianotes-boot-recover"); } catch (err) {}
+    };
+    window.sofiaBootFail = function (msg) { showBootError(msg); };
+    var retry = document.getElementById("gate-retry");
+    if (retry) retry.addEventListener("click", hardReload);
+    window.addEventListener("error", function (e) {
+      var t = e && e.target;
+      if (t && t.tagName === "SCRIPT") {
+        // Fremde Skripte (Symbole, PDF, KI) sind optional: fehlt das CDN oder ist man offline,
+        // startet die App trotzdem - kein Neuladen und keine Fehlermeldung deswegen
+        try {
+          if (t.src && new URL(t.src, location.href).origin !== location.origin) return;
+        } catch (err) {}
+        showBootError("Eine Datei konnte nicht geladen werden. Bitte neu laden.");
+        return;
+      }
+      if (e && e.message) showBootError(String(e.message));
+    }, true);
+    setTimeout(function () {
+      showBootError("Das Laden dauert zu lange. Bitte Seite neu laden.");
+    }, LIMIT);
+  })();
+</script>
+<script src="de-words.js?v=__BUILD__"></script>
+<script src="ink-recognize.js?v=__BUILD__"></script>
+<script src="offline.js?v=__BUILD__"></script>
+<script src="local-ocr.js?v=__BUILD__"></script>
+<script src="app.js?v=__BUILD__"></script>
+<script src="updates.js?v=__BUILD__"></script>
 </body>
 </html>

@@ -18,7 +18,18 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 echo "==> git pull ($(git rev-parse --abbrev-ref HEAD))"
 git pull --ff-only
 
-echo "==> docker compose up -d --build"
+export GIT_COMMIT="$(git rev-parse --short HEAD)"
+
+# Version automatisch hochzaehlen: Patch aus backend/version.json plus Anzahl der
+# Commits seit der letzten Aenderung dieser Datei. Jedes Update bekommt so eine
+# hoehere Nummer, ohne dass jemand version.json anfassen muss.
+BASE_VERSION="$(grep -o '"version": *"[0-9.]*"' backend/version.json | grep -o '[0-9][0-9.]*' || true)"
+LAST_BUMP="$(git log -1 --format=%H -- backend/version.json || true)"
+if [ -n "$BASE_VERSION" ] && [ -n "$LAST_BUMP" ]; then
+  SINCE="$(git rev-list --count --no-merges "${LAST_BUMP}..HEAD")"
+  export APP_VERSION="${BASE_VERSION%.*}.$(( ${BASE_VERSION##*.} + SINCE ))"
+fi
+echo "==> docker compose up -d --build (commit ${GIT_COMMIT}, version ${APP_VERSION:-${BASE_VERSION}})"
 docker compose up -d --build
 
 echo "==> Status"
